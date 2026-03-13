@@ -98,6 +98,131 @@ defmodule Parrhesia.Policy.EventPolicyTest do
              EventPolicy.authorize_read([wide_window], MapSet.new())
   end
 
+  test "accepts MIP-04 media metadata events as regular Nostr events" do
+    media_event = %{
+      "kind" => 1,
+      "tags" => [
+        [
+          "imeta",
+          "url",
+          "https://media.example/blob",
+          "m",
+          "image/jpeg",
+          "x",
+          String.duplicate("a", 64),
+          "v",
+          "mip04-v2"
+        ]
+      ],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => ""
+    }
+
+    assert :ok =
+             EventPolicy.authorize_write(media_event, MapSet.new([String.duplicate("d", 64)]))
+  end
+
+  test "enforces media metadata tag limits" do
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_media_max_imeta_tags_per_event: 1,
+      marmot_media_max_field_value_bytes: 1024,
+      marmot_media_max_url_bytes: 2048,
+      marmot_media_allowed_mime_prefixes: [],
+      marmot_media_reject_mip04_v1: true
+    )
+
+    event = %{
+      "kind" => 1,
+      "tags" => [
+        [
+          "imeta",
+          "url",
+          "https://media.example/1",
+          "m",
+          "image/jpeg",
+          "x",
+          String.duplicate("a", 64)
+        ],
+        [
+          "imeta",
+          "url",
+          "https://media.example/2",
+          "m",
+          "image/jpeg",
+          "x",
+          String.duplicate("b", 64)
+        ]
+      ],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => ""
+    }
+
+    assert {:error, :media_metadata_tags_exceeded} =
+             EventPolicy.authorize_write(event, MapSet.new([String.duplicate("d", 64)]))
+  end
+
+  test "rejects disallowed media mime types and unsupported versions" do
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_media_max_imeta_tags_per_event: 8,
+      marmot_media_max_field_value_bytes: 1024,
+      marmot_media_max_url_bytes: 2048,
+      marmot_media_allowed_mime_prefixes: ["image/"],
+      marmot_media_reject_mip04_v1: true
+    )
+
+    invalid_mime_event = %{
+      "kind" => 1,
+      "tags" => [
+        [
+          "imeta",
+          "url",
+          "https://media.example/1",
+          "m",
+          "video/mp4",
+          "x",
+          String.duplicate("a", 64)
+        ]
+      ],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => ""
+    }
+
+    unsupported_version_event = %{
+      "kind" => 1,
+      "tags" => [
+        [
+          "imeta",
+          "url",
+          "https://media.example/1",
+          "m",
+          "image/jpeg",
+          "x",
+          String.duplicate("a", 64),
+          "v",
+          "mip04-v1"
+        ]
+      ],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => ""
+    }
+
+    assert {:error, :media_metadata_mime_not_allowed} =
+             EventPolicy.authorize_write(
+               invalid_mime_event,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+
+    assert {:error, :media_metadata_unsupported_version} =
+             EventPolicy.authorize_write(
+               unsupported_version_event,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+  end
+
   test "rejects mls kinds when feature is disabled" do
     Application.put_env(:parrhesia, :features, nip_ee_mls: false)
 

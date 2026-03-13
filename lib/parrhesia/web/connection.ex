@@ -430,6 +430,14 @@ defmodule Parrhesia.Web.Connection do
               :pow_below_minimum,
               :pubkey_banned,
               :event_banned,
+              :media_metadata_tags_exceeded,
+              :media_metadata_tag_value_too_large,
+              :media_metadata_url_too_long,
+              :media_metadata_invalid_url,
+              :media_metadata_invalid_hash,
+              :media_metadata_invalid_mime,
+              :media_metadata_mime_not_allowed,
+              :media_metadata_unsupported_version,
               :mls_disabled
             ],
        do: EventPolicy.error_message(reason)

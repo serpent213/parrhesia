@@ -42,9 +42,9 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M5 — optional MIP-04 (encrypted media)
 
-- [ ] Accept/store MIP-04 metadata-bearing events as regular Nostr events
-- [ ] Add policy hooks for media metadata limits and abuse controls
-- [ ] Add tests for search/filter interactions with media metadata tags
+- [x] Accept/store MIP-04 metadata-bearing events as regular Nostr events
+- [x] Add policy hooks for media metadata limits and abuse controls
+- [x] Add tests for search/filter interactions with media metadata tags
 
 ## M6 — optional MIP-05 (push notifications)
 

@@ -8,6 +8,8 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:limits, :max_outbound_queue]) == 256
     assert Parrhesia.Config.get([:limits, :max_filter_limit]) == 500
     assert Parrhesia.Config.get([:policies, :auth_required_for_writes]) == false
+    assert Parrhesia.Config.get([:policies, :marmot_media_max_imeta_tags_per_event]) == 8
+    assert Parrhesia.Config.get([:policies, :marmot_media_reject_mip04_v1]) == true
     assert Parrhesia.Config.get([:features, :nip_50_search]) == true
     assert Parrhesia.Config.get([:features, :nip_ee_mls]) == false
   end

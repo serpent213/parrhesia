@@ -11,6 +11,14 @@ defmodule Parrhesia.Policy.EventPolicy do
           | :marmot_group_h_tag_required
           | :marmot_group_h_values_exceeded
           | :marmot_group_filter_window_too_wide
+          | :media_metadata_tags_exceeded
+          | :media_metadata_tag_value_too_large
+          | :media_metadata_url_too_long
+          | :media_metadata_invalid_url
+          | :media_metadata_invalid_hash
+          | :media_metadata_invalid_mime
+          | :media_metadata_mime_not_allowed
+          | :media_metadata_unsupported_version
           | :protected_event_requires_auth
           | :protected_event_pubkey_mismatch
           | :pow_below_minimum
@@ -42,6 +50,7 @@ defmodule Parrhesia.Policy.EventPolicy do
       fn -> reject_if_event_banned(event) end,
       fn -> enforce_pow(event) end,
       fn -> enforce_protected_event(event, authenticated_pubkeys) end,
+      fn -> enforce_media_metadata_policy(event) end,
       fn -> enforce_mls_feature_flag(event) end
     ]
 
@@ -67,6 +76,30 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   def error_message(:marmot_group_filter_window_too_wide),
     do: "rate-limited: kind 445 query window exceeds configured maximum"
+
+  def error_message(:media_metadata_tags_exceeded),
+    do: "rate-limited: too many media metadata tags in event"
+
+  def error_message(:media_metadata_tag_value_too_large),
+    do: "invalid: media metadata field value exceeds configured limit"
+
+  def error_message(:media_metadata_url_too_long),
+    do: "invalid: media metadata url exceeds configured limit"
+
+  def error_message(:media_metadata_invalid_url),
+    do: "invalid: media metadata url must be a valid http/https URL"
+
+  def error_message(:media_metadata_invalid_hash),
+    do: "invalid: media metadata x field must be 32-byte lowercase hex"
+
+  def error_message(:media_metadata_invalid_mime),
+    do: "invalid: media metadata mime type is invalid"
+
+  def error_message(:media_metadata_mime_not_allowed),
+    do: "blocked: media metadata mime type is not allowed"
+
+  def error_message(:media_metadata_unsupported_version),
+    do: "blocked: media metadata version is not supported"
 
   def error_message(:protected_event_requires_auth),
     do: "auth-required: protected events require authenticated pubkey"
@@ -207,6 +240,167 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   defp lowercase_hex?(_value, _bytes), do: false
 
+  defp enforce_media_metadata_policy(event) do
+    imeta_tags =
+      event
+      |> Map.get("tags", [])
+      |> Enum.filter(&imeta_tag?/1)
+
+    max_imeta_tags = config_int([:policies, :marmot_media_max_imeta_tags_per_event], 8)
+
+    if max_imeta_tags > 0 and length(imeta_tags) > max_imeta_tags do
+      {:error, :media_metadata_tags_exceeded}
+    else
+      validate_imeta_tags(imeta_tags)
+    end
+  end
+
+  defp imeta_tag?(["imeta" | _rest]), do: true
+  defp imeta_tag?(_tag), do: false
+
+  defp validate_imeta_tags(imeta_tags) do
+    Enum.reduce_while(imeta_tags, :ok, fn tag, :ok ->
+      with {:ok, fields} <- parse_imeta_tag(tag),
+           :ok <- validate_imeta_fields(fields) do
+        {:cont, :ok}
+      else
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp parse_imeta_tag(["imeta" | fields]) when is_list(fields) do
+    if fields != [] and rem(length(fields), 2) == 0 do
+      parsed_fields =
+        fields
+        |> Enum.chunk_every(2)
+        |> Enum.reduce(%{}, fn [key, value], acc -> Map.put(acc, key, value) end)
+
+      {:ok, parsed_fields}
+    else
+      {:error, :media_metadata_tag_value_too_large}
+    end
+  end
+
+  defp parse_imeta_tag(_tag), do: {:error, :media_metadata_tag_value_too_large}
+
+  defp validate_imeta_fields(fields) do
+    with :ok <- validate_imeta_value_sizes(fields),
+         :ok <- validate_imeta_url(fields),
+         :ok <- validate_imeta_hash(fields),
+         :ok <- validate_imeta_mime(fields) do
+      validate_imeta_version(fields)
+    end
+  end
+
+  defp validate_imeta_value_sizes(fields) do
+    max_value_bytes = config_int([:policies, :marmot_media_max_field_value_bytes], 1024)
+
+    if max_value_bytes <= 0 or Enum.all?(Map.values(fields), &(byte_size(&1) <= max_value_bytes)) do
+      :ok
+    else
+      {:error, :media_metadata_tag_value_too_large}
+    end
+  end
+
+  defp validate_imeta_url(fields) do
+    case Map.get(fields, "url") do
+      nil ->
+        :ok
+
+      url ->
+        max_url_bytes = config_int([:policies, :marmot_media_max_url_bytes], 2048)
+
+        cond do
+          max_url_bytes > 0 and byte_size(url) > max_url_bytes ->
+            {:error, :media_metadata_url_too_long}
+
+          valid_http_url?(url) ->
+            :ok
+
+          true ->
+            {:error, :media_metadata_invalid_url}
+        end
+    end
+  end
+
+  defp validate_imeta_hash(fields) do
+    case Map.get(fields, "x") do
+      nil ->
+        :ok
+
+      hash ->
+        if lowercase_hex?(hash, 32) do
+          :ok
+        else
+          {:error, :media_metadata_invalid_hash}
+        end
+    end
+  end
+
+  defp validate_imeta_mime(fields) do
+    case Map.get(fields, "m") do
+      nil ->
+        :ok
+
+      mime_type ->
+        allowed_prefixes = config_list([:policies, :marmot_media_allowed_mime_prefixes], [])
+
+        cond do
+          not valid_mime_type?(mime_type) ->
+            {:error, :media_metadata_invalid_mime}
+
+          allowed_prefixes == [] ->
+            :ok
+
+          Enum.any?(allowed_prefixes, &String.starts_with?(mime_type, &1)) ->
+            :ok
+
+          true ->
+            {:error, :media_metadata_mime_not_allowed}
+        end
+    end
+  end
+
+  defp validate_imeta_version(fields) do
+    case Map.get(fields, "v") do
+      nil ->
+        :ok
+
+      "mip04-v2" ->
+        :ok
+
+      "mip04-v1" ->
+        if config_bool([:policies, :marmot_media_reject_mip04_v1], true) do
+          {:error, :media_metadata_unsupported_version}
+        else
+          :ok
+        end
+
+      _other ->
+        {:error, :media_metadata_unsupported_version}
+    end
+  end
+
+  defp valid_http_url?(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        true
+
+      _other ->
+        false
+    end
+  end
+
+  defp valid_http_url?(_url), do: false
+
+  defp valid_mime_type?(mime_type) when is_binary(mime_type) do
+    String.match?(mime_type, ~r/^[a-z0-9!#$&^_.+\-]+\/[a-z0-9!#$&^_.+\-]+$/)
+  end
+
+  defp valid_mime_type?(_mime_type), do: false
+
   defp reject_if_pubkey_banned(event) do
     with pubkey when is_binary(pubkey) <- Map.get(event, "pubkey"),
          {:ok, true} <- Storage.moderation().pubkey_banned?(%{}, pubkey) do
@@ -313,6 +507,16 @@ defmodule Parrhesia.Policy.EventPolicy do
     case Application.get_env(:parrhesia, scope, []) |> Keyword.get(key, default) do
       value when is_integer(value) -> value
       _other -> default
+    end
+  end
+
+  defp config_list([scope, key], default) do
+    case Application.get_env(:parrhesia, scope, []) |> Keyword.get(key, default) do
+      value when is_list(value) ->
+        if Enum.all?(value, &is_binary/1), do: value, else: default
+
+      _other ->
+        default
     end
   end
 end

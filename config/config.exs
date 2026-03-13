@@ -21,6 +21,11 @@ config :parrhesia,
     marmot_require_h_for_group_queries: true,
     marmot_group_max_h_values_per_filter: 32,
     marmot_group_max_query_window_seconds: 2_592_000,
+    marmot_media_max_imeta_tags_per_event: 8,
+    marmot_media_max_field_value_bytes: 1024,
+    marmot_media_max_url_bytes: 2048,
+    marmot_media_allowed_mime_prefixes: [],
+    marmot_media_reject_mip04_v1: true,
     management_auth_required: true
   ],
   features: [

@@ -248,6 +248,44 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
   end
 
+  test "query/3 combines search and media metadata tag filters" do
+    media_hash = String.duplicate("a", 64)
+
+    matching =
+      persist_event(%{
+        "kind" => 1,
+        "tags" => [
+          ["imeta", "url", "https://media.example/blob", "m", "image/jpeg", "x", media_hash],
+          ["m", "image/jpeg"],
+          ["x", media_hash]
+        ],
+        "content" => "photo attachment from group"
+      })
+
+    _wrong_mime =
+      persist_event(%{
+        "kind" => 1,
+        "tags" => [["m", "video/mp4"], ["x", media_hash]],
+        "content" => "photo attachment from group"
+      })
+
+    _wrong_search =
+      persist_event(%{
+        "kind" => 1,
+        "tags" => [["m", "image/jpeg"], ["x", media_hash]],
+        "content" => "document attachment"
+      })
+
+    filters = [
+      %{"kinds" => [1], "search" => "photo", "#m" => ["image/jpeg"], "#x" => [media_hash]}
+    ]
+
+    assert {:ok, [result]} = Events.query(%{}, filters, [])
+    assert result["id"] == matching["id"]
+
+    assert {:ok, 1} = Events.count(%{}, filters, [])
+  end
+
   test "query/3 supports #i keypackage reference lookups" do
     keypackage_ref = String.duplicate("a", 64)
 
