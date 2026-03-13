@@ -61,6 +61,7 @@ defmodule Parrhesia.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "test.nak_e2e": ["cmd ./scripts/run_nak_e2e.sh"],
+      "test.marmot_e2e": ["cmd ./scripts/run_marmot_e2e.sh"],
       # cov: ["cmd mix coveralls.lcov"],
       lint: ["format --check-formatted", "credo"],
       precommit: [
@@ -69,7 +70,8 @@ defmodule Parrhesia.MixProject do
         "credo --strict --all",
         "deps.unlock --unused",
         "test",
-        "test.nak_e2e"
+        "test.nak_e2e",
+        "test.marmot_e2e"
       ]
     ]
   end

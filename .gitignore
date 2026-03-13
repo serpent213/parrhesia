@@ -35,7 +35,7 @@ erl_crash.dump
 
 # Temporary files, for example, from tests.
 /tmp/
-/.nak-e2e-server.log
+/.*-e2e-server.log
 # draw.io temp files
 .$*
 

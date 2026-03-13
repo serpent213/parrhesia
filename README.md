@@ -169,3 +169,9 @@ For external CLI end-to-end checks with `nak`:
 ```bash
 mix test.nak_e2e
 ```
+
+For Marmot client end-to-end checks (TypeScript/Node suite using `marmot-ts`):
+
+```bash
+mix test.marmot_e2e
+```
