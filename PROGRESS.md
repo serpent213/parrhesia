@@ -30,7 +30,7 @@ Implementation checklist for Parrhesia relay.
 
 - [x] Build ETS-backed subscription index
 - [x] Implement candidate narrowing by kind/author/tag
-- [ ] Add bounded outbound queues/backpressure per connection
+- [x] Add bounded outbound queues/backpressure per connection
 - [ ] Add telemetry for ingest/query/fanout latency + queue depth
 
 ## Phase 4 — relay metadata and auth

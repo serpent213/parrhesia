@@ -133,6 +133,107 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "fanout_event enqueues and drains matching events" do
+    state = subscribed_connection_state([])
+    event = live_event("event-1", 1)
+
+    assert {:ok, queued_state} = Connection.handle_info({:fanout_event, "sub-1", event}, state)
+    assert queued_state.outbound_queue_size == 1
+
+    assert_receive :drain_outbound_queue
+
+    assert {:push, [{:text, payload}], drained_state} =
+             Connection.handle_info(:drain_outbound_queue, queued_state)
+
+    assert drained_state.outbound_queue_size == 0
+    assert Jason.decode!(payload) == ["EVENT", "sub-1", event]
+  end
+
+  test "fanout_event ignores non-matching subscription filters" do
+    state = subscribed_connection_state([])
+
+    assert {:ok, next_state} =
+             Connection.handle_info({:fanout_event, "sub-1", live_event("event-2", 2)}, state)
+
+    assert next_state.outbound_queue_size == 0
+    refute_received :drain_outbound_queue
+  end
+
+  test "outbound queue overflow closes connection when strategy is close" do
+    state =
+      subscribed_connection_state(
+        max_outbound_queue: 1,
+        outbound_overflow_strategy: :close,
+        outbound_drain_batch_size: 1
+      )
+
+    event_one = live_event("event-1", 1)
+    event_two = live_event("event-2", 1)
+
+    assert {:ok, queued_state} =
+             Connection.handle_info({:fanout_event, "sub-1", event_one}, state)
+
+    assert queued_state.outbound_queue_size == 1
+    assert_receive :drain_outbound_queue
+
+    assert {:stop, :normal, {1008, message}, [{:text, notice_payload}], _overflow_state} =
+             Connection.handle_info({:fanout_event, "sub-1", event_two}, queued_state)
+
+    assert message == "rate-limited: outbound queue overflow"
+    assert Jason.decode!(notice_payload) == ["NOTICE", message]
+  end
+
+  test "outbound queue overflow drops oldest event when strategy is drop_oldest" do
+    state =
+      subscribed_connection_state(
+        max_outbound_queue: 1,
+        outbound_overflow_strategy: :drop_oldest,
+        outbound_drain_batch_size: 1
+      )
+
+    event_one = live_event("event-1", 1)
+    event_two = live_event("event-2", 1)
+
+    assert {:ok, queued_state} =
+             Connection.handle_info({:fanout_event, "sub-1", event_one}, state)
+
+    assert queued_state.outbound_queue_size == 1
+    assert_receive :drain_outbound_queue
+
+    assert {:ok, replaced_state} =
+             Connection.handle_info({:fanout_event, "sub-1", event_two}, queued_state)
+
+    assert replaced_state.outbound_queue_size == 1
+
+    assert {:push, [{:text, payload}], drained_state} =
+             Connection.handle_info(:drain_outbound_queue, replaced_state)
+
+    assert drained_state.outbound_queue_size == 0
+    assert Jason.decode!(payload) == ["EVENT", "sub-1", event_two]
+  end
+
+  defp subscribed_connection_state(opts) do
+    {:ok, initial_state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
+    req_payload = Jason.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
+
+    assert {:push, _, subscribed_state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, initial_state)
+
+    subscribed_state
+  end
+
+  defp live_event(id, kind) do
+    %{
+      "id" => id,
+      "pubkey" => String.duplicate("a", 64),
+      "created_at" => System.system_time(:second),
+      "kind" => kind,
+      "tags" => [],
+      "content" => "live",
+      "sig" => String.duplicate("b", 128)
+    }
+  end
+
   defp valid_event do
     base_event = %{
       "pubkey" => String.duplicate("1", 64),

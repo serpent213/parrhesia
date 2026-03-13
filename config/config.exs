@@ -6,7 +6,10 @@ config :parrhesia,
     max_event_bytes: 262_144,
     max_filters_per_req: 16,
     max_subscriptions_per_connection: 32,
-    max_event_future_skew_seconds: 900
+    max_event_future_skew_seconds: 900,
+    max_outbound_queue: 256,
+    outbound_drain_batch_size: 64,
+    outbound_overflow_strategy: :close
   ],
   policies: [
     auth_required_for_writes: false,
