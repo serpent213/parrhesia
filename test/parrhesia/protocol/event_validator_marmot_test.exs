@@ -42,6 +42,53 @@ defmodule Parrhesia.Protocol.EventValidatorMarmotTest do
     assert {:error, :missing_marmot_relay_tag} = EventValidator.validate(event)
   end
 
+  test "rejects direct kind 444 welcome events" do
+    event =
+      valid_keypackage_event(%{
+        "kind" => 444,
+        "tags" => [["e", String.duplicate("a", 64)], ["encoding", "base64"]],
+        "content" => Base.encode64("welcome")
+      })
+
+    assert {:error, :invalid_marmot_direct_welcome_event} = EventValidator.validate(event)
+
+    assert {:error,
+            "invalid: kind 444 welcome events must be wrapped in kind 1059 and remain unsigned"} =
+             Protocol.validate_event(event)
+  end
+
+  test "rejects malformed kind 1059 wrapped welcome envelopes" do
+    invalid_missing_recipient =
+      valid_keypackage_event(%{
+        "kind" => 1059,
+        "tags" => [["e", String.duplicate("a", 64)]],
+        "content" => "ciphertext"
+      })
+
+    invalid_recipient_pubkey =
+      valid_keypackage_event(%{
+        "kind" => 1059,
+        "tags" => [["p", "not-hex"]],
+        "content" => "ciphertext"
+      })
+
+    invalid_empty_content =
+      valid_keypackage_event(%{
+        "kind" => 1059,
+        "tags" => [["p", String.duplicate("b", 64)]],
+        "content" => ""
+      })
+
+    assert {:error, :missing_giftwrap_recipient_tag} =
+             EventValidator.validate(invalid_missing_recipient)
+
+    assert {:error, :invalid_giftwrap_recipient_tag} =
+             EventValidator.validate(invalid_recipient_pubkey)
+
+    assert {:error, :invalid_giftwrap_content} =
+             EventValidator.validate(invalid_empty_content)
+  end
+
   defp valid_keypackage_event(overrides \\ %{}) do
     base_event = %{
       "pubkey" => String.duplicate("1", 64),

@@ -135,6 +135,29 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "malformed wrapped welcome EVENT is rejected" do
+    state = connection_state()
+
+    event =
+      valid_event()
+      |> Map.put("kind", 1059)
+      |> Map.put("tags", [["e", String.duplicate("a", 64)]])
+      |> Map.put("content", "ciphertext")
+      |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
+
+    payload = Jason.encode!(["EVENT", event])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(response) == [
+             "OK",
+             event["id"],
+             false,
+             "invalid: kind 1059 must include at least one recipient p tag"
+           ]
+  end
+
   test "NEG sessions open and close" do
     state = connection_state()
 

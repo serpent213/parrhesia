@@ -29,9 +29,9 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 ## M3 — MIP-02 (welcome events)
 
 - [ ] Support wrapped Welcome delivery via NIP-59 (`1059`) recipient-gated reads
-- [ ] Validate relay behavior for unsigned inner Welcome semantics (kind `444` envelope expectations)
+- [x] Validate relay behavior for unsigned inner Welcome semantics (kind `444` envelope expectations)
 - [ ] Ensure durability/ack semantics support Commit-then-Welcome sequencing requirements
-- [ ] Add negative tests for malformed wrapped Welcome payloads
+- [x] Add negative tests for malformed wrapped Welcome payloads
 
 ## M4 — MIP-03 (group events)
 
