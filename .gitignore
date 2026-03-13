@@ -1,0 +1,50 @@
+# To do list
+/TODO.md
+
+# Devenv/Direnv
+.devenv*
+devenv.local.nix
+.direnv
+/.env
+.null-ls_*.nix
+/result
+
+# pre-commit
+.pre-commit-config.yaml
+# The directory Mix will write compiled artifacts to.
+/_build/
+/.elixir_ls/
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where 3rd-party dependencies like ExDoc output generated docs.
+/doc/
+
+# Ignore .fetch files in case you like to edit your project deps locally.
+/.fetch
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Temporary files, for example, from tests.
+/tmp/
+# draw.io temp files
+.$*
+
+# Ignore assets that are produced by build tools.
+/priv/cldr/
+
+# LLMs
+**/.claude/settings.local.json
+/.mcp.json
+
+# OS specific
+.DS_Store
+/node_modules/
