@@ -438,6 +438,12 @@ defmodule Parrhesia.Web.Connection do
               :media_metadata_invalid_mime,
               :media_metadata_mime_not_allowed,
               :media_metadata_unsupported_version,
+              :push_notification_relay_tags_exceeded,
+              :push_notification_payload_too_large,
+              :push_notification_replay_window_exceeded,
+              :push_notification_missing_expiration,
+              :push_notification_expiration_too_far,
+              :push_notification_server_recipients_exceeded,
               :mls_disabled
             ],
        do: EventPolicy.error_message(reason)

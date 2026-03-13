@@ -223,6 +223,207 @@ defmodule Parrhesia.Policy.EventPolicyTest do
              )
   end
 
+  test "accepts push coordination events when push feature is enabled" do
+    server_pubkey = String.duplicate("f", 64)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      nip_ee_mls: false,
+      marmot_push_notifications: true
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_push_server_pubkeys: [server_pubkey],
+      marmot_push_max_relay_tags: 16,
+      marmot_push_max_payload_bytes: 65_536,
+      marmot_push_max_trigger_age_seconds: 300,
+      marmot_push_require_expiration: true,
+      marmot_push_max_expiration_window_seconds: 120,
+      marmot_push_max_server_recipients: 1
+    )
+
+    relay_list_event = %{
+      "kind" => 10_050,
+      "tags" => [["relay", "wss://notify.example"], ["relay", "wss://notify2.example"]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => System.system_time(:second),
+      "content" => ""
+    }
+
+    now = System.system_time(:second)
+
+    trigger_event = %{
+      "kind" => 1059,
+      "tags" => [["p", server_pubkey], ["expiration", Integer.to_string(now + 60)]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now,
+      "content" => "encrypted-push"
+    }
+
+    assert :ok =
+             EventPolicy.authorize_write(
+               relay_list_event,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+
+    assert :ok =
+             EventPolicy.authorize_write(trigger_event, MapSet.new([String.duplicate("d", 64)]))
+  end
+
+  test "enforces push policy limits for relay-list and trigger payloads" do
+    server_pubkey = String.duplicate("e", 64)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      nip_ee_mls: false,
+      marmot_push_notifications: true
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_push_server_pubkeys: [server_pubkey],
+      marmot_push_max_relay_tags: 1,
+      marmot_push_max_payload_bytes: 8,
+      marmot_push_max_trigger_age_seconds: 300,
+      marmot_push_require_expiration: true,
+      marmot_push_max_expiration_window_seconds: 120,
+      marmot_push_max_server_recipients: 1
+    )
+
+    relay_list_event = %{
+      "kind" => 10_050,
+      "tags" => [["relay", "wss://notify.example"], ["relay", "wss://notify2.example"]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => System.system_time(:second),
+      "content" => ""
+    }
+
+    now = System.system_time(:second)
+
+    oversized_trigger = %{
+      "kind" => 1059,
+      "tags" => [["p", server_pubkey], ["expiration", Integer.to_string(now + 60)]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now,
+      "content" => "encrypted-push-too-large"
+    }
+
+    assert {:error, :push_notification_relay_tags_exceeded} =
+             EventPolicy.authorize_write(
+               relay_list_event,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+
+    assert {:error, :push_notification_payload_too_large} =
+             EventPolicy.authorize_write(
+               oversized_trigger,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+  end
+
+  test "enforces push replay and expiration protection" do
+    server_pubkey = String.duplicate("c", 64)
+    now = System.system_time(:second)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      nip_ee_mls: false,
+      marmot_push_notifications: true
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_push_server_pubkeys: [server_pubkey],
+      marmot_push_max_relay_tags: 16,
+      marmot_push_max_payload_bytes: 65_536,
+      marmot_push_max_trigger_age_seconds: 5,
+      marmot_push_require_expiration: true,
+      marmot_push_max_expiration_window_seconds: 30,
+      marmot_push_max_server_recipients: 1
+    )
+
+    stale_trigger = %{
+      "kind" => 1059,
+      "tags" => [["p", server_pubkey], ["expiration", Integer.to_string(now - 50)]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now - 20,
+      "content" => "encrypted"
+    }
+
+    missing_expiration = %{
+      "kind" => 1059,
+      "tags" => [["p", server_pubkey]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now,
+      "content" => "encrypted"
+    }
+
+    far_expiration = %{
+      "kind" => 1059,
+      "tags" => [["p", server_pubkey], ["expiration", Integer.to_string(now + 120)]],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now,
+      "content" => "encrypted"
+    }
+
+    multi_server_target = %{
+      "kind" => 1059,
+      "tags" => [
+        ["p", server_pubkey],
+        ["p", String.duplicate("b", 64)],
+        ["expiration", Integer.to_string(now + 20)]
+      ],
+      "pubkey" => String.duplicate("d", 64),
+      "id" => "",
+      "created_at" => now,
+      "content" => "encrypted"
+    }
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_push_server_pubkeys: [server_pubkey, String.duplicate("b", 64)],
+      marmot_push_max_relay_tags: 16,
+      marmot_push_max_payload_bytes: 65_536,
+      marmot_push_max_trigger_age_seconds: 5,
+      marmot_push_require_expiration: true,
+      marmot_push_max_expiration_window_seconds: 30,
+      marmot_push_max_server_recipients: 1
+    )
+
+    assert {:error, :push_notification_replay_window_exceeded} =
+             EventPolicy.authorize_write(stale_trigger, MapSet.new([String.duplicate("d", 64)]))
+
+    assert {:error, :push_notification_missing_expiration} =
+             EventPolicy.authorize_write(
+               missing_expiration,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+
+    assert {:error, :push_notification_expiration_too_far} =
+             EventPolicy.authorize_write(far_expiration, MapSet.new([String.duplicate("d", 64)]))
+
+    assert {:error, :push_notification_server_recipients_exceeded} =
+             EventPolicy.authorize_write(
+               multi_server_target,
+               MapSet.new([String.duplicate("d", 64)])
+             )
+  end
+
   test "rejects mls kinds when feature is disabled" do
     Application.put_env(:parrhesia, :features, nip_ee_mls: false)
 

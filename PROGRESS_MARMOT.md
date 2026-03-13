@@ -48,9 +48,9 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M6 — optional MIP-05 (push notifications)
 
-- [ ] Accept/store notification coordination events required by enabled profile
-- [ ] Add policy/rate-limit controls for push-related event traffic
-- [ ] Add abuse and replay protection tests for notification trigger paths
+- [x] Accept/store notification coordination events required by enabled profile
+- [x] Add policy/rate-limit controls for push-related event traffic
+- [x] Add abuse and replay protection tests for notification trigger paths
 
 ## M7 — hardening + operations
 

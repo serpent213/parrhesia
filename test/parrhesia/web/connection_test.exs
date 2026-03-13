@@ -223,6 +223,117 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "push trigger EVENT outside replay window is rejected" do
+    previous_features = Application.get_env(:parrhesia, :features, [])
+    previous_policies = Application.get_env(:parrhesia, :policies, [])
+
+    server_pubkey = String.duplicate("e", 64)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      previous_features
+      |> Keyword.put(:marmot_push_notifications, true)
+      |> Keyword.put(:nip_ee_mls, false)
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      previous_policies
+      |> Keyword.put(:marmot_push_server_pubkeys, [server_pubkey])
+      |> Keyword.put(:marmot_push_max_trigger_age_seconds, 5)
+      |> Keyword.put(:marmot_push_require_expiration, true)
+      |> Keyword.put(:marmot_push_max_expiration_window_seconds, 30)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :features, previous_features)
+      Application.put_env(:parrhesia, :policies, previous_policies)
+    end)
+
+    state = connection_state()
+    now = System.system_time(:second)
+
+    event =
+      valid_event()
+      |> Map.put("kind", 1059)
+      |> Map.put("created_at", now - 20)
+      |> Map.put("tags", [["p", server_pubkey], ["expiration", Integer.to_string(now - 5)]])
+      |> Map.put("content", "encrypted")
+      |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
+
+    payload = Jason.encode!(["EVENT", event])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(response) == [
+             "OK",
+             event["id"],
+             false,
+             "restricted: push notification trigger is outside replay window"
+           ]
+  end
+
+  test "duplicate push trigger EVENT is rejected" do
+    previous_features = Application.get_env(:parrhesia, :features, [])
+    previous_policies = Application.get_env(:parrhesia, :policies, [])
+
+    server_pubkey = String.duplicate("f", 64)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      previous_features
+      |> Keyword.put(:marmot_push_notifications, true)
+      |> Keyword.put(:nip_ee_mls, false)
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      previous_policies
+      |> Keyword.put(:marmot_push_server_pubkeys, [server_pubkey])
+      |> Keyword.put(:marmot_push_max_trigger_age_seconds, 300)
+      |> Keyword.put(:marmot_push_require_expiration, true)
+      |> Keyword.put(:marmot_push_max_expiration_window_seconds, 120)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :features, previous_features)
+      Application.put_env(:parrhesia, :policies, previous_policies)
+    end)
+
+    state = connection_state()
+    now = System.system_time(:second)
+
+    event =
+      valid_event()
+      |> Map.put("kind", 1059)
+      |> Map.put("created_at", now)
+      |> Map.put("tags", [["p", server_pubkey], ["expiration", Integer.to_string(now + 60)]])
+      |> Map.put("content", "encrypted")
+      |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
+
+    payload = Jason.encode!(["EVENT", event])
+
+    assert {:push, {:text, first_response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(first_response) == ["OK", event["id"], true, "ok: event stored"]
+
+    assert {:push, {:text, second_response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(second_response) == [
+             "OK",
+             event["id"],
+             false,
+             "duplicate: event already stored"
+           ]
+  end
+
   test "NEG sessions open and close" do
     state = connection_state()
 

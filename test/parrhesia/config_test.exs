@@ -10,8 +10,10 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:policies, :auth_required_for_writes]) == false
     assert Parrhesia.Config.get([:policies, :marmot_media_max_imeta_tags_per_event]) == 8
     assert Parrhesia.Config.get([:policies, :marmot_media_reject_mip04_v1]) == true
+    assert Parrhesia.Config.get([:policies, :marmot_push_max_trigger_age_seconds]) == 120
     assert Parrhesia.Config.get([:features, :nip_50_search]) == true
     assert Parrhesia.Config.get([:features, :nip_ee_mls]) == false
+    assert Parrhesia.Config.get([:features, :marmot_push_notifications]) == false
   end
 
   test "returns default for unknown keys" do

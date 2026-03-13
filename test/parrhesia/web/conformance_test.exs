@@ -149,6 +149,82 @@ defmodule Parrhesia.Web.ConformanceTest do
     assert persisted_welcome["id"] == wrapped_welcome["id"]
   end
 
+  test "push coordination events are accepted and stored when feature is enabled" do
+    previous_features = Application.get_env(:parrhesia, :features, [])
+    previous_policies = Application.get_env(:parrhesia, :policies, [])
+
+    server_pubkey = String.duplicate("f", 64)
+
+    Application.put_env(
+      :parrhesia,
+      :features,
+      previous_features
+      |> Keyword.put(:marmot_push_notifications, true)
+      |> Keyword.put(:nip_ee_mls, false)
+    )
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      previous_policies
+      |> Keyword.put(:marmot_push_server_pubkeys, [server_pubkey])
+      |> Keyword.put(:marmot_push_max_trigger_age_seconds, 300)
+      |> Keyword.put(:marmot_push_require_expiration, true)
+      |> Keyword.put(:marmot_push_max_expiration_window_seconds, 120)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :features, previous_features)
+      Application.put_env(:parrhesia, :policies, previous_policies)
+    end)
+
+    {:ok, state} = Connection.init(subscription_index: nil)
+
+    relay_list_event =
+      valid_event(%{
+        "kind" => 10_050,
+        "tags" => [["relay", "wss://notify.example"], ["relay", "wss://notify2.example"]],
+        "content" => ""
+      })
+
+    now = System.system_time(:second)
+
+    push_trigger =
+      valid_event(%{
+        "kind" => 1059,
+        "created_at" => now,
+        "tags" => [["p", server_pubkey], ["expiration", Integer.to_string(now + 60)]],
+        "content" => "encrypted-push"
+      })
+
+    assert {:push, {:text, relay_ok_frame}, ^state} =
+             Connection.handle_in(
+               {Jason.encode!(["EVENT", relay_list_event]), [opcode: :text]},
+               state
+             )
+
+    assert Jason.decode!(relay_ok_frame) == [
+             "OK",
+             relay_list_event["id"],
+             true,
+             "ok: event stored"
+           ]
+
+    assert {:push, {:text, trigger_ok_frame}, ^state} =
+             Connection.handle_in(
+               {Jason.encode!(["EVENT", push_trigger]), [opcode: :text]},
+               state
+             )
+
+    assert Jason.decode!(trigger_ok_frame) == ["OK", push_trigger["id"], true, "ok: event stored"]
+
+    assert {:ok, persisted_relay_list} = Storage.events().get_event(%{}, relay_list_event["id"])
+    assert persisted_relay_list["id"] == relay_list_event["id"]
+
+    assert {:ok, persisted_trigger} = Storage.events().get_event(%{}, push_trigger["id"])
+    assert persisted_trigger["id"] == push_trigger["id"]
+  end
+
   defp valid_event(overrides \\ %{}) do
     now = System.system_time(:second)
 

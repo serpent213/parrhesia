@@ -26,13 +26,21 @@ config :parrhesia,
     marmot_media_max_url_bytes: 2048,
     marmot_media_allowed_mime_prefixes: [],
     marmot_media_reject_mip04_v1: true,
+    marmot_push_server_pubkeys: [],
+    marmot_push_max_relay_tags: 16,
+    marmot_push_max_payload_bytes: 65_536,
+    marmot_push_max_trigger_age_seconds: 120,
+    marmot_push_require_expiration: true,
+    marmot_push_max_expiration_window_seconds: 120,
+    marmot_push_max_server_recipients: 1,
     management_auth_required: true
   ],
   features: [
     nip_45_count: true,
     nip_50_search: true,
     nip_77_negentropy: true,
-    nip_ee_mls: false
+    nip_ee_mls: false,
+    marmot_push_notifications: false
   ],
   storage: [
     events: Parrhesia.Storage.Adapters.Postgres.Events,

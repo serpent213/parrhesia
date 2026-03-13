@@ -19,6 +19,12 @@ defmodule Parrhesia.Policy.EventPolicy do
           | :media_metadata_invalid_mime
           | :media_metadata_mime_not_allowed
           | :media_metadata_unsupported_version
+          | :push_notification_relay_tags_exceeded
+          | :push_notification_payload_too_large
+          | :push_notification_replay_window_exceeded
+          | :push_notification_missing_expiration
+          | :push_notification_expiration_too_far
+          | :push_notification_server_recipients_exceeded
           | :protected_event_requires_auth
           | :protected_event_pubkey_mismatch
           | :pow_below_minimum
@@ -51,6 +57,7 @@ defmodule Parrhesia.Policy.EventPolicy do
       fn -> enforce_pow(event) end,
       fn -> enforce_protected_event(event, authenticated_pubkeys) end,
       fn -> enforce_media_metadata_policy(event) end,
+      fn -> enforce_push_notification_policy(event) end,
       fn -> enforce_mls_feature_flag(event) end
     ]
 
@@ -100,6 +107,24 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   def error_message(:media_metadata_unsupported_version),
     do: "blocked: media metadata version is not supported"
+
+  def error_message(:push_notification_relay_tags_exceeded),
+    do: "rate-limited: push relay list contains too many relay tags"
+
+  def error_message(:push_notification_payload_too_large),
+    do: "rate-limited: push notification payload exceeds configured size limit"
+
+  def error_message(:push_notification_replay_window_exceeded),
+    do: "restricted: push notification trigger is outside replay window"
+
+  def error_message(:push_notification_missing_expiration),
+    do: "invalid: push notification trigger requires an expiration tag"
+
+  def error_message(:push_notification_expiration_too_far),
+    do: "invalid: push notification expiration exceeds configured window"
+
+  def error_message(:push_notification_server_recipients_exceeded),
+    do: "rate-limited: push notification trigger targets too many notification servers"
 
   def error_message(:protected_event_requires_auth),
     do: "auth-required: protected events require authenticated pubkey"
@@ -400,6 +425,145 @@ defmodule Parrhesia.Policy.EventPolicy do
   end
 
   defp valid_mime_type?(_mime_type), do: false
+
+  defp enforce_push_notification_policy(event) do
+    if config_bool([:features, :marmot_push_notifications], false) do
+      case Map.get(event, "kind") do
+        10_050 -> validate_push_relay_list_event(event)
+        1059 -> maybe_validate_push_trigger_event(event)
+        _other -> :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp validate_push_relay_list_event(event) do
+    relay_tags =
+      event
+      |> Map.get("tags", [])
+      |> Enum.filter(fn
+        ["relay", _url | _rest] -> true
+        _tag -> false
+      end)
+
+    max_relay_tags = config_int([:policies, :marmot_push_max_relay_tags], 16)
+
+    if max_relay_tags > 0 and length(relay_tags) > max_relay_tags do
+      {:error, :push_notification_relay_tags_exceeded}
+    else
+      :ok
+    end
+  end
+
+  defp maybe_validate_push_trigger_event(event) do
+    push_server_pubkeys = config_list([:policies, :marmot_push_server_pubkeys], [])
+
+    if targets_push_server?(event, push_server_pubkeys) do
+      with :ok <- validate_push_payload_size(event),
+           :ok <- validate_push_replay_window(event),
+           :ok <- validate_push_expiration(event) do
+        validate_push_server_recipient_count(event, push_server_pubkeys)
+      end
+    else
+      :ok
+    end
+  end
+
+  defp targets_push_server?(event, push_server_pubkeys) do
+    event
+    |> recipient_pubkeys()
+    |> Enum.any?(&(&1 in push_server_pubkeys))
+  end
+
+  defp validate_push_payload_size(event) do
+    max_payload_bytes = config_int([:policies, :marmot_push_max_payload_bytes], 65_536)
+    content = Map.get(event, "content", "")
+
+    if is_binary(content) and (max_payload_bytes <= 0 or byte_size(content) <= max_payload_bytes) do
+      :ok
+    else
+      {:error, :push_notification_payload_too_large}
+    end
+  end
+
+  defp validate_push_replay_window(event) do
+    max_age_seconds = config_int([:policies, :marmot_push_max_trigger_age_seconds], 120)
+    created_at = Map.get(event, "created_at")
+    now = System.system_time(:second)
+
+    if max_age_seconds <= 0 or
+         (is_integer(created_at) and created_at >= 0 and now - created_at <= max_age_seconds) do
+      :ok
+    else
+      {:error, :push_notification_replay_window_exceeded}
+    end
+  end
+
+  defp validate_push_expiration(event) do
+    require_expiration? = config_bool([:policies, :marmot_push_require_expiration], true)
+
+    case expiration_tag_value(event) do
+      nil ->
+        if require_expiration?, do: {:error, :push_notification_missing_expiration}, else: :ok
+
+      expiration when is_integer(expiration) ->
+        max_expiration_window =
+          config_int([:policies, :marmot_push_max_expiration_window_seconds], 120)
+
+        created_at = Map.get(event, "created_at")
+
+        if max_expiration_window <= 0 or
+             (is_integer(created_at) and expiration >= created_at and
+                expiration - created_at <= max_expiration_window) do
+          :ok
+        else
+          {:error, :push_notification_expiration_too_far}
+        end
+    end
+  end
+
+  defp validate_push_server_recipient_count(event, push_server_pubkeys) do
+    max_server_recipients = config_int([:policies, :marmot_push_max_server_recipients], 1)
+
+    target_count =
+      event
+      |> recipient_pubkeys()
+      |> Enum.count(&(&1 in push_server_pubkeys))
+
+    if max_server_recipients > 0 and target_count > max_server_recipients do
+      {:error, :push_notification_server_recipients_exceeded}
+    else
+      :ok
+    end
+  end
+
+  defp recipient_pubkeys(event) do
+    event
+    |> Map.get("tags", [])
+    |> Enum.reduce([], fn
+      ["p", recipient | _rest], acc -> [recipient | acc]
+      _tag, acc -> acc
+    end)
+  end
+
+  defp expiration_tag_value(event) do
+    event
+    |> Map.get("tags", [])
+    |> Enum.find_value(fn
+      ["expiration", unix_seconds | _rest] -> parse_unix_seconds(unix_seconds)
+      _tag -> nil
+    end)
+  end
+
+  defp parse_unix_seconds(unix_seconds) when is_binary(unix_seconds) do
+    case Integer.parse(unix_seconds) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _other -> nil
+    end
+  end
+
+  defp parse_unix_seconds(_unix_seconds), do: nil
 
   defp reject_if_pubkey_banned(event) do
     with pubkey when is_binary(pubkey) <- Map.get(event, "pubkey"),
