@@ -57,6 +57,47 @@ defmodule Parrhesia.Policy.EventPolicyTest do
              EventPolicy.authorize_write(event, MapSet.new([String.duplicate("c", 64)]))
   end
 
+  test "requires #h when querying kind 445" do
+    filter = %{"kinds" => [445]}
+
+    assert {:error, :marmot_group_h_tag_required} =
+             EventPolicy.authorize_read([filter], MapSet.new())
+
+    assert :ok =
+             EventPolicy.authorize_read(
+               [%{"kinds" => [445], "#h" => [String.duplicate("a", 64)]}],
+               MapSet.new()
+             )
+  end
+
+  test "enforces max #h values and query window for kind 445 filters" do
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      marmot_group_max_h_values_per_filter: 1,
+      marmot_group_max_query_window_seconds: 10,
+      marmot_require_h_for_group_queries: true
+    )
+
+    too_many_groups = %{
+      "kinds" => [445],
+      "#h" => [String.duplicate("a", 64), String.duplicate("b", 64)]
+    }
+
+    wide_window = %{
+      "kinds" => [445],
+      "#h" => [String.duplicate("c", 64)],
+      "since" => 1,
+      "until" => 100
+    }
+
+    assert {:error, :marmot_group_h_values_exceeded} =
+             EventPolicy.authorize_read([too_many_groups], MapSet.new())
+
+    assert {:error, :marmot_group_filter_window_too_wide} =
+             EventPolicy.authorize_read([wide_window], MapSet.new())
+  end
+
   test "rejects mls kinds when feature is disabled" do
     Application.put_env(:parrhesia, :features, nip_ee_mls: false)
 

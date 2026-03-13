@@ -268,6 +268,51 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert result["id"] == matching["id"]
   end
 
+  test "query/3 routes Marmot group events by #h and keeps deterministic order" do
+    group_id = String.duplicate("a", 64)
+    other_group_id = String.duplicate("b", 64)
+
+    older =
+      persist_event(%{
+        "kind" => 445,
+        "created_at" => 1_700_000_600,
+        "tags" => [["h", group_id]],
+        "content" => Base.encode64("older")
+      })
+
+    tie_a =
+      persist_event(%{
+        "kind" => 445,
+        "created_at" => 1_700_000_601,
+        "tags" => [["h", group_id]],
+        "content" => Base.encode64("tie-a")
+      })
+
+    tie_b =
+      persist_event(%{
+        "kind" => 445,
+        "created_at" => 1_700_000_601,
+        "tags" => [["h", group_id]],
+        "content" => Base.encode64("tie-b")
+      })
+
+    _other_group =
+      persist_event(%{
+        "kind" => 445,
+        "created_at" => 1_700_000_602,
+        "tags" => [["h", other_group_id]],
+        "content" => Base.encode64("other-group")
+      })
+
+    assert {:ok, results} =
+             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], [])
+
+    tie_winner_id = Enum.min([tie_a["id"], tie_b["id"]])
+    tie_loser_id = Enum.max([tie_a["id"], tie_b["id"]])
+
+    assert Enum.map(results, & &1["id"]) == [tie_winner_id, tie_loser_id, older["id"]]
+  end
+
   test "mls keypackage relay list kind 10051 follows replaceable conflict semantics" do
     author = String.duplicate("c", 64)
 

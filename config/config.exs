@@ -18,6 +18,9 @@ config :parrhesia,
     min_pow_difficulty: 0,
     accept_ephemeral_events: true,
     mls_group_event_ttl_seconds: 300,
+    marmot_require_h_for_group_queries: true,
+    marmot_group_max_h_values_per_filter: 32,
+    marmot_group_max_query_window_seconds: 2_592_000,
     management_auth_required: true
   ],
   features: [

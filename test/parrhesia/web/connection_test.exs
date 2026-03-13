@@ -93,6 +93,19 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert Enum.any?(decoded, fn frame -> frame == ["AUTH", state.auth_challenge] end)
   end
 
+  test "kind 445 REQ without #h is rejected" do
+    state = connection_state()
+
+    req_payload = Jason.encode!(["REQ", "sub-445", %{"kinds" => [445]}])
+
+    assert {:push, frames, ^state} = Connection.handle_in({req_payload, [opcode: :text]}, state)
+
+    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+
+    assert ["CLOSED", "sub-445", "restricted: kind 445 queries must include a #h tag"] =
+             Enum.find(decoded, fn frame -> List.first(frame) == "CLOSED" end)
+  end
+
   test "valid EVENT stores event and returns accepted OK" do
     state = connection_state()
 

@@ -221,6 +221,27 @@ defmodule Parrhesia.Web.Connection do
       {:error, :restricted_giftwrap} ->
         restricted_close(state, subscription_id, EventPolicy.error_message(:restricted_giftwrap))
 
+      {:error, :marmot_group_h_tag_required} ->
+        restricted_close(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_h_tag_required)
+        )
+
+      {:error, :marmot_group_h_values_exceeded} ->
+        restricted_close(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_h_values_exceeded)
+        )
+
+      {:error, :marmot_group_filter_window_too_wide} ->
+        restricted_close(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_filter_window_too_wide)
+        )
+
       {:error, :subscription_limit_reached} ->
         response =
           Protocol.encode_relay({
@@ -285,6 +306,27 @@ defmodule Parrhesia.Web.Connection do
           state,
           subscription_id,
           EventPolicy.error_message(:restricted_giftwrap)
+        )
+
+      {:error, :marmot_group_h_tag_required} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_h_tag_required)
+        )
+
+      {:error, :marmot_group_h_values_exceeded} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_h_values_exceeded)
+        )
+
+      {:error, :marmot_group_filter_window_too_wide} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:marmot_group_filter_window_too_wide)
         )
 
       {:error, reason} ->

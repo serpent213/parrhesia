@@ -8,6 +8,9 @@ defmodule Parrhesia.Policy.EventPolicy do
   @type policy_error ::
           :auth_required
           | :restricted_giftwrap
+          | :marmot_group_h_tag_required
+          | :marmot_group_h_values_exceeded
+          | :marmot_group_filter_window_too_wide
           | :protected_event_requires_auth
           | :protected_event_pubkey_mismatch
           | :pow_below_minimum
@@ -27,7 +30,7 @@ defmodule Parrhesia.Policy.EventPolicy do
         {:error, :restricted_giftwrap}
 
       true ->
-        :ok
+        enforce_marmot_group_read_guardrails(filters)
     end
   end
 
@@ -55,6 +58,15 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   def error_message(:restricted_giftwrap),
     do: "restricted: giftwrap access requires recipient authentication"
+
+  def error_message(:marmot_group_h_tag_required),
+    do: "restricted: kind 445 queries must include a #h tag"
+
+  def error_message(:marmot_group_h_values_exceeded),
+    do: "rate-limited: kind 445 queries exceed maximum #h values"
+
+  def error_message(:marmot_group_filter_window_too_wide),
+    do: "rate-limited: kind 445 query window exceeds configured maximum"
 
   def error_message(:protected_event_requires_auth),
     do: "auth-required: protected events require authenticated pubkey"
@@ -110,6 +122,90 @@ defmodule Parrhesia.Policy.EventPolicy do
       _other -> false
     end
   end
+
+  defp enforce_marmot_group_read_guardrails(filters) do
+    cond do
+      marmot_group_h_tag_required_violation?(filters) ->
+        {:error, :marmot_group_h_tag_required}
+
+      marmot_group_h_values_exceeded?(filters) ->
+        {:error, :marmot_group_h_values_exceeded}
+
+      marmot_group_query_window_too_wide?(filters) ->
+        {:error, :marmot_group_filter_window_too_wide}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp marmot_group_h_tag_required_violation?(filters) do
+    config_bool([:policies, :marmot_require_h_for_group_queries], true) and
+      Enum.any?(filters, fn filter ->
+        targets_marmot_group_events?(filter) and not valid_h_tag_values?(Map.get(filter, "#h"))
+      end)
+  end
+
+  defp marmot_group_h_values_exceeded?(filters) do
+    max_h_values = config_int([:policies, :marmot_group_max_h_values_per_filter], 32)
+
+    max_h_values > 0 and
+      Enum.any?(filters, fn filter ->
+        targets_marmot_group_events?(filter) and h_tag_values_count(filter) > max_h_values
+      end)
+  end
+
+  defp marmot_group_query_window_too_wide?(filters) do
+    max_window = config_int([:policies, :marmot_group_max_query_window_seconds], 2_592_000)
+
+    max_window > 0 and
+      Enum.any?(filters, fn filter ->
+        if targets_marmot_group_events?(filter) do
+          query_window_exceeds?(filter, max_window)
+        else
+          false
+        end
+      end)
+  end
+
+  defp targets_marmot_group_events?(filter) do
+    case Map.get(filter, "kinds") do
+      kinds when is_list(kinds) -> 445 in kinds
+      _other -> false
+    end
+  end
+
+  defp h_tag_values_count(filter) do
+    case Map.get(filter, "#h") do
+      values when is_list(values) -> length(values)
+      _other -> 0
+    end
+  end
+
+  defp valid_h_tag_values?(values) when is_list(values) do
+    values != [] and Enum.all?(values, &lowercase_hex?(&1, 32))
+  end
+
+  defp valid_h_tag_values?(_values), do: false
+
+  defp query_window_exceeds?(filter, max_window) do
+    case {Map.get(filter, "since"), Map.get(filter, "until")} do
+      {since, until}
+      when is_integer(since) and since >= 0 and is_integer(until) and until >= 0 and
+             until >= since ->
+        until - since > max_window
+
+      _other ->
+        false
+    end
+  end
+
+  defp lowercase_hex?(value, bytes) when is_binary(value) do
+    byte_size(value) == bytes * 2 and
+      match?({:ok, _decoded}, Base.decode16(value, case: :lower))
+  end
+
+  defp lowercase_hex?(_value, _bytes), do: false
 
   defp reject_if_pubkey_banned(event) do
     with pubkey when is_binary(pubkey) <- Map.get(event, "pubkey"),

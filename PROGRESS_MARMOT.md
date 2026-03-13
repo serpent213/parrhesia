@@ -21,10 +21,10 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M2 — MIP-01 (group construction data expectations)
 
-- [ ] Enforce relay-side routing prerequisites for Marmot groups (`#h` query path)
-- [ ] Keep deterministic ordering for group-event catch-up (`created_at` + `id` tie-break)
-- [ ] Add guardrails for group metadata traffic volume and filter windows
-- [ ] Add tests for `#h` routing and ordering invariants
+- [x] Enforce relay-side routing prerequisites for Marmot groups (`#h` query path)
+- [x] Keep deterministic ordering for group-event catch-up (`created_at` + `id` tie-break)
+- [x] Add guardrails for group metadata traffic volume and filter windows
+- [x] Add tests for `#h` routing and ordering invariants
 
 ## M3 — MIP-02 (welcome events)
 
