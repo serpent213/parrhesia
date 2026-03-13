@@ -243,6 +243,9 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
              Events.query(%{}, filters, requester_pubkeys: [recipient])
 
     assert result["id"] == allowed["id"]
+
+    assert {:ok, []} = Events.query(%{}, filters, requester_pubkeys: [])
+    assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
   end
 
   test "query/3 supports #i keypackage reference lookups" do

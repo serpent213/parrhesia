@@ -661,19 +661,24 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   defp maybe_restrict_giftwrap_access(query, filter, opts) do
     requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
 
-    if targets_giftwrap?(filter) and requester_pubkeys != [] do
-      where(
-        query,
-        [event],
-        fragment(
-          "EXISTS (SELECT 1 FROM event_tags AS tag WHERE tag.event_created_at = ? AND tag.event_id = ? AND tag.name = 'p' AND tag.value = ANY(?))",
-          event.created_at,
-          event.id,
-          type(^requester_pubkeys, {:array, :string})
+    cond do
+      targets_giftwrap?(filter) and requester_pubkeys != [] ->
+        where(
+          query,
+          [event],
+          fragment(
+            "EXISTS (SELECT 1 FROM event_tags AS tag WHERE tag.event_created_at = ? AND tag.event_id = ? AND tag.name = 'p' AND tag.value = ANY(?))",
+            event.created_at,
+            event.id,
+            type(^requester_pubkeys, {:array, :string})
+          )
         )
-      )
-    else
-      query
+
+      targets_giftwrap?(filter) ->
+        where(query, [_event], false)
+
+      true ->
+        query
     end
   end
 

@@ -37,15 +37,19 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
   end
 
   @impl true
-  def query(_context, filters, _opts) do
+  def query(_context, filters, opts) do
     with :ok <- Filter.validate_filters(filters) do
       state = Store.get(& &1)
+      requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
 
       events =
         state.events
         |> Map.values()
-        |> Enum.reject(fn event -> MapSet.member?(state.deleted, event["id"]) end)
-        |> Enum.filter(&Filter.matches_any?(&1, filters))
+        |> Enum.filter(fn event ->
+          not MapSet.member?(state.deleted, event["id"]) and
+            Filter.matches_any?(event, filters) and
+            giftwrap_visible_to_requester?(event, requester_pubkeys)
+        end)
 
       {:ok, events}
     end
@@ -100,4 +104,20 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
 
   @impl true
   def purge_expired(_opts), do: {:ok, 0}
+
+  defp giftwrap_visible_to_requester?(%{"kind" => 1059} = event, requester_pubkeys) do
+    requester_pubkeys != [] and
+      event_targets_any_recipient?(event, requester_pubkeys)
+  end
+
+  defp giftwrap_visible_to_requester?(_event, _requester_pubkeys), do: true
+
+  defp event_targets_any_recipient?(event, requester_pubkeys) do
+    event
+    |> Map.get("tags", [])
+    |> Enum.any?(fn
+      ["p", recipient | _rest] -> recipient in requester_pubkeys
+      _tag -> false
+    end)
+  end
 end

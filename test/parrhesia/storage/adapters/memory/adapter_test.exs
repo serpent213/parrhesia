@@ -25,4 +25,26 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
     assert :ok = Admin.append_audit_log(%{}, %{method: "ping"})
     assert {:ok, [%{method: "ping"}]} = Admin.list_audit_logs(%{}, [])
   end
+
+  test "memory adapter enforces recipient visibility for giftwrap queries" do
+    recipient = String.duplicate("b", 64)
+
+    giftwrap_event = %{
+      "id" => String.duplicate("c", 64),
+      "pubkey" => "pk",
+      "kind" => 1059,
+      "tags" => [["p", recipient]],
+      "content" => "ciphertext"
+    }
+
+    assert {:ok, _event} = Events.put_event(%{}, giftwrap_event)
+
+    filters = [%{"kinds" => [1059], "#p" => [recipient]}]
+
+    assert {:ok, [result]} = Events.query(%{}, filters, requester_pubkeys: [recipient])
+    assert result["id"] == giftwrap_event["id"]
+
+    assert {:ok, []} = Events.query(%{}, filters, requester_pubkeys: [])
+    assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
+  end
 end
