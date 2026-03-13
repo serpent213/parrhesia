@@ -54,8 +54,8 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M7 — hardening + operations
 
-- [ ] Add Marmot-focused telemetry breakdowns (ingest/query/fanout, queue pressure)
-- [ ] Add query-plan regression checks for `#h` and `#i` heavy workloads
-- [ ] Add fault-injection scenarios for relay outage/reordering behavior in group flows
-- [ ] Add docs for operator limits tuned for Marmot traffic patterns
-- [ ] Final `mix precommit` before merge
+- [x] Add Marmot-focused telemetry breakdowns (ingest/query/fanout, queue pressure)
+- [x] Add query-plan regression checks for `#h` and `#i` heavy workloads
+- [x] Add fault-injection scenarios for relay outage/reordering behavior in group flows
+- [x] Add docs for operator limits tuned for Marmot traffic patterns
+- [x] Final `mix precommit` before merge

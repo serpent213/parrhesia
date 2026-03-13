@@ -34,28 +34,51 @@ defmodule Parrhesia.Telemetry do
         event_name: [:parrhesia, :ingest, :stop],
         measurement: :duration,
         unit: {:native, :millisecond},
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1,
         reporter_options: [buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000]]
       ),
       distribution("parrhesia.query.duration.ms",
         event_name: [:parrhesia, :query, :stop],
         measurement: :duration,
         unit: {:native, :millisecond},
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1,
         reporter_options: [buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000]]
       ),
       distribution("parrhesia.fanout.duration.ms",
         event_name: [:parrhesia, :fanout, :stop],
         measurement: :duration,
         unit: {:native, :millisecond},
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1,
         reporter_options: [buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000]]
       ),
       last_value("parrhesia.connection.outbound_queue.depth",
         event_name: [:parrhesia, :connection, :outbound_queue],
         measurement: :depth,
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1,
         reporter_options: [prometheus_type: :gauge]
+      ),
+      last_value("parrhesia.connection.outbound_queue.pressure",
+        event_name: [:parrhesia, :connection, :outbound_queue],
+        measurement: :pressure,
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1,
+        reporter_options: [prometheus_type: :gauge]
+      ),
+      counter("parrhesia.connection.outbound_queue.pressure_events.count",
+        event_name: [:parrhesia, :connection, :outbound_queue, :pressure],
+        measurement: :count,
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1
       ),
       counter("parrhesia.connection.outbound_queue.overflow.count",
         event_name: [:parrhesia, :connection, :outbound_queue, :overflow],
-        measurement: :count
+        measurement: :count,
+        tags: [:traffic_class],
+        tag_values: &traffic_class_tag_values/1
       ),
       last_value("parrhesia.vm.memory.total.bytes",
         event_name: [:parrhesia, :vm, :memory],
@@ -82,5 +105,10 @@ defmodule Parrhesia.Telemetry do
   def emit_vm_memory do
     total = :erlang.memory(:total)
     emit([:parrhesia, :vm, :memory], %{total: total}, %{})
+  end
+
+  defp traffic_class_tag_values(metadata) do
+    traffic_class = metadata |> Map.get(:traffic_class, :generic) |> to_string()
+    %{traffic_class: traffic_class}
   end
 end
