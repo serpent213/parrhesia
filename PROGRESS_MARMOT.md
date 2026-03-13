@@ -13,11 +13,11 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M1 — MIP-00 (credentials + keypackages)
 
-- [ ] Enforce kind `443` required tags and encoding (`encoding=base64`)
-- [ ] Validate `mls_protocol_version`, `mls_ciphersuite`, `mls_extensions`, `relays`, and `i` tag shape
-- [ ] Add efficient `#i` query/index path for KeyPackageRef lookup
-- [ ] Keep replaceable behavior for kind `10051` relay-list events
-- [ ] Add conformance tests for valid/invalid KeyPackage envelopes
+- [x] Enforce kind `443` required tags and encoding (`encoding=base64`)
+- [x] Validate `mls_protocol_version`, `mls_ciphersuite`, `mls_extensions`, `relays`, and `i` tag shape
+- [x] Add efficient `#i` query/index path for KeyPackageRef lookup
+- [x] Keep replaceable behavior for kind `10051` relay-list events
+- [x] Add conformance tests for valid/invalid KeyPackage envelopes
 
 ## M2 — MIP-01 (group construction data expectations)
 

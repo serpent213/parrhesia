@@ -245,6 +245,29 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert result["id"] == allowed["id"]
   end
 
+  test "query/3 supports #i keypackage reference lookups" do
+    keypackage_ref = String.duplicate("a", 64)
+
+    matching =
+      persist_event(%{
+        "kind" => 443,
+        "tags" => [["i", keypackage_ref], ["encoding", "base64"]],
+        "content" => Base.encode64("keypackage")
+      })
+
+    _non_matching =
+      persist_event(%{
+        "kind" => 443,
+        "tags" => [["i", String.duplicate("b", 64)], ["encoding", "base64"]],
+        "content" => Base.encode64("other")
+      })
+
+    assert {:ok, [result]} =
+             Events.query(%{}, [%{"kinds" => [443], "#i" => [keypackage_ref]}], [])
+
+    assert result["id"] == matching["id"]
+  end
+
   test "mls keypackage relay list kind 10051 follows replaceable conflict semantics" do
     author = String.duplicate("c", 64)
 

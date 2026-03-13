@@ -6,6 +6,9 @@ defmodule Parrhesia.Protocol.EventValidator do
   @required_fields ~w[id pubkey created_at kind tags content sig]
   @max_kind 65_535
   @default_max_event_future_skew_seconds 900
+  @supported_mls_ciphersuites MapSet.new(~w[0x0001 0x0002 0x0003 0x0004 0x0005 0x0006 0x0007])
+  @required_mls_extensions MapSet.new(["0xf2ee", "0x000a"])
+  @supported_keypackage_ref_sizes [32, 48, 64]
 
   @type error_reason ::
           :invalid_shape
@@ -18,6 +21,21 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :invalid_content
           | :invalid_sig
           | :invalid_id_hash
+          | :invalid_marmot_keypackage_content
+          | :missing_marmot_encoding_tag
+          | :invalid_marmot_encoding_tag
+          | :missing_marmot_protocol_version_tag
+          | :invalid_marmot_protocol_version_tag
+          | :missing_marmot_ciphersuite_tag
+          | :invalid_marmot_ciphersuite_tag
+          | :missing_marmot_extensions_tag
+          | :invalid_marmot_extensions_tag
+          | :missing_marmot_relays_tag
+          | :invalid_marmot_relays_tag
+          | :missing_marmot_keypackage_ref_tag
+          | :invalid_marmot_keypackage_ref_tag
+          | :missing_marmot_relay_tag
+          | :invalid_marmot_relay_tag
 
   @spec validate(map()) :: :ok | {:error, error_reason()}
   def validate(event) when is_map(event) do
@@ -28,8 +46,9 @@ defmodule Parrhesia.Protocol.EventValidator do
          :ok <- validate_kind(event["kind"]),
          :ok <- validate_tags(event["tags"]),
          :ok <- validate_content(event["content"]),
-         :ok <- validate_sig(event["sig"]) do
-      validate_id_hash(event)
+         :ok <- validate_sig(event["sig"]),
+         :ok <- validate_id_hash(event) do
+      validate_kind_specific(event)
     end
   end
 
@@ -62,7 +81,32 @@ defmodule Parrhesia.Protocol.EventValidator do
     invalid_tags: "invalid: tags must be an array of non-empty string arrays",
     invalid_content: "invalid: content must be a string",
     invalid_sig: "invalid: sig must be 64-byte lowercase hex",
-    invalid_id_hash: "invalid: event id does not match serialized event"
+    invalid_id_hash: "invalid: event id does not match serialized event",
+    invalid_marmot_keypackage_content: "invalid: kind 443 content must be non-empty base64",
+    missing_marmot_encoding_tag: "invalid: kind 443 must include [\"encoding\", \"base64\"]",
+    invalid_marmot_encoding_tag: "invalid: kind 443 must include [\"encoding\", \"base64\"]",
+    missing_marmot_protocol_version_tag:
+      "invalid: kind 443 must include [\"mls_protocol_version\", \"1.0\"]",
+    invalid_marmot_protocol_version_tag:
+      "invalid: kind 443 must include [\"mls_protocol_version\", \"1.0\"]",
+    missing_marmot_ciphersuite_tag:
+      "invalid: kind 443 must include a supported [\"mls_ciphersuite\", \"0x....\"]",
+    invalid_marmot_ciphersuite_tag:
+      "invalid: kind 443 must include a supported [\"mls_ciphersuite\", \"0x....\"]",
+    missing_marmot_extensions_tag:
+      "invalid: kind 443 must include [\"mls_extensions\", ...] with 0xf2ee and 0x000a",
+    invalid_marmot_extensions_tag:
+      "invalid: kind 443 must include [\"mls_extensions\", ...] with 0xf2ee and 0x000a",
+    missing_marmot_relays_tag: "invalid: kind 443 must include [\"relays\", <ws/wss url>, ...]",
+    invalid_marmot_relays_tag: "invalid: kind 443 must include [\"relays\", <ws/wss url>, ...]",
+    missing_marmot_keypackage_ref_tag:
+      "invalid: kind 443 must include [\"i\", <hex keypackage ref>]",
+    invalid_marmot_keypackage_ref_tag:
+      "invalid: kind 443 must include [\"i\", <hex keypackage ref>]",
+    missing_marmot_relay_tag:
+      "invalid: kind 10051 must include at least one [\"relay\", <ws/wss url>] tag",
+    invalid_marmot_relay_tag:
+      "invalid: kind 10051 must include at least one [\"relay\", <ws/wss url>] tag"
   }
 
   @spec error_message(error_reason()) :: String.t()
@@ -136,6 +180,202 @@ defmodule Parrhesia.Protocol.EventValidator do
   end
 
   defp valid_tag?(_tag), do: false
+
+  defp validate_kind_specific(%{"kind" => 443} = event),
+    do: validate_marmot_keypackage_event(event)
+
+  defp validate_kind_specific(%{"kind" => 10_051} = event),
+    do: validate_marmot_keypackage_relay_list(event)
+
+  defp validate_kind_specific(_event), do: :ok
+
+  defp validate_marmot_keypackage_event(event) do
+    tags = Map.get(event, "tags", [])
+
+    with :ok <- validate_non_empty_base64_content(event),
+         {:ok, ["encoding", "base64"]} <-
+           fetch_single_tag(tags, "encoding", :missing_marmot_encoding_tag),
+         :ok <-
+           validate_single_string_tag(
+             tags,
+             "mls_protocol_version",
+             "1.0",
+             :missing_marmot_protocol_version_tag,
+             :invalid_marmot_protocol_version_tag
+           ),
+         :ok <-
+           validate_single_string_tag_with_predicate(
+             tags,
+             "mls_ciphersuite",
+             :missing_marmot_ciphersuite_tag,
+             :invalid_marmot_ciphersuite_tag,
+             &supported_mls_ciphersuite?/1
+           ),
+         :ok <- validate_mls_extensions_tag(tags),
+         :ok <-
+           validate_relays_tag(
+             tags,
+             "relays",
+             :missing_marmot_relays_tag,
+             :invalid_marmot_relays_tag
+           ),
+         :ok <- validate_keypackage_ref_tag(tags) do
+      :ok
+    else
+      {:ok, _other_tag} -> {:error, :invalid_marmot_encoding_tag}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_marmot_keypackage_relay_list(event) do
+    tags = Map.get(event, "tags", [])
+
+    relay_tags = Enum.filter(tags, &match_tag_name?(&1, "relay"))
+
+    cond do
+      relay_tags == [] ->
+        {:error, :missing_marmot_relay_tag}
+
+      Enum.all?(relay_tags, &valid_single_relay_tag?/1) ->
+        :ok
+
+      true ->
+        {:error, :invalid_marmot_relay_tag}
+    end
+  end
+
+  defp validate_non_empty_base64_content(event) do
+    case Base.decode64(Map.get(event, "content", "")) do
+      {:ok, decoded} when byte_size(decoded) > 0 -> :ok
+      _other -> {:error, :invalid_marmot_keypackage_content}
+    end
+  end
+
+  defp validate_single_string_tag(tags, tag_name, expected_value, missing_error, invalid_error) do
+    validate_single_string_tag_with_predicate(
+      tags,
+      tag_name,
+      missing_error,
+      invalid_error,
+      &(&1 == expected_value)
+    )
+  end
+
+  defp validate_single_string_tag_with_predicate(
+         tags,
+         tag_name,
+         missing_error,
+         invalid_error,
+         predicate
+       )
+       when is_function(predicate, 1) do
+    case fetch_single_tag(tags, tag_name, missing_error) do
+      {:ok, [^tag_name, value]} ->
+        if predicate.(value) do
+          :ok
+        else
+          {:error, invalid_error}
+        end
+
+      {:ok, _invalid_tag_shape} ->
+        {:error, invalid_error}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_mls_extensions_tag(tags) do
+    with {:ok, ["mls_extensions" | extensions]} <-
+           fetch_single_tag(tags, "mls_extensions", :missing_marmot_extensions_tag),
+         true <- extensions != [],
+         true <- Enum.all?(extensions, &valid_mls_extension_id?/1),
+         true <- required_mls_extensions_present?(extensions) do
+      :ok
+    else
+      {:ok, _invalid_tag_shape} -> {:error, :invalid_marmot_extensions_tag}
+      false -> {:error, :invalid_marmot_extensions_tag}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_relays_tag(tags, tag_name, missing_error, invalid_error) do
+    with {:ok, [^tag_name | relay_urls]} <- fetch_single_tag(tags, tag_name, missing_error),
+         true <- relay_urls != [],
+         true <- Enum.all?(relay_urls, &valid_websocket_url?/1) do
+      :ok
+    else
+      {:ok, _invalid_tag_shape} -> {:error, invalid_error}
+      false -> {:error, invalid_error}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_keypackage_ref_tag(tags) do
+    with {:ok, ["i", keypackage_ref]} <-
+           fetch_single_tag(tags, "i", :missing_marmot_keypackage_ref_tag),
+         true <- valid_keypackage_ref?(keypackage_ref) do
+      :ok
+    else
+      {:ok, _invalid_tag_shape} -> {:error, :invalid_marmot_keypackage_ref_tag}
+      false -> {:error, :invalid_marmot_keypackage_ref_tag}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_single_tag(tags, tag_name, missing_error) do
+    case Enum.filter(tags, &match_tag_name?(&1, tag_name)) do
+      [tag] -> {:ok, tag}
+      [] -> {:error, missing_error}
+      _duplicates -> {:error, missing_error}
+    end
+  end
+
+  defp match_tag_name?([tag_name | _rest], expected_tag_name) when is_binary(tag_name),
+    do: tag_name == expected_tag_name
+
+  defp match_tag_name?(_tag, _expected_tag_name), do: false
+
+  defp supported_mls_ciphersuite?(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> then(&MapSet.member?(@supported_mls_ciphersuites, &1))
+  end
+
+  defp supported_mls_ciphersuite?(_value), do: false
+
+  defp valid_mls_extension_id?(value) when is_binary(value) do
+    String.match?(value, ~r/^0x[0-9a-fA-F]{4}$/)
+  end
+
+  defp valid_mls_extension_id?(_value), do: false
+
+  defp required_mls_extensions_present?(extensions) do
+    normalized = MapSet.new(Enum.map(extensions, &String.downcase/1))
+    MapSet.subset?(@required_mls_extensions, normalized)
+  end
+
+  defp valid_single_relay_tag?(["relay", relay_url]), do: valid_websocket_url?(relay_url)
+  defp valid_single_relay_tag?(_tag), do: false
+
+  defp valid_websocket_url?(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["ws", "wss"] and is_binary(host) and host != "" ->
+        true
+
+      _other ->
+        false
+    end
+  end
+
+  defp valid_websocket_url?(_url), do: false
+
+  defp valid_keypackage_ref?(value) when is_binary(value) do
+    Enum.any?(@supported_keypackage_ref_sizes, &lowercase_hex?(value, &1))
+  end
+
+  defp valid_keypackage_ref?(_value), do: false
 
   defp lowercase_hex?(value, bytes) do
     byte_size(value) == bytes * 2 and
