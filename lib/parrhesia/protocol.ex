@@ -59,7 +59,7 @@ defmodule Parrhesia.Protocol do
   def encode_relay(message) do
     message
     |> relay_frame()
-    |> Jason.encode!()
+    |> JSON.encode!()
   end
 
   @spec decode_error_notice(decode_error()) :: String.t()
@@ -77,7 +77,7 @@ defmodule Parrhesia.Protocol do
   end
 
   defp decode_json(payload) do
-    case Jason.decode(payload) do
+    case JSON.decode(payload) do
       {:ok, decoded} -> {:ok, decoded}
       {:error, _reason} -> {:error, :invalid_json}
     end

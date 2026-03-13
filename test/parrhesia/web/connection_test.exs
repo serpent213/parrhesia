@@ -14,7 +14,7 @@ defmodule Parrhesia.Web.ConnectionTest do
   test "REQ registers subscription, streams initial events and replies with EOSE" do
     state = connection_state()
 
-    req_payload = Jason.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
+    req_payload = JSON.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
 
     assert {:push, responses, next_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
@@ -23,7 +23,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert next_state.subscriptions["sub-123"].filters == [%{"kinds" => [1]}]
     assert next_state.subscriptions["sub-123"].eose_sent?
 
-    assert List.last(Enum.map(responses, fn {:text, frame} -> Jason.decode!(frame) end)) == [
+    assert List.last(Enum.map(responses, fn {:text, frame} -> JSON.decode!(frame) end)) == [
              "EOSE",
              "sub-123"
            ]
@@ -32,12 +32,12 @@ defmodule Parrhesia.Web.ConnectionTest do
   test "COUNT returns exact count payload" do
     state = connection_state()
 
-    payload = Jason.encode!(["COUNT", "sub-count", %{"kinds" => [1]}])
+    payload = JSON.encode!(["COUNT", "sub-count", %{"kinds" => [1]}])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert ["COUNT", "sub-count", payload] = Jason.decode!(response)
+    assert ["COUNT", "sub-count", payload] = JSON.decode!(response)
     assert payload["count"] >= 0
     assert payload["approximate"] == false
   end
@@ -46,12 +46,12 @@ defmodule Parrhesia.Web.ConnectionTest do
     state = connection_state()
 
     auth_event = valid_auth_event(state.auth_challenge)
-    payload = Jason.encode!(["AUTH", auth_event])
+    payload = JSON.encode!(["AUTH", auth_event])
 
     assert {:push, {:text, response}, next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == ["OK", auth_event["id"], true, "ok: auth accepted"]
+    assert JSON.decode!(response) == ["OK", auth_event["id"], true, "ok: auth accepted"]
     assert MapSet.member?(next_state.authenticated_pubkeys, auth_event["pubkey"])
     refute next_state.auth_challenge == state.auth_challenge
   end
@@ -60,11 +60,11 @@ defmodule Parrhesia.Web.ConnectionTest do
     state = connection_state()
 
     auth_event = valid_auth_event("wrong-challenge")
-    payload = Jason.encode!(["AUTH", auth_event])
+    payload = JSON.encode!(["AUTH", auth_event])
 
     assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
 
-    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
     assert Enum.any?(decoded, fn frame -> frame == ["AUTH", state.auth_challenge] end)
 
@@ -81,11 +81,11 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Map.put("tags", [["-"]])
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
 
-    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
     assert ["OK", _, false, "auth-required: protected events require authenticated pubkey"] =
              Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
@@ -96,11 +96,11 @@ defmodule Parrhesia.Web.ConnectionTest do
   test "kind 445 REQ without #h is rejected" do
     state = connection_state()
 
-    req_payload = Jason.encode!(["REQ", "sub-445", %{"kinds" => [445]}])
+    req_payload = JSON.encode!(["REQ", "sub-445", %{"kinds" => [445]}])
 
     assert {:push, frames, ^state} = Connection.handle_in({req_payload, [opcode: :text]}, state)
 
-    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
     assert ["CLOSED", "sub-445", "restricted: kind 445 queries must include a #h tag"] =
              Enum.find(decoded, fn frame -> List.first(frame) == "CLOSED" end)
@@ -110,24 +110,24 @@ defmodule Parrhesia.Web.ConnectionTest do
     state = connection_state()
 
     event = valid_event()
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == ["OK", event["id"], true, "ok: event stored"]
+    assert JSON.decode!(response) == ["OK", event["id"], true, "ok: event stored"]
   end
 
   test "invalid EVENT replies with OK false invalid prefix" do
     state = connection_state()
 
     event = valid_event() |> Map.put("sig", "nope")
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
+    assert JSON.decode!(response) == [
              "OK",
              event["id"],
              false,
@@ -145,12 +145,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Map.put("content", "ciphertext")
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
+    assert JSON.decode!(response) == [
              "OK",
              event["id"],
              false,
@@ -168,12 +168,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Map.put("content", "not-base64")
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
+    assert JSON.decode!(response) == [
              "OK",
              event["id"],
              false,
@@ -202,12 +202,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       ])
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
+    assert JSON.decode!(response) == [
              "OK",
              event["id"],
              false,
@@ -253,12 +253,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Map.put("content", "encrypted")
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
+    assert JSON.decode!(response) == [
              "OK",
              event["id"],
              false,
@@ -304,17 +304,17 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Map.put("content", "encrypted")
       |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    payload = Jason.encode!(["EVENT", event])
+    payload = JSON.encode!(["EVENT", event])
 
     assert {:push, {:text, first_response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(first_response) == ["OK", event["id"], true, "ok: event stored"]
+    assert JSON.decode!(first_response) == ["OK", event["id"], true, "ok: event stored"]
 
     assert {:push, {:text, second_response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(second_response) == [
+    assert JSON.decode!(second_response) == [
              "OK",
              event["id"],
              false,
@@ -325,32 +325,32 @@ defmodule Parrhesia.Web.ConnectionTest do
   test "NEG sessions open and close" do
     state = connection_state()
 
-    open_payload = Jason.encode!(["NEG-OPEN", "neg-1", %{"cursor" => 0}])
+    open_payload = JSON.encode!(["NEG-OPEN", "neg-1", %{"cursor" => 0}])
 
     assert {:push, {:text, open_response}, ^state} =
              Connection.handle_in({open_payload, [opcode: :text]}, state)
 
     assert ["NEG-MSG", "neg-1", %{"status" => "open", "cursor" => 0}] =
-             Jason.decode!(open_response)
+             JSON.decode!(open_response)
 
-    close_payload = Jason.encode!(["NEG-CLOSE", "neg-1"])
+    close_payload = JSON.encode!(["NEG-CLOSE", "neg-1"])
 
     assert {:push, {:text, close_response}, ^state} =
              Connection.handle_in({close_payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(close_response) == ["NEG-MSG", "neg-1", %{"status" => "closed"}]
+    assert JSON.decode!(close_response) == ["NEG-MSG", "neg-1", %{"status" => "closed"}]
   end
 
   test "CLOSE removes subscription and replies with CLOSED" do
     state = subscribed_connection_state([])
 
-    close_payload = Jason.encode!(["CLOSE", "sub-1"])
+    close_payload = JSON.encode!(["CLOSE", "sub-1"])
 
     assert {:push, {:text, response}, next_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, state)
 
     refute Map.has_key?(next_state.subscriptions, "sub-1")
-    assert Jason.decode!(response) == ["CLOSED", "sub-1", "error: subscription closed"]
+    assert JSON.decode!(response) == ["CLOSED", "sub-1", "error: subscription closed"]
   end
 
   test "fanout_event enqueues and drains matching events" do
@@ -366,7 +366,7 @@ defmodule Parrhesia.Web.ConnectionTest do
              Connection.handle_info(:drain_outbound_queue, queued_state)
 
     assert drained_state.outbound_queue_size == 0
-    assert Jason.decode!(payload) == ["EVENT", "sub-1", event]
+    assert JSON.decode!(payload) == ["EVENT", "sub-1", event]
   end
 
   test "high-volume kind 445 fanout drains in order across batches" do
@@ -392,7 +392,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     delivered_ids =
       frames
-      |> Enum.map(fn {:text, payload} -> Jason.decode!(payload) end)
+      |> Enum.map(fn {:text, payload} -> JSON.decode!(payload) end)
       |> Enum.map(fn ["EVENT", "sub-group", event] -> event["id"] end)
 
     assert delivered_ids == Enum.map(events, & &1["id"])
@@ -418,12 +418,12 @@ defmodule Parrhesia.Web.ConnectionTest do
              )
 
     assert message == "rate-limited: outbound queue overflow"
-    assert Jason.decode!(notice_payload) == ["NOTICE", message]
+    assert JSON.decode!(notice_payload) == ["NOTICE", message]
   end
 
   defp subscribed_connection_state(opts) do
     state = connection_state(opts)
-    req_payload = Jason.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
+    req_payload = JSON.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
 
     assert {:push, _, subscribed_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
@@ -433,7 +433,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
   defp subscribed_group_connection_state(group_id, opts) do
     state = connection_state(opts)
-    req_payload = Jason.encode!(["REQ", "sub-group", %{"kinds" => [445], "#h" => [group_id]}])
+    req_payload = JSON.encode!(["REQ", "sub-group", %{"kinds" => [445], "#h" => [group_id]}])
 
     assert {:push, _, subscribed_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)

@@ -11,7 +11,7 @@ defmodule Parrhesia.Web.Router do
   plug(Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
-    json_decoder: Jason
+    json_decoder: JSON
   )
 
   plug(:match)
@@ -43,7 +43,7 @@ defmodule Parrhesia.Web.Router do
 
   get "/relay" do
     if accepts_nip11?(conn) do
-      body = Jason.encode!(RelayInfo.document())
+      body = JSON.encode!(RelayInfo.document())
 
       conn
       |> put_resp_content_type("application/nostr+json")

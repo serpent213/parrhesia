@@ -7,7 +7,7 @@ defmodule Parrhesia.Auth.Nip98Test do
   test "validates authorization header with matching method and url tags" do
     url = "http://example.com/management"
     event = nip98_event("POST", url)
-    header = "Nostr " <> Base.encode64(Jason.encode!(event))
+    header = "Nostr " <> Base.encode64(JSON.encode!(event))
 
     assert {:ok, parsed_event} = Nip98.validate_authorization_header(header, "POST", url)
     assert parsed_event["id"] == event["id"]
@@ -16,7 +16,7 @@ defmodule Parrhesia.Auth.Nip98Test do
   test "rejects mismatched method and url" do
     url = "http://example.com/management"
     event = nip98_event("POST", url)
-    header = "Nostr " <> Base.encode64(Jason.encode!(event))
+    header = "Nostr " <> Base.encode64(JSON.encode!(event))
 
     assert {:error, :invalid_method_tag} =
              Nip98.validate_authorization_header(header, "GET", url)

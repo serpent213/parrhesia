@@ -71,7 +71,7 @@ defmodule Parrhesia.Protocol.EventValidator do
       event["tags"],
       event["content"]
     ]
-    |> Jason.encode!()
+    |> JSON.encode!()
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
   end

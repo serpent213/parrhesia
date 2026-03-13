@@ -87,6 +87,8 @@ in {
       vips-mozjpeg
       # Mermaid diagram generator
       mermaid-cli
+      # Nostr CLI client
+      nak
     ];
 
   # https://devenv.sh/tests/

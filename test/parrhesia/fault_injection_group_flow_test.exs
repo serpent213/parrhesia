@@ -41,12 +41,12 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
         "content" => Base.encode64("commit")
       })
 
-    payload = Jason.encode!(["EVENT", group_event])
+    payload = JSON.encode!(["EVENT", group_event])
 
     assert {:push, {:text, error_response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(error_response) == ["OK", group_event["id"], false, "error: :db_down"]
+    assert JSON.decode!(error_response) == ["OK", group_event["id"], false, "error: :db_down"]
 
     Application.put_env(
       :parrhesia,
@@ -57,7 +57,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
     assert {:push, {:text, ok_response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(ok_response) == ["OK", group_event["id"], true, "ok: event stored"]
+    assert JSON.decode!(ok_response) == ["OK", group_event["id"], true, "ok: event stored"]
 
     assert {:ok, persisted_group_event} = Storage.events().get_event(%{}, group_event["id"])
     assert persisted_group_event["id"] == group_event["id"]
@@ -89,11 +89,11 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
 
     assert {:push, {:text, outage_response}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", older_event]), [opcode: :text]},
+               {JSON.encode!(["EVENT", older_event]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(outage_response) == ["OK", older_event["id"], false, "error: :db_down"]
+    assert JSON.decode!(outage_response) == ["OK", older_event["id"], false, "error: :db_down"]
 
     Application.put_env(
       :parrhesia,
@@ -103,19 +103,19 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
 
     assert {:push, {:text, newer_response}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", newer_event]), [opcode: :text]},
+               {JSON.encode!(["EVENT", newer_event]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(newer_response) == ["OK", newer_event["id"], true, "ok: event stored"]
+    assert JSON.decode!(newer_response) == ["OK", newer_event["id"], true, "ok: event stored"]
 
     assert {:push, {:text, older_response}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", older_event]), [opcode: :text]},
+               {JSON.encode!(["EVENT", older_event]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(older_response) == ["OK", older_event["id"], true, "ok: event stored"]
+    assert JSON.decode!(older_response) == ["OK", older_event["id"], true, "ok: event stored"]
 
     assert {:ok, results} =
              Storage.events().query(

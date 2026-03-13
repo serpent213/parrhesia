@@ -37,7 +37,7 @@ defmodule Parrhesia.Web.RouterTest do
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") == ["application/nostr+json; charset=utf-8"]
 
-    body = Jason.decode!(conn.resp_body)
+    body = JSON.decode!(conn.resp_body)
 
     assert body["name"] == "Parrhesia"
     assert 11 in body["supported_nips"]
@@ -52,29 +52,29 @@ defmodule Parrhesia.Web.RouterTest do
 
   test "POST /management requires authorization" do
     conn =
-      conn(:post, "/management", Jason.encode!(%{"method" => "ping", "params" => %{}}))
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
       |> put_req_header("content-type", "application/json")
       |> Router.call([])
 
     assert conn.status == 401
-    assert Jason.decode!(conn.resp_body) == %{"ok" => false, "error" => "auth-required"}
+    assert JSON.decode!(conn.resp_body) == %{"ok" => false, "error" => "auth-required"}
   end
 
   test "POST /management accepts valid NIP-98 header" do
     management_url = "http://www.example.com/management"
     auth_event = nip98_event("POST", management_url)
 
-    authorization = "Nostr " <> Base.encode64(Jason.encode!(auth_event))
+    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
 
     conn =
-      conn(:post, "/management", Jason.encode!(%{"method" => "ping", "params" => %{}}))
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
       |> put_req_header("content-type", "application/json")
       |> put_req_header("authorization", authorization)
       |> Router.call([])
 
     assert conn.status == 200
 
-    assert Jason.decode!(conn.resp_body) == %{
+    assert JSON.decode!(conn.resp_body) == %{
              "ok" => true,
              "result" => %{"status" => "ok"}
            }

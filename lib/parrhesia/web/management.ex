@@ -76,7 +76,7 @@ defmodule Parrhesia.Web.Management do
   defp normalize_result(result), do: %{"value" => inspect(result)}
 
   defp send_json(conn, status, body) do
-    encoded = Jason.encode!(body)
+    encoded = JSON.encode!(body)
 
     conn
     |> put_resp_content_type("application/json")

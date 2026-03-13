@@ -11,7 +11,7 @@ defmodule Parrhesia.Performance.LoadSoakTest do
 
     {:ok, state} = Connection.init(subscription_index: nil, max_outbound_queue: 10_000)
 
-    req_payload = Jason.encode!(["REQ", "sub-load", %{"kinds" => [1]}])
+    req_payload = JSON.encode!(["REQ", "sub-load", %{"kinds" => [1]}])
 
     assert {:push, _frames, subscribed_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)

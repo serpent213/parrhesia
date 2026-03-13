@@ -30,19 +30,19 @@ defmodule Parrhesia.FaultInjectionTest do
     event = valid_event()
 
     assert {:push, {:text, response}, ^state} =
-             Connection.handle_in({Jason.encode!(["EVENT", event]), [opcode: :text]}, state)
+             Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == ["OK", event["id"], false, "error: :db_down"]
+    assert JSON.decode!(response) == ["OK", event["id"], false, "error: :db_down"]
   end
 
   test "REQ closes with storage error when query fails" do
     {:ok, state} = Connection.init(subscription_index: nil)
-    payload = Jason.encode!(["REQ", "sub-db-down", %{"kinds" => [1]}])
+    payload = JSON.encode!(["REQ", "sub-db-down", %{"kinds" => [1]}])
 
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == ["CLOSED", "sub-db-down", "error: :db_down"]
+    assert JSON.decode!(response) == ["CLOSED", "sub-db-down", "error: :db_down"]
   end
 
   defp valid_event do

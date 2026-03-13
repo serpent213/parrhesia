@@ -15,20 +15,20 @@ defmodule Parrhesia.Web.ConformanceTest do
   test "REQ -> EOSE emitted once and CLOSE emits CLOSED" do
     {:ok, state} = Connection.init(subscription_index: nil)
 
-    req_payload = Jason.encode!(["REQ", "sub-e2e", %{"kinds" => [1]}])
+    req_payload = JSON.encode!(["REQ", "sub-e2e", %{"kinds" => [1]}])
 
     assert {:push, frames, subscribed_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
 
-    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
     assert ["EOSE", "sub-e2e"] = List.last(decoded)
 
-    close_payload = Jason.encode!(["CLOSE", "sub-e2e"])
+    close_payload = JSON.encode!(["CLOSE", "sub-e2e"])
 
     assert {:push, {:text, closed_frame}, closed_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, subscribed_state)
 
-    assert Jason.decode!(closed_frame) == ["CLOSED", "sub-e2e", "error: subscription closed"]
+    assert JSON.decode!(closed_frame) == ["CLOSED", "sub-e2e", "error: subscription closed"]
     refute Map.has_key?(closed_state.subscriptions, "sub-e2e")
   end
 
@@ -38,9 +38,9 @@ defmodule Parrhesia.Web.ConformanceTest do
     event = valid_event()
 
     assert {:push, {:text, frame}, ^state} =
-             Connection.handle_in({Jason.encode!(["EVENT", event]), [opcode: :text]}, state)
+             Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
 
-    assert Jason.decode!(frame) == ["OK", event["id"], true, "ok: event stored"]
+    assert JSON.decode!(frame) == ["OK", event["id"], true, "ok: event stored"]
   end
 
   test "wrapped kind 1059 welcome delivery is recipient-gated" do
@@ -56,19 +56,19 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     assert {:push, {:text, ok_frame}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
+               {JSON.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(ok_frame) == ["OK", wrapped_welcome["id"], true, "ok: event stored"]
+    assert JSON.decode!(ok_frame) == ["OK", wrapped_welcome["id"], true, "ok: event stored"]
 
-    req_payload = Jason.encode!(["REQ", "sub-welcome", %{"kinds" => [1059], "#p" => [recipient]}])
+    req_payload = JSON.encode!(["REQ", "sub-welcome", %{"kinds" => [1059], "#p" => [recipient]}])
 
     assert {:push, restricted_frames, ^state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
 
     decoded_restricted =
-      Enum.map(restricted_frames, fn {:text, frame} -> Jason.decode!(frame) end)
+      Enum.map(restricted_frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
     assert [
              "CLOSED",
@@ -80,14 +80,14 @@ defmodule Parrhesia.Web.ConformanceTest do
     auth_event = valid_auth_event(state.auth_challenge, recipient)
 
     assert {:push, {:text, auth_frame}, authed_state} =
-             Connection.handle_in({Jason.encode!(["AUTH", auth_event]), [opcode: :text]}, state)
+             Connection.handle_in({JSON.encode!(["AUTH", auth_event]), [opcode: :text]}, state)
 
-    assert Jason.decode!(auth_frame) == ["OK", auth_event["id"], true, "ok: auth accepted"]
+    assert JSON.decode!(auth_frame) == ["OK", auth_event["id"], true, "ok: auth accepted"]
 
     assert {:push, frames, _next_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, authed_state)
 
-    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
     assert ["EVENT", "sub-welcome", result_event] =
              Enum.find(decoded, fn frame -> List.first(frame) == "EVENT" end)
@@ -108,11 +108,11 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     assert {:push, {:text, commit_ok_frame}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", commit_event]), [opcode: :text]},
+               {JSON.encode!(["EVENT", commit_event]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(commit_ok_frame) == ["OK", commit_event["id"], true, "ok: event stored"]
+    assert JSON.decode!(commit_ok_frame) == ["OK", commit_event["id"], true, "ok: event stored"]
 
     assert {:ok, persisted_commit} = Storage.events().get_event(%{}, commit_event["id"])
     assert persisted_commit["id"] == commit_event["id"]
@@ -126,11 +126,11 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     assert {:push, {:text, welcome_ok_frame}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
+               {JSON.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(welcome_ok_frame) == [
+    assert JSON.decode!(welcome_ok_frame) == [
              "OK",
              wrapped_welcome["id"],
              true,
@@ -189,11 +189,11 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     assert {:push, {:text, relay_ok_frame}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", relay_list_event]), [opcode: :text]},
+               {JSON.encode!(["EVENT", relay_list_event]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(relay_ok_frame) == [
+    assert JSON.decode!(relay_ok_frame) == [
              "OK",
              relay_list_event["id"],
              true,
@@ -202,11 +202,11 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     assert {:push, {:text, trigger_ok_frame}, ^state} =
              Connection.handle_in(
-               {Jason.encode!(["EVENT", push_trigger]), [opcode: :text]},
+               {JSON.encode!(["EVENT", push_trigger]), [opcode: :text]},
                state
              )
 
-    assert Jason.decode!(trigger_ok_frame) == ["OK", push_trigger["id"], true, "ok: event stored"]
+    assert JSON.decode!(trigger_ok_frame) == ["OK", push_trigger["id"], true, "ok: event stored"]
 
     assert {:ok, persisted_relay_list} = Storage.events().get_event(%{}, relay_list_event["id"])
     assert persisted_relay_list["id"] == relay_list_event["id"]

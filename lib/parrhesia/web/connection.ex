@@ -493,7 +493,7 @@ defmodule Parrhesia.Web.Connection do
 
   defp generate_hll_payload(filters, count) do
     filters
-    |> Jason.encode!()
+    |> JSON.encode!()
     |> then(&"#{&1}:#{count}")
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode64()

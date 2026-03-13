@@ -14,7 +14,7 @@ defmodule Parrhesia.Auth.Nip98 do
   def validate_authorization_header("Nostr " <> encoded_event, method, url)
       when is_binary(method) and is_binary(url) do
     with {:ok, event_json} <- decode_base64(encoded_event),
-         {:ok, event} <- Jason.decode(event_json),
+         {:ok, event} <- JSON.decode(event_json),
          :ok <- validate_event_shape(event),
          :ok <- validate_http_binding(event, method, url) do
       {:ok, event}

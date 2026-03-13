@@ -30,7 +30,7 @@
         "_build"
         "deps"
         "node_modules"
-        "complement"
+        "marmot-ts"
       ];
     in
       lib.cleanSourceFilter path type
@@ -43,7 +43,7 @@
       beamPackages.fetchMixDeps {
         pname = "${pname}-mix-deps";
         inherit version src;
-        hash = "sha256-eAk6FVjVPGcJl3adBSoQvPIva7w4xz4GuZ+DZaz6SYY=";
+        hash = "sha256-1v2+Q1MHbu09r5OBaLehiR+JfMP0Q5OHaWuwrQDzZJU=";
       }
     else null;
 in
@@ -65,7 +65,7 @@ in
     '';
 
     meta = with lib; {
-      description = "Parrhesia Matrix homeserver";
+      description = "Parrhesia Nostr relay server";
       license = licenses.asl20;
       platforms = platforms.unix;
     };
