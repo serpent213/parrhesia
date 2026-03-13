@@ -28,8 +28,8 @@ Implementation checklist for Parrhesia relay.
 
 ## Phase 3 — fanout + performance primitives
 
-- [ ] Build ETS-backed subscription index
-- [ ] Implement candidate narrowing by kind/author/tag
+- [x] Build ETS-backed subscription index
+- [x] Implement candidate narrowing by kind/author/tag
 - [ ] Add bounded outbound queues/backpressure per connection
 - [ ] Add telemetry for ingest/query/fanout latency + queue depth
 

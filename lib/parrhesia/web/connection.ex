@@ -7,12 +7,14 @@ defmodule Parrhesia.Web.Connection do
 
   alias Parrhesia.Protocol
   alias Parrhesia.Protocol.Filter
+  alias Parrhesia.Subscriptions.Index
 
   @default_max_subscriptions_per_connection 32
 
   defstruct subscriptions: %{},
             authenticated_pubkeys: MapSet.new(),
-            max_subscriptions_per_connection: @default_max_subscriptions_per_connection
+            max_subscriptions_per_connection: @default_max_subscriptions_per_connection,
+            subscription_index: Index
 
   @type subscription :: %{
           filters: [map()],
@@ -22,12 +24,17 @@ defmodule Parrhesia.Web.Connection do
   @type t :: %__MODULE__{
           subscriptions: %{String.t() => subscription()},
           authenticated_pubkeys: MapSet.t(String.t()),
-          max_subscriptions_per_connection: pos_integer()
+          max_subscriptions_per_connection: pos_integer(),
+          subscription_index: GenServer.server() | nil
         }
 
   @impl true
   def init(opts) do
-    state = %__MODULE__{max_subscriptions_per_connection: max_subscriptions_per_connection(opts)}
+    state = %__MODULE__{
+      max_subscriptions_per_connection: max_subscriptions_per_connection(opts),
+      subscription_index: subscription_index(opts)
+    }
+
     {:ok, state}
   end
 
@@ -53,6 +60,7 @@ defmodule Parrhesia.Web.Connection do
 
       {:ok, {:close, subscription_id}} ->
         next_state = drop_subscription(state, subscription_id)
+        :ok = maybe_remove_index_subscription(next_state, subscription_id)
 
         response =
           Protocol.encode_relay({:closed, subscription_id, "error: subscription closed"})
@@ -78,9 +86,17 @@ defmodule Parrhesia.Web.Connection do
     {:ok, state}
   end
 
+  @impl true
+  def terminate(_reason, %__MODULE__{} = state) do
+    :ok = maybe_remove_index_owner(state)
+    :ok
+  end
+
   defp handle_req(%__MODULE__{} = state, subscription_id, filters) do
     with :ok <- Filter.validate_filters(filters),
          {:ok, next_state} <- upsert_subscription(state, subscription_id, filters) do
+      :ok = maybe_upsert_index_subscription(next_state, subscription_id, filters)
+
       response = Protocol.encode_relay({:eose, subscription_id})
       {:push, {:text, response}, next_state}
     else
@@ -124,6 +140,71 @@ defmodule Parrhesia.Web.Connection do
     subscriptions = Map.delete(state.subscriptions, subscription_id)
     %__MODULE__{state | subscriptions: subscriptions}
   end
+
+  defp maybe_upsert_index_subscription(
+         %__MODULE__{subscription_index: nil},
+         _subscription_id,
+         _filters
+       ),
+       do: :ok
+
+  defp maybe_upsert_index_subscription(
+         %__MODULE__{subscription_index: subscription_index},
+         subscription_id,
+         filters
+       ) do
+    case Index.upsert(subscription_index, self(), subscription_id, filters) do
+      :ok -> :ok
+      {:error, _reason} -> :ok
+    end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp maybe_remove_index_subscription(
+         %__MODULE__{subscription_index: nil},
+         _subscription_id
+       ),
+       do: :ok
+
+  defp maybe_remove_index_subscription(
+         %__MODULE__{subscription_index: subscription_index},
+         subscription_id
+       ) do
+    :ok = Index.remove(subscription_index, self(), subscription_id)
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp maybe_remove_index_owner(%__MODULE__{subscription_index: nil}), do: :ok
+
+  defp maybe_remove_index_owner(%__MODULE__{subscription_index: subscription_index}) do
+    :ok = Index.remove_owner(subscription_index, self())
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp subscription_index(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:subscription_index, Index)
+    |> normalize_subscription_index()
+  end
+
+  defp subscription_index(opts) when is_map(opts) do
+    opts
+    |> Map.get(:subscription_index, Index)
+    |> normalize_subscription_index()
+  end
+
+  defp subscription_index(_opts), do: Index
+
+  defp normalize_subscription_index(subscription_index)
+       when is_pid(subscription_index) or is_atom(subscription_index),
+       do: subscription_index
+
+  defp normalize_subscription_index(_subscription_index), do: nil
 
   defp max_subscriptions_per_connection(opts) when is_list(opts) do
     opts
