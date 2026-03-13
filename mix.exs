@@ -7,15 +7,21 @@ defmodule Parrhesia.MixProject do
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases()
     ]
   end
 
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
+      mod: {Parrhesia.Application, []},
       extra_applications: [:logger]
     ]
+  end
+
+  def cli do
+    [preferred_envs: [precommit: :test]]
   end
 
   # Run "mix help deps" to learn about dependencies.
@@ -41,8 +47,15 @@ defmodule Parrhesia.MixProject do
       {:websockex, "~> 0.4", only: :test},
 
       # Project tooling
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:deps_changelog, "~> 0.3"},
       {:igniter, "~> 0.6", only: [:dev, :test]}
+    ]
+  end
+
+  defp aliases do
+    [
+      precommit: ["format --check-formatted", "credo --strict", "test"]
     ]
   end
 end

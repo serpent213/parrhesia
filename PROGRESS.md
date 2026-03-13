@@ -4,10 +4,10 @@ Implementation checklist for Parrhesia relay.
 
 ## Phase 0 — foundation
 
-- [ ] Confirm architecture doc with final NIP scope (`docs/ARCH.md`)
-- [ ] Add core deps (websocket/http server, ecto_sql/postgrex, telemetry, test tooling)
-- [ ] Establish application config structure (limits, policies, feature flags)
-- [ ] Wire initial supervision tree skeleton
+- [x] Confirm architecture doc with final NIP scope (`docs/ARCH.md`)
+- [x] Add core deps (websocket/http server, ecto_sql/postgrex, telemetry, test tooling)
+- [x] Establish application config structure (limits, policies, feature flags)
+- [x] Wire initial supervision tree skeleton
 
 ## Phase 1 — protocol core (NIP-01)
 
