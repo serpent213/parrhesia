@@ -19,6 +19,12 @@ config :parrhesia,
     nip_50_search: false,
     nip_77_negentropy: false,
     nip_ee_mls: false
+  ],
+  storage: [
+    events: Parrhesia.Storage.Adapters.Postgres.Events,
+    moderation: Parrhesia.Storage.Adapters.Postgres.Moderation,
+    groups: Parrhesia.Storage.Adapters.Postgres.Groups,
+    admin: Parrhesia.Storage.Adapters.Postgres.Admin
   ]
 
 config :parrhesia, Parrhesia.Web.Endpoint, port: 4000
