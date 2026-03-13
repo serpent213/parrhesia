@@ -4,6 +4,7 @@ defmodule Parrhesia.ConfigTest do
   test "returns configured relay limits/policies/features" do
     assert Parrhesia.Config.get([:limits, :max_frame_bytes]) == 1_048_576
     assert Parrhesia.Config.get([:limits, :max_event_bytes]) == 262_144
+    assert Parrhesia.Config.get([:limits, :max_event_future_skew_seconds]) == 900
     assert Parrhesia.Config.get([:policies, :auth_required_for_writes]) == false
     assert Parrhesia.Config.get([:features, :nip_ee_mls]) == false
   end

@@ -13,10 +13,10 @@ Implementation checklist for Parrhesia relay.
 
 - [x] Implement websocket endpoint + per-connection process
 - [x] Implement message decode/encode for `EVENT`, `REQ`, `CLOSE`
-- [ ] Implement strict event validation (`id`, `sig`, shape, timestamps)
+- [x] Implement strict event validation (`id`, `sig`, shape, timestamps)
 - [ ] Implement filter evaluation engine (AND/OR semantics)
 - [ ] Implement subscription lifecycle + `EOSE` behavior
-- [ ] Implement canonical `OK`, `NOTICE`, `CLOSED` responses + prefixes
+- [x] Implement canonical `OK`, `NOTICE`, `CLOSED` responses + prefixes
 
 ## Phase 2 — storage boundary + postgres adapter
 

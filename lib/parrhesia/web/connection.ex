@@ -26,12 +26,13 @@ defmodule Parrhesia.Web.Connection do
         event_id = Map.get(event, "id", "")
 
         response =
-          Protocol.encode_relay({
-            :ok,
-            event_id,
-            false,
-            "error:unsupported: EVENT ingest not implemented"
-          })
+          case Protocol.validate_event(event) do
+            :ok ->
+              Protocol.encode_relay({:ok, event_id, false, "error: EVENT ingest not implemented"})
+
+            {:error, message} ->
+              Protocol.encode_relay({:ok, event_id, false, message})
+          end
 
         {:push, {:text, response}, state}
 
@@ -45,7 +46,7 @@ defmodule Parrhesia.Web.Connection do
         next_state = drop_subscription(state, subscription_id)
 
         response =
-          Protocol.encode_relay({:closed, subscription_id, "closed: subscription closed"})
+          Protocol.encode_relay({:closed, subscription_id, "error: subscription closed"})
 
         {:push, {:text, response}, next_state}
 
@@ -58,7 +59,7 @@ defmodule Parrhesia.Web.Connection do
   @impl true
   def handle_in({_payload, [opcode: :binary]}, %__MODULE__{} = state) do
     response =
-      Protocol.encode_relay({:notice, "error:invalid: binary websocket frames are not supported"})
+      Protocol.encode_relay({:notice, "invalid: binary websocket frames are not supported"})
 
     {:push, {:text, response}, state}
   end

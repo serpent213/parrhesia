@@ -3,6 +3,8 @@ defmodule Parrhesia.Protocol do
   Nostr protocol message decode/encode helpers.
   """
 
+  alias Parrhesia.Protocol.EventValidator
+
   @type event :: map()
   @type filter :: map()
 
@@ -32,6 +34,14 @@ defmodule Parrhesia.Protocol do
     end
   end
 
+  @spec validate_event(event()) :: :ok | {:error, String.t()}
+  def validate_event(event) do
+    case EventValidator.validate(event) do
+      :ok -> :ok
+      {:error, reason} -> {:error, EventValidator.error_message(reason)}
+    end
+  end
+
   @spec encode_relay(relay_message()) :: binary()
   def encode_relay(message) do
     message
@@ -42,11 +52,11 @@ defmodule Parrhesia.Protocol do
   @spec decode_error_notice(decode_error()) :: String.t()
   def decode_error_notice(reason) do
     case reason do
-      :invalid_json -> "error:invalid: malformed JSON"
-      :invalid_message -> "error:invalid: unsupported message shape"
-      :invalid_event -> "error:invalid: invalid EVENT shape"
-      :invalid_subscription_id -> "error:invalid: invalid subscription id"
-      :invalid_filters -> "error:invalid: invalid filters"
+      :invalid_json -> "invalid: malformed JSON"
+      :invalid_message -> "invalid: unsupported message shape"
+      :invalid_event -> "invalid: invalid EVENT shape"
+      :invalid_subscription_id -> "invalid: invalid subscription id"
+      :invalid_filters -> "invalid: invalid filters"
     end
   end
 
@@ -57,15 +67,14 @@ defmodule Parrhesia.Protocol do
     end
   end
 
-  defp decode_message(["EVENT", event]) do
-    case valid_event?(event) do
-      true -> {:ok, {:event, event}}
-      false -> {:error, :invalid_event}
-    end
-  end
+  defp decode_message(["EVENT", event]) when is_map(event), do: {:ok, {:event, event}}
+  defp decode_message(["EVENT", _event]), do: {:error, :invalid_event}
 
   defp decode_message(["REQ", subscription_id | filters]) when is_binary(subscription_id) do
     cond do
+      not valid_subscription_id?(subscription_id) ->
+        {:error, :invalid_subscription_id}
+
       filters == [] ->
         {:error, :invalid_filters}
 
@@ -81,33 +90,23 @@ defmodule Parrhesia.Protocol do
     do: {:error, :invalid_subscription_id}
 
   defp decode_message(["CLOSE", subscription_id]) when is_binary(subscription_id) do
-    {:ok, {:close, subscription_id}}
+    if valid_subscription_id?(subscription_id) do
+      {:ok, {:close, subscription_id}}
+    else
+      {:error, :invalid_subscription_id}
+    end
   end
 
   defp decode_message(["CLOSE", _subscription_id]), do: {:error, :invalid_subscription_id}
   defp decode_message(_other), do: {:error, :invalid_message}
-
-  defp valid_event?(%{
-         "id" => id,
-         "pubkey" => pubkey,
-         "created_at" => created_at,
-         "kind" => kind,
-         "tags" => tags,
-         "content" => content,
-         "sig" => sig
-       }) do
-    is_binary(id) and is_binary(pubkey) and is_integer(created_at) and is_integer(kind) and
-      is_list(tags) and Enum.all?(tags, &valid_tag?/1) and is_binary(content) and is_binary(sig)
-  end
-
-  defp valid_event?(_other), do: false
-
-  defp valid_tag?(tag) when is_list(tag), do: Enum.all?(tag, &is_binary/1)
-  defp valid_tag?(_other), do: false
 
   defp relay_frame({:notice, message}), do: ["NOTICE", message]
   defp relay_frame({:ok, event_id, accepted, message}), do: ["OK", event_id, accepted, message]
   defp relay_frame({:closed, subscription_id, message}), do: ["CLOSED", subscription_id, message]
   defp relay_frame({:eose, subscription_id}), do: ["EOSE", subscription_id]
   defp relay_frame({:event, subscription_id, event}), do: ["EVENT", subscription_id, event]
+
+  defp valid_subscription_id?(subscription_id) do
+    subscription_id != "" and String.length(subscription_id) <= 64
+  end
 end

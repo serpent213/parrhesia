@@ -5,7 +5,8 @@ config :parrhesia,
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,
     max_filters_per_req: 16,
-    max_subscriptions_per_connection: 32
+    max_subscriptions_per_connection: 32,
+    max_event_future_skew_seconds: 900
   ],
   policies: [
     auth_required_for_writes: false,
