@@ -30,6 +30,7 @@ defmodule Parrhesia.MixProject do
       # Runtime: web + protocol edge
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.15"},
+      {:websock_adapter, "~> 0.5"},
 
       # Runtime: storage adapter (Postgres first)
       {:ecto_sql, "~> 3.12"},

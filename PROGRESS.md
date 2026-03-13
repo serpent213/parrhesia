@@ -11,8 +11,8 @@ Implementation checklist for Parrhesia relay.
 
 ## Phase 1 — protocol core (NIP-01)
 
-- [ ] Implement websocket endpoint + per-connection process
-- [ ] Implement message decode/encode for `EVENT`, `REQ`, `CLOSE`
+- [x] Implement websocket endpoint + per-connection process
+- [x] Implement message decode/encode for `EVENT`, `REQ`, `CLOSE`
 - [ ] Implement strict event validation (`id`, `sig`, shape, timestamps)
 - [ ] Implement filter evaluation engine (AND/OR semantics)
 - [ ] Implement subscription lifecycle + `EOSE` behavior
