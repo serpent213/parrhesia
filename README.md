@@ -163,3 +163,9 @@ Before opening a PR:
 ```bash
 mix precommit
 ```
+
+For external CLI end-to-end checks with `nak`:
+
+```bash
+mix test.nak_e2e
+```

@@ -2,8 +2,14 @@ import Config
 
 config :logger, level: :warning
 
+test_endpoint_port =
+  case System.get_env("PARRHESIA_TEST_HTTP_PORT") do
+    nil -> 0
+    value -> String.to_integer(value)
+  end
+
 config :parrhesia, Parrhesia.Web.Endpoint,
-  port: 0,
+  port: test_endpoint_port,
   ip: {127, 0, 0, 1}
 
 config :parrhesia, enable_expiration_worker: false
