@@ -107,9 +107,6 @@ in {
       enable = true;
       npm.enable = true;
     };
-
-    # for Matrix Complement tests
-    go.enable = true;
   };
 
   # https://devenv.sh/services/
