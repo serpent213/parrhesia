@@ -7,10 +7,10 @@ defmodule Parrhesia.Web.RelayInfo do
   def document do
     %{
       "name" => "Parrhesia",
-      "description" => "Parrhesia Nostr relay",
+      "description" => "Nostr/Marmot relay",
       "pubkey" => nil,
       "supported_nips" => supported_nips(),
-      "software" => "https://github.com/example/parrhesia",
+      "software" => "https://git.teralink.net/self/parrhesia",
       "version" => Application.spec(:parrhesia, :vsn) |> to_string(),
       "limitation" => limitations()
     }
