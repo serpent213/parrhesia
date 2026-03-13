@@ -59,6 +59,37 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
     assert normalized.expires_at == 1_700_000_120
   end
 
+  test "keeps explicit expiration tag for kind 445 when present" do
+    previous_features = Application.get_env(:parrhesia, :features, [])
+    previous_policies = Application.get_env(:parrhesia, :policies, [])
+
+    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      Keyword.put(previous_policies, :mls_group_event_ttl_seconds, 120)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :features, previous_features)
+      Application.put_env(:parrhesia, :policies, previous_policies)
+    end)
+
+    event = %{
+      "id" => String.duplicate("4", 64),
+      "pubkey" => String.duplicate("5", 64),
+      "created_at" => 1_700_000_000,
+      "kind" => 445,
+      "tags" => [["expiration", "1700000900"]],
+      "content" => "mls",
+      "sig" => String.duplicate("6", 128)
+    }
+
+    assert {:ok, normalized} = Events.normalize_event(event)
+    assert normalized.expires_at == 1_700_000_900
+  end
+
   test "candidate_wins_state?/2 uses created_at then lexical id tie-break" do
     assert Events.candidate_wins_state?(
              %{created_at: 11, id: <<2>>},

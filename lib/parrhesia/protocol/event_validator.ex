@@ -40,6 +40,9 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :invalid_giftwrap_content
           | :missing_giftwrap_recipient_tag
           | :invalid_giftwrap_recipient_tag
+          | :missing_marmot_group_tag
+          | :invalid_marmot_group_tag
+          | :invalid_marmot_group_content
 
   @spec validate(map()) :: :ok | {:error, error_reason()}
   def validate(event) when is_map(event) do
@@ -117,7 +120,11 @@ defmodule Parrhesia.Protocol.EventValidator do
     missing_giftwrap_recipient_tag:
       "invalid: kind 1059 must include at least one recipient p tag",
     invalid_giftwrap_recipient_tag:
-      "invalid: kind 1059 recipient p tags must contain lowercase hex pubkeys"
+      "invalid: kind 1059 recipient p tags must contain lowercase hex pubkeys",
+    missing_marmot_group_tag: "invalid: kind 445 must include at least one h tag with a group id",
+    invalid_marmot_group_tag:
+      "invalid: kind 445 h tags must contain 32-byte lowercase hex group ids",
+    invalid_marmot_group_content: "invalid: kind 445 content must be non-empty base64"
   }
 
   @spec error_message(error_reason()) :: String.t()
@@ -198,6 +205,9 @@ defmodule Parrhesia.Protocol.EventValidator do
   defp validate_kind_specific(%{"kind" => 10_051} = event),
     do: validate_marmot_keypackage_relay_list(event)
 
+  defp validate_kind_specific(%{"kind" => 445} = event),
+    do: validate_marmot_group_event(event)
+
   defp validate_kind_specific(%{"kind" => 444}),
     do: {:error, :invalid_marmot_direct_welcome_event}
 
@@ -261,6 +271,14 @@ defmodule Parrhesia.Protocol.EventValidator do
     end
   end
 
+  defp validate_marmot_group_event(event) do
+    tags = Map.get(event, "tags", [])
+
+    with :ok <- validate_non_empty_base64_content(event, :invalid_marmot_group_content) do
+      validate_marmot_group_tags(tags)
+    end
+  end
+
   defp validate_giftwrap_event(event) do
     tags = Map.get(event, "tags", [])
 
@@ -269,10 +287,13 @@ defmodule Parrhesia.Protocol.EventValidator do
     end
   end
 
-  defp validate_non_empty_base64_content(event) do
+  defp validate_non_empty_base64_content(event),
+    do: validate_non_empty_base64_content(event, :invalid_marmot_keypackage_content)
+
+  defp validate_non_empty_base64_content(event, error_reason) do
     case Base.decode64(Map.get(event, "content", "")) do
       {:ok, decoded} when byte_size(decoded) > 0 -> :ok
-      _other -> {:error, :invalid_marmot_keypackage_content}
+      _other -> {:error, error_reason}
     end
   end
 
@@ -280,6 +301,21 @@ defmodule Parrhesia.Protocol.EventValidator do
     case Map.get(event, "content", "") do
       content when is_binary(content) and content != "" -> :ok
       _other -> {:error, error_reason}
+    end
+  end
+
+  defp validate_marmot_group_tags(tags) do
+    group_tags = Enum.filter(tags, &match_tag_name?(&1, "h"))
+
+    cond do
+      group_tags == [] ->
+        {:error, :missing_marmot_group_tag}
+
+      Enum.all?(group_tags, &valid_marmot_group_tag?/1) ->
+        :ok
+
+      true ->
+        {:error, :invalid_marmot_group_tag}
     end
   end
 
@@ -404,6 +440,9 @@ defmodule Parrhesia.Protocol.EventValidator do
 
   defp valid_single_relay_tag?(["relay", relay_url]), do: valid_websocket_url?(relay_url)
   defp valid_single_relay_tag?(_tag), do: false
+
+  defp valid_marmot_group_tag?(["h", group_id | _rest]), do: lowercase_hex?(group_id, 32)
+  defp valid_marmot_group_tag?(_tag), do: false
 
   defp valid_giftwrap_recipient_tag?(["p", recipient_pubkey | _rest]),
     do: lowercase_hex?(recipient_pubkey, 32)

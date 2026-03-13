@@ -57,6 +57,57 @@ defmodule Parrhesia.Protocol.EventValidatorMarmotTest do
              Protocol.validate_event(event)
   end
 
+  test "accepts valid kind 445 Marmot group envelope" do
+    group_event =
+      valid_keypackage_event(%{
+        "kind" => 445,
+        "tags" => [["h", String.duplicate("c", 64)]],
+        "content" => Base.encode64("mls-message")
+      })
+
+    assert :ok = EventValidator.validate(group_event)
+  end
+
+  test "accepts opaque binary payload for kind 445 without MLS inspection" do
+    opaque_payload = Base.encode64(<<0, 255, 10, 42, 128, 1, 2, 3>>)
+
+    group_event =
+      valid_keypackage_event(%{
+        "kind" => 445,
+        "tags" => [["h", String.duplicate("c", 64)]],
+        "content" => opaque_payload
+      })
+
+    assert :ok = EventValidator.validate(group_event)
+  end
+
+  test "rejects malformed kind 445 Marmot group envelopes" do
+    missing_h =
+      valid_keypackage_event(%{
+        "kind" => 445,
+        "tags" => [["p", String.duplicate("c", 64)]],
+        "content" => Base.encode64("mls-message")
+      })
+
+    invalid_h =
+      valid_keypackage_event(%{
+        "kind" => 445,
+        "tags" => [["h", "not-hex"]],
+        "content" => Base.encode64("mls-message")
+      })
+
+    invalid_content =
+      valid_keypackage_event(%{
+        "kind" => 445,
+        "tags" => [["h", String.duplicate("d", 64)]],
+        "content" => "not-base64"
+      })
+
+    assert {:error, :missing_marmot_group_tag} = EventValidator.validate(missing_h)
+    assert {:error, :invalid_marmot_group_tag} = EventValidator.validate(invalid_h)
+    assert {:error, :invalid_marmot_group_content} = EventValidator.validate(invalid_content)
+  end
+
   test "rejects malformed kind 1059 wrapped welcome envelopes" do
     invalid_missing_recipient =
       valid_keypackage_event(%{

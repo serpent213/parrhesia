@@ -316,6 +316,36 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert Enum.map(results, & &1["id"]) == [tie_winner_id, tie_loser_id, older["id"]]
   end
 
+  test "query/3 keeps deterministic ordering for high-volume kind 445 group traffic" do
+    group_id = String.duplicate("c", 64)
+
+    events =
+      Enum.map(1..60, fn idx ->
+        persist_event(%{
+          "kind" => 445,
+          "created_at" => 1_700_001_000 + div(idx, 3),
+          "tags" => [["h", group_id]],
+          "content" => Base.encode64("group-message-#{idx}")
+        })
+      end)
+
+    assert {:ok, results} =
+             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], [])
+
+    expected_ids =
+      events
+      |> Enum.sort(fn left, right ->
+        cond do
+          left["created_at"] > right["created_at"] -> true
+          left["created_at"] < right["created_at"] -> false
+          true -> left["id"] < right["id"]
+        end
+      end)
+      |> Enum.map(& &1["id"])
+
+    assert Enum.map(results, & &1["id"]) == expected_ids
+  end
+
   test "mls keypackage relay list kind 10051 follows replaceable conflict semantics" do
     author = String.duplicate("c", 64)
 

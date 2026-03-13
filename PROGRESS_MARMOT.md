@@ -35,10 +35,10 @@ Spec source: `~/marmot/README.md` + MIP-00..05.
 
 ## M4 — MIP-03 (group events)
 
-- [ ] Enforce kind `445` envelope validation (`#h` tag presence/shape, base64 content shape)
-- [ ] Keep relay MLS-agnostic (no MLS decrypt/inspect in relay hot path)
-- [ ] Add configurable retention policy for kind `445` traffic
-- [ ] Add tests for high-volume fanout behavior and deterministic query results
+- [x] Enforce kind `445` envelope validation (`#h` tag presence/shape, base64 content shape)
+- [x] Keep relay MLS-agnostic (no MLS decrypt/inspect in relay hot path)
+- [x] Add configurable retention policy for kind `445` traffic
+- [x] Add tests for high-volume fanout behavior and deterministic query results
 
 ## M5 — optional MIP-04 (encrypted media)
 

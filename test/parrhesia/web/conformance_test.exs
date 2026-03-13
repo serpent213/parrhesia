@@ -111,7 +111,7 @@ defmodule Parrhesia.Web.ConformanceTest do
       valid_event(%{
         "kind" => 445,
         "tags" => [["h", String.duplicate("b", 64)]],
-        "content" => "commit-envelope"
+        "content" => Base.encode64("commit-envelope")
       })
 
     assert {:push, {:text, commit_ok_frame}, ^state} =

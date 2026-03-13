@@ -158,6 +158,37 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "malformed kind 445 envelope EVENT is rejected" do
+    previous_features = Application.get_env(:parrhesia, :features, [])
+
+    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :features, previous_features)
+    end)
+
+    state = connection_state()
+
+    event =
+      valid_event()
+      |> Map.put("kind", 445)
+      |> Map.put("tags", [["h", "not-hex"]])
+      |> Map.put("content", "not-base64")
+      |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
+
+    payload = Jason.encode!(["EVENT", event])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(response) == [
+             "OK",
+             event["id"],
+             false,
+             "invalid: kind 445 content must be non-empty base64"
+           ]
+  end
+
   test "NEG sessions open and close" do
     state = connection_state()
 
@@ -205,6 +236,35 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert Jason.decode!(payload) == ["EVENT", "sub-1", event]
   end
 
+  test "high-volume kind 445 fanout drains in order across batches" do
+    group_id = String.duplicate("c", 64)
+
+    state =
+      subscribed_group_connection_state(group_id,
+        max_outbound_queue: 256,
+        outbound_drain_batch_size: 16
+      )
+
+    events =
+      Enum.map(1..70, fn idx ->
+        live_group_event("group-event-#{idx}", group_id)
+      end)
+
+    fanout_events = Enum.map(events, &{"sub-group", &1})
+
+    assert {:ok, queued_state} = Connection.handle_info({:fanout_events, fanout_events}, state)
+    assert queued_state.outbound_queue_size == 70
+
+    frames = drain_all_event_frames(queued_state)
+
+    delivered_ids =
+      frames
+      |> Enum.map(fn {:text, payload} -> Jason.decode!(payload) end)
+      |> Enum.map(fn ["EVENT", "sub-group", event] -> event["id"] end)
+
+    assert delivered_ids == Enum.map(events, & &1["id"])
+  end
+
   test "outbound queue overflow closes connection when strategy is close" do
     state =
       subscribed_connection_state(
@@ -238,6 +298,16 @@ defmodule Parrhesia.Web.ConnectionTest do
     subscribed_state
   end
 
+  defp subscribed_group_connection_state(group_id, opts) do
+    state = connection_state(opts)
+    req_payload = Jason.encode!(["REQ", "sub-group", %{"kinds" => [445], "#h" => [group_id]}])
+
+    assert {:push, _, subscribed_state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, state)
+
+    subscribed_state
+  end
+
   defp connection_state(opts \\ []) do
     {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
     state
@@ -255,6 +325,18 @@ defmodule Parrhesia.Web.ConnectionTest do
     }
   end
 
+  defp live_group_event(id, group_id) do
+    %{
+      "id" => id,
+      "pubkey" => String.duplicate("a", 64),
+      "created_at" => System.system_time(:second),
+      "kind" => 445,
+      "tags" => [["h", group_id]],
+      "content" => Base.encode64("mls-group-message"),
+      "sig" => String.duplicate("b", 128)
+    }
+  end
+
   defp valid_auth_event(challenge) do
     now = System.system_time(:second)
 
@@ -268,6 +350,31 @@ defmodule Parrhesia.Web.ConnectionTest do
     }
 
     Map.put(base, "id", EventValidator.compute_id(base))
+  end
+
+  defp drain_all_event_frames(state), do: drain_all_event_frames(state, [])
+
+  defp drain_all_event_frames(%{outbound_queue_size: 0}, acc) do
+    flush_drain_messages()
+    Enum.reverse(acc)
+  end
+
+  defp drain_all_event_frames(state, acc) do
+    case Connection.handle_info(:drain_outbound_queue, state) do
+      {:push, frames, next_state} ->
+        drain_all_event_frames(next_state, Enum.reverse(frames) ++ acc)
+
+      {:ok, next_state} ->
+        drain_all_event_frames(next_state, acc)
+    end
+  end
+
+  defp flush_drain_messages do
+    receive do
+      :drain_outbound_queue -> flush_drain_messages()
+    after
+      0 -> :ok
+    end
   end
 
   defp valid_event do
