@@ -29,4 +29,6 @@ config :parrhesia,
 
 config :parrhesia, Parrhesia.Web.Endpoint, port: 4000
 
+config :parrhesia, ecto_repos: [Parrhesia.Repo]
+
 import_config "#{config_env()}.exs"

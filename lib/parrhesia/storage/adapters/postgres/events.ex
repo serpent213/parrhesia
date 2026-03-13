@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   import Ecto.Query
 
+  alias Parrhesia.Protocol.Filter
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.Events
@@ -77,10 +78,55 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   @impl true
-  def query(_context, _filters, _opts), do: {:error, :not_implemented}
+  def query(_context, filters, opts) when is_list(opts) do
+    with :ok <- Filter.validate_filters(filters) do
+      now = Keyword.get(opts, :now, System.system_time(:second))
+
+      persisted_events =
+        filters
+        |> Enum.flat_map(fn filter ->
+          filter
+          |> event_query_for_filter(now, opts)
+          |> Repo.all()
+        end)
+        |> deduplicate_events()
+        |> sort_persisted_events()
+        |> maybe_apply_query_limit(opts)
+
+      event_keys = Enum.map(persisted_events, fn event -> {event.created_at, event.id} end)
+      tags_by_event = load_tags(event_keys)
+
+      nostr_events =
+        Enum.map(persisted_events, fn event ->
+          to_nostr_event(event, Map.get(tags_by_event, {event.created_at, event.id}, []))
+        end)
+
+      {:ok, nostr_events}
+    end
+  end
+
+  def query(_context, _filters, _opts), do: {:error, :invalid_opts}
 
   @impl true
-  def count(_context, _filters, _opts), do: {:error, :not_implemented}
+  def count(_context, filters, opts) when is_list(opts) do
+    with :ok <- Filter.validate_filters(filters) do
+      now = Keyword.get(opts, :now, System.system_time(:second))
+
+      total_count =
+        filters
+        |> Enum.flat_map(fn filter ->
+          filter
+          |> event_id_query_for_filter(now)
+          |> Repo.all()
+        end)
+        |> MapSet.new()
+        |> MapSet.size()
+
+      {:ok, total_count}
+    end
+  end
+
+  def count(_context, _filters, _opts), do: {:error, :invalid_opts}
 
   @impl true
   def delete_by_request(_context, _event), do: {:error, :not_implemented}
@@ -363,6 +409,145 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
       updated_at: now
     }
   end
+
+  defp event_query_for_filter(filter, now, opts) do
+    base_query =
+      from(event in "events",
+        where: is_nil(event.deleted_at) and (is_nil(event.expires_at) or event.expires_at > ^now),
+        order_by: [desc: event.created_at, asc: event.id],
+        select: %{
+          id: event.id,
+          pubkey: event.pubkey,
+          created_at: event.created_at,
+          kind: event.kind,
+          content: event.content,
+          sig: event.sig
+        }
+      )
+
+    query =
+      base_query
+      |> maybe_filter_ids(Map.get(filter, "ids"))
+      |> maybe_filter_authors(Map.get(filter, "authors"))
+      |> maybe_filter_kinds(Map.get(filter, "kinds"))
+      |> maybe_filter_since(Map.get(filter, "since"))
+      |> maybe_filter_until(Map.get(filter, "until"))
+      |> filter_by_tags(filter)
+
+    maybe_limit_query(query, effective_filter_limit(filter, opts))
+  end
+
+  defp event_id_query_for_filter(filter, now) do
+    from(event in "events",
+      where: is_nil(event.deleted_at) and (is_nil(event.expires_at) or event.expires_at > ^now),
+      select: event.id
+    )
+    |> maybe_filter_ids(Map.get(filter, "ids"))
+    |> maybe_filter_authors(Map.get(filter, "authors"))
+    |> maybe_filter_kinds(Map.get(filter, "kinds"))
+    |> maybe_filter_since(Map.get(filter, "since"))
+    |> maybe_filter_until(Map.get(filter, "until"))
+    |> filter_by_tags(filter)
+  end
+
+  defp maybe_filter_ids(query, nil), do: query
+
+  defp maybe_filter_ids(query, ids) do
+    decoded_ids = decode_hex_list(ids, :lower)
+    where(query, [event], event.id in ^decoded_ids)
+  end
+
+  defp maybe_filter_authors(query, nil), do: query
+
+  defp maybe_filter_authors(query, authors) do
+    decoded_authors = decode_hex_list(authors, :lower)
+    where(query, [event], event.pubkey in ^decoded_authors)
+  end
+
+  defp maybe_filter_kinds(query, nil), do: query
+  defp maybe_filter_kinds(query, kinds), do: where(query, [event], event.kind in ^kinds)
+
+  defp maybe_filter_since(query, nil), do: query
+  defp maybe_filter_since(query, since), do: where(query, [event], event.created_at >= ^since)
+
+  defp maybe_filter_until(query, nil), do: query
+  defp maybe_filter_until(query, until), do: where(query, [event], event.created_at <= ^until)
+
+  defp filter_by_tags(query, filter) do
+    filter
+    |> tag_filters()
+    |> Enum.reduce(query, fn {tag_name, values}, acc ->
+      where(
+        acc,
+        [event],
+        fragment(
+          "EXISTS (SELECT 1 FROM event_tags AS tag WHERE tag.event_created_at = ? AND tag.event_id = ? AND tag.name = ? AND tag.value = ANY(?))",
+          event.created_at,
+          event.id,
+          ^tag_name,
+          type(^values, {:array, :string})
+        )
+      )
+    end)
+  end
+
+  defp tag_filters(filter) do
+    Enum.reduce(filter, [], fn
+      {<<"#", tag_name::binary-size(1)>>, values}, acc -> [{tag_name, values} | acc]
+      _entry, acc -> acc
+    end)
+  end
+
+  defp decode_hex_list(values, decode_case) when is_list(values) do
+    Enum.map(values, &Base.decode16!(&1, case: decode_case))
+  end
+
+  defp effective_filter_limit(filter, opts) do
+    filter_limit = Map.get(filter, "limit")
+    max_filter_limit = Keyword.get(opts, :max_filter_limit)
+
+    cond do
+      is_integer(filter_limit) and is_integer(max_filter_limit) ->
+        min(filter_limit, max_filter_limit)
+
+      is_integer(filter_limit) ->
+        filter_limit
+
+      is_integer(max_filter_limit) ->
+        max_filter_limit
+
+      true ->
+        nil
+    end
+  end
+
+  defp maybe_limit_query(query, nil), do: query
+  defp maybe_limit_query(query, limit), do: limit(query, ^limit)
+
+  defp deduplicate_events(events) do
+    events
+    |> Enum.reduce(%{}, fn event, acc -> Map.put_new(acc, event.id, event) end)
+    |> Map.values()
+  end
+
+  defp sort_persisted_events(events) do
+    Enum.sort(events, fn left, right ->
+      cond do
+        left.created_at > right.created_at -> true
+        left.created_at < right.created_at -> false
+        true -> left.id < right.id
+      end
+    end)
+  end
+
+  defp maybe_apply_query_limit(events, opts) do
+    case Keyword.get(opts, :limit) do
+      limit when is_integer(limit) and limit > 0 -> Enum.take(events, limit)
+      _other -> events
+    end
+  end
+
+  defp load_tags([]), do: %{}
 
   defp load_tags(event_keys) when is_list(event_keys) do
     created_at_values = Enum.map(event_keys, fn {created_at, _event_id} -> created_at end)
