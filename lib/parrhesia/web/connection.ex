@@ -6,6 +6,7 @@ defmodule Parrhesia.Web.Connection do
   @behaviour WebSock
 
   alias Parrhesia.Protocol
+  alias Parrhesia.Protocol.Filter
 
   defstruct subscriptions: MapSet.new(), authenticated_pubkeys: MapSet.new()
 
@@ -36,11 +37,20 @@ defmodule Parrhesia.Web.Connection do
 
         {:push, {:text, response}, state}
 
-      {:ok, {:req, subscription_id, _filters}} ->
-        next_state = put_subscription(state, subscription_id)
-        response = Protocol.encode_relay({:eose, subscription_id})
+      {:ok, {:req, subscription_id, filters}} ->
+        case Filter.validate_filters(filters) do
+          :ok ->
+            next_state = put_subscription(state, subscription_id)
+            response = Protocol.encode_relay({:eose, subscription_id})
 
-        {:push, {:text, response}, next_state}
+            {:push, {:text, response}, next_state}
+
+          {:error, reason} ->
+            response =
+              Protocol.encode_relay({:closed, subscription_id, Filter.error_message(reason)})
+
+            {:push, {:text, response}, state}
+        end
 
       {:ok, {:close, subscription_id}} ->
         next_state = drop_subscription(state, subscription_id)

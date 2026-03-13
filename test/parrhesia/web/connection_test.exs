@@ -40,6 +40,21 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert Jason.decode!(response) == ["NOTICE", "invalid: malformed JSON"]
   end
 
+  test "REQ with invalid filter returns CLOSED and does not subscribe" do
+    {:ok, state} = Connection.init(%{})
+
+    req_payload = Jason.encode!(["REQ", "sub-123", %{"kinds" => ["1"]}])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(response) == [
+             "CLOSED",
+             "sub-123",
+             "invalid: kinds must be a non-empty array of integers between 0 and 65535"
+           ]
+  end
+
   test "valid EVENT currently replies with unsupported OK" do
     {:ok, state} = Connection.init(%{})
 
