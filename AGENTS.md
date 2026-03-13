@@ -1,5 +1,7 @@
 This is a Nostr server written using Elixir and PostgreSQL.
 
+NOTE: Nostr and NIP specs are available in `~/nostr/` and `~/nips/`.
+
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
