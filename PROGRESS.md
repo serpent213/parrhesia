@@ -21,10 +21,10 @@ Implementation checklist for Parrhesia relay.
 ## Phase 2 — storage boundary + postgres adapter
 
 - [x] Define `Parrhesia.Storage.*` behaviors (events/moderation/groups/admin)
-- [ ] Implement Postgres adapter modules behind behaviors
+- [x] Implement Postgres adapter modules behind behaviors
 - [x] Create migrations for events, tags, moderation, membership
-- [ ] Implement replaceable/addressable semantics at storage layer
-- [ ] Add adapter contract test suite
+- [x] Implement replaceable/addressable semantics at storage layer
+- [x] Add adapter contract test suite
 
 ## Phase 3 — fanout + performance primitives
 

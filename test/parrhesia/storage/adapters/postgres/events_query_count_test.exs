@@ -152,6 +152,71 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert {:ok, 2} = Events.count(%{}, filters, now: now)
   end
 
+  test "replaceable events expose only the current winner" do
+    author = String.duplicate("a", 64)
+
+    older =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_300,
+        "kind" => 0,
+        "content" => "profile-v1"
+      })
+
+    newer =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_301,
+        "kind" => 0,
+        "content" => "profile-v2"
+      })
+
+    assert {:ok, [result]} = Events.query(%{}, [%{"authors" => [author], "kinds" => [0]}], [])
+    assert result["id"] == newer["id"]
+
+    assert {:ok, nil} = Events.get_event(%{}, older["id"])
+    assert {:ok, persisted_newer} = Events.get_event(%{}, newer["id"])
+    assert persisted_newer["id"] == newer["id"]
+
+    assert {:ok, 1} = Events.count(%{}, [%{"ids" => [older["id"], newer["id"]]}], [])
+  end
+
+  test "addressable events tie-break by lexical id for identical timestamps" do
+    author = String.duplicate("b", 64)
+
+    first =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_400,
+        "kind" => 30_023,
+        "tags" => [["d", "topic"]],
+        "content" => "version-a"
+      })
+
+    second =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_400,
+        "kind" => 30_023,
+        "tags" => [["d", "topic"]],
+        "content" => "version-b"
+      })
+
+    winner_id = Enum.min([first["id"], second["id"]])
+    loser_id = Enum.max([first["id"], second["id"]])
+
+    assert {:ok, [result]} =
+             Events.query(
+               %{},
+               [%{"authors" => [author], "kinds" => [30_023], "#d" => ["topic"]}],
+               []
+             )
+
+    assert result["id"] == winner_id
+    assert {:ok, nil} = Events.get_event(%{}, loser_id)
+    assert {:ok, 1} = Events.count(%{}, [%{"ids" => [first["id"], second["id"]]}], [])
+  end
+
   defp persist_event(overrides) do
     event = build_event(overrides)
     assert {:ok, _persisted} = Events.put_event(%{}, event)

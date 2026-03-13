@@ -255,12 +255,14 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp upsert_state_tables!(normalized_event, now) do
-    :ok = maybe_upsert_replaceable_state(normalized_event, now)
-    :ok = maybe_upsert_addressable_state(normalized_event, now)
+    deleted_at = DateTime.to_unix(now, :second)
+
+    :ok = maybe_upsert_replaceable_state(normalized_event, now, deleted_at)
+    :ok = maybe_upsert_addressable_state(normalized_event, now, deleted_at)
     :ok
   end
 
-  defp maybe_upsert_replaceable_state(normalized_event, now) do
+  defp maybe_upsert_replaceable_state(normalized_event, now, deleted_at) do
     if replaceable_kind?(normalized_event.kind) do
       lookup_query =
         from(state in "replaceable_event_state",
@@ -283,6 +285,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
         replaceable_state_row(normalized_event, now),
         normalized_event,
         now,
+        deleted_at,
         :replaceable_state_update_failed
       )
     else
@@ -290,7 +293,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     end
   end
 
-  defp maybe_upsert_addressable_state(normalized_event, now) do
+  defp maybe_upsert_addressable_state(normalized_event, now, deleted_at) do
     if addressable_kind?(normalized_event.kind) do
       lookup_query =
         from(state in "addressable_event_state",
@@ -316,6 +319,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
         addressable_state_row(normalized_event, now),
         normalized_event,
         now,
+        deleted_at,
         :addressable_state_update_failed
       )
     else
@@ -330,24 +334,95 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
          insert_row,
          normalized_event,
          now,
+         deleted_at,
          failure_reason
        ) do
     case Repo.one(lookup_query) do
       nil ->
-        {inserted, _result} = Repo.insert_all(table_name, [insert_row], on_conflict: :nothing)
-
-        if inserted <= 1 do
-          :ok
-        else
-          Repo.rollback(failure_reason)
-        end
+        insert_state_or_resolve_race(
+          table_name,
+          lookup_query,
+          update_query,
+          insert_row,
+          normalized_event,
+          now,
+          deleted_at,
+          failure_reason
+        )
 
       current_state ->
-        maybe_update_state(update_query, normalized_event, current_state, now, failure_reason)
+        maybe_update_state(
+          update_query,
+          normalized_event,
+          current_state,
+          now,
+          deleted_at,
+          failure_reason
+        )
     end
   end
 
-  defp maybe_update_state(update_query, normalized_event, current_state, now, failure_reason) do
+  defp insert_state_or_resolve_race(
+         table_name,
+         lookup_query,
+         update_query,
+         insert_row,
+         normalized_event,
+         now,
+         deleted_at,
+         failure_reason
+       ) do
+    case Repo.insert_all(table_name, [insert_row], on_conflict: :nothing) do
+      {1, _result} ->
+        :ok
+
+      {0, _result} ->
+        resolve_state_race(
+          lookup_query,
+          update_query,
+          normalized_event,
+          now,
+          deleted_at,
+          failure_reason
+        )
+
+      {_inserted, _result} ->
+        Repo.rollback(failure_reason)
+    end
+  end
+
+  defp resolve_state_race(
+         lookup_query,
+         update_query,
+         normalized_event,
+         now,
+         deleted_at,
+         failure_reason
+       ) do
+    case Repo.one(lookup_query) do
+      nil ->
+        Repo.rollback(failure_reason)
+
+      current_state ->
+        maybe_update_state(
+          update_query,
+          normalized_event,
+          current_state,
+          now,
+          deleted_at,
+          failure_reason
+        )
+    end
+  end
+
+  defp maybe_update_state(
+         update_query,
+         normalized_event,
+         current_state,
+         now,
+         deleted_at,
+         failure_reason
+       ) do
     if candidate_wins_state?(normalized_event, current_state) do
       {updated, _result} =
         Repo.update_all(update_query,
@@ -359,12 +434,36 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
         )
 
       if updated == 1 do
-        :ok
+        retire_event!(
+          current_state.event_created_at,
+          current_state.event_id,
+          deleted_at,
+          failure_reason
+        )
       else
         Repo.rollback(failure_reason)
       end
     else
+      retire_event!(normalized_event.created_at, normalized_event.id, deleted_at, failure_reason)
+    end
+  end
+
+  defp retire_event!(event_created_at, event_id, deleted_at, failure_reason) do
+    {updated, _result} =
+      Repo.update_all(
+        from(event in "events",
+          where:
+            event.created_at == ^event_created_at and
+              event.id == ^event_id and
+              is_nil(event.deleted_at)
+        ),
+        set: [deleted_at: deleted_at]
+      )
+
+    if updated in [0, 1] do
       :ok
+    else
+      Repo.rollback(failure_reason)
     end
   end
 
