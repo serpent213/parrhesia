@@ -12,9 +12,9 @@ Primary targets:
 - High fanout throughput and bounded resource usage
 - Storage abstraction via behavior-driven ports/adapters
 - Full test suite (unit, integration, conformance, perf, fault-injection)
-- Support for experimental MLS flow (NIP-EE), behind feature flags
+- Support for Marmot protocol interoperability (MIP-00..03 mandatory, MIP-04/05 optional)
 
-## 2) NIP support scope
+## 2) NIP and Marmot support scope
 
 ### Mandatory baseline
 
@@ -37,13 +37,33 @@ Primary targets:
 - NIP-77 (negentropy sync)
 - NIP-86 + NIP-98 (relay management API auth)
 
-### Experimental MLS
+### Marmot interoperability profile
 
-- NIP-EE (unrecommended/upstream-superseded, but requested):
-  - kind `443` KeyPackage events
-  - kind `445` group events (policy-controlled retention/ephemeral treatment)
-  - kind `10051` keypackage relay lists
-  - interop with wrapped delivery (`1059`) and auth/privacy policies
+Source of truth: `~/marmot/README.md` and required MIPs.
+
+Mandatory for compatibility:
+
+- MIP-00 (Credentials & KeyPackages)
+- MIP-01 (Group construction + `marmot_group_data` extension semantics)
+- MIP-02 (Welcome events)
+- MIP-03 (Group messages)
+
+Optional (feature-flagged):
+
+- MIP-04 (encrypted media metadata flow)
+- MIP-05 (push notification flow)
+
+Relay-facing Marmot event surface to support:
+
+- kind `443` KeyPackage events
+- kind `10051` KeyPackage relay list events
+- kind `445` group events
+- wrapped delivery via kind `1059` (NIP-59) for Welcome/private flows
+
+Notes:
+
+- Legacy NIP-EE is superseded by Marmot MIPs and is not the target compatibility profile.
+- No dedicated “Marmot transition compatibility mode” is planned.
 
 ## 3) System architecture (high level)
 
@@ -164,7 +184,7 @@ Indexing strategy:
 - `(created_at DESC)`
 - `(name, value, created_at DESC)` on `event_tags`
 - partial/unique indexes and deterministic upsert paths for replaceable `(pubkey, kind)` and addressable `(pubkey, kind, d_tag)` semantics
-- targeted partial indexes for high-traffic single-letter tags (`e`, `p`, `d` first), with additional tag indexes added from production query telemetry
+- targeted partial indexes for high-traffic single-letter tags (`e`, `p`, `d`, `h`, `i` first), with additional tag indexes added from production query telemetry
 
 Retention strategy:
 
@@ -218,12 +238,30 @@ Retention strategy:
 - Also delete matching gift wraps where feasible (`#p` target)
 - Persist minimal audit record if needed for operations/legal trace
 
-### 7.8 NIP-EE MLS (feature-flagged)
+### 7.8 Marmot (MIP-00..03 required)
 
-- Accept/store kind `443` KeyPackage events
-- Process kind `445` under configurable retention policy (default short TTL)
-- Ensure kind `10051` replaceable semantics
-- Keep relay MLS-agnostic cryptographically (no MLS decryption in relay path)
+- **MIP-00 / kind `443` + `10051`**
+  - Accept/store KeyPackage events and relay-list events.
+  - Validate required Marmot tags/shape relevant to relay interoperability (`encoding=base64`, protocol/ciphersuite metadata, relay tags).
+  - Support efficient `#i` tag querying for KeyPackageRef discovery.
+  - Preserve replaceable semantics for kind `10051`.
+
+- **MIP-01 / group metadata anchoring**
+  - Relay remains cryptographically MLS-agnostic; it stores and routes events by Nostr fields/tags.
+  - Enforce ingress/query constraints that Marmot relies on (`h`-tag routing, deterministic ordering, bounded filters).
+
+- **MIP-02 / Welcome flow**
+  - Support NIP-59 wrapped delivery (`1059`) and recipient-gated reads.
+  - Keep strict ACK-after-commit durability semantics so clients can sequence Commit before Welcome as required by spec.
+
+- **MIP-03 / kind `445` group events**
+  - Accept/store high-volume encrypted group events with `#h`-centric routing/indexing.
+  - Keep relay out of MLS decryption path; relay validates envelope shape only.
+  - Apply configurable retention policy for group traffic where operators need bounded storage.
+
+- **Optional MIP-04 / MIP-05**
+  - Treat media/push metadata events as ordinary Nostr payloads unless explicitly policy-gated.
+  - Keep optional behind feature flags.
 
 ## 8) Performance model
 
@@ -247,7 +285,7 @@ Targets (initial):
 3. **Adapter contract tests**: shared behavior tests run against Postgres adapter
 4. **Integration tests**: websocket protocol flows (`EVENT/REQ/CLOSE/AUTH/COUNT/NEG-*`)
 5. **NIP conformance tests**: machine-prefix responses, ordering, EOSE behavior
-6. **MLS scenario tests**: keypackage/group-event acceptance and policy handling
+6. **Marmot conformance tests**: MIP-00..03 event acceptance, routing, ordering, and policy handling
 7. **Performance tests**: soak + burst + large fanout profiles
 8. **Query-plan regression tests**: representative `EXPLAIN (ANALYZE, BUFFERS)` checks for core REQ/COUNT shapes
 9. **Fault-injection tests**: DB outage, slow query, connection churn, node restart
@@ -261,4 +299,4 @@ Targets (initial):
 
 ---
 
-Implementation task breakdown is tracked in `./PROGRESS.md`.
+Implementation task breakdown is tracked in `./PROGRESS.md` and Marmot-specific work in `./PROGRESS_MARMOT.md`.
