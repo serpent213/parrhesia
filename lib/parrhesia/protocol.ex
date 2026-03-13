@@ -12,6 +12,11 @@ defmodule Parrhesia.Protocol do
           {:event, event()}
           | {:req, String.t(), [filter()]}
           | {:close, String.t()}
+          | {:auth, event()}
+          | {:count, String.t(), [filter()], map()}
+          | {:neg_open, String.t(), map()}
+          | {:neg_msg, String.t(), map()}
+          | {:neg_close, String.t()}
 
   @type relay_message ::
           {:notice, String.t()}
@@ -19,6 +24,9 @@ defmodule Parrhesia.Protocol do
           | {:closed, String.t(), String.t()}
           | {:eose, String.t()}
           | {:event, String.t(), event()}
+          | {:auth, String.t()}
+          | {:count, String.t(), map()}
+          | {:neg_msg, String.t(), map()}
 
   @type decode_error ::
           :invalid_json
@@ -26,6 +34,11 @@ defmodule Parrhesia.Protocol do
           | :invalid_event
           | :invalid_subscription_id
           | :invalid_filters
+          | :invalid_auth
+          | :invalid_count
+          | :invalid_negentropy
+
+  @count_options_keys MapSet.new(["hll", "approximate"])
 
   @spec decode_client(binary()) :: {:ok, client_message()} | {:error, decode_error()}
   def decode_client(payload) when is_binary(payload) do
@@ -57,6 +70,9 @@ defmodule Parrhesia.Protocol do
       :invalid_event -> "invalid: invalid EVENT shape"
       :invalid_subscription_id -> "invalid: invalid subscription id"
       :invalid_filters -> "invalid: invalid filters"
+      :invalid_auth -> "invalid: invalid AUTH message"
+      :invalid_count -> "invalid: invalid COUNT message"
+      :invalid_negentropy -> "invalid: invalid NEG message"
     end
   end
 
@@ -71,6 +87,73 @@ defmodule Parrhesia.Protocol do
   defp decode_message(["EVENT", _event]), do: {:error, :invalid_event}
 
   defp decode_message(["REQ", subscription_id | filters]) when is_binary(subscription_id) do
+    decode_req_like_message(:req, subscription_id, filters)
+  end
+
+  defp decode_message(["REQ", _subscription_id | _filters]),
+    do: {:error, :invalid_subscription_id}
+
+  defp decode_message(["COUNT", subscription_id | filters_or_options])
+       when is_binary(subscription_id) do
+    with {:ok, filters, options} <- split_count_parts(filters_or_options),
+         {:ok, {:req, ^subscription_id, parsed_filters}} <-
+           decode_req_like_message(:req, subscription_id, filters) do
+      {:ok, {:count, subscription_id, parsed_filters, options}}
+    else
+      _error -> {:error, :invalid_count}
+    end
+  end
+
+  defp decode_message(["COUNT", _subscription_id | _filters_or_options]),
+    do: {:error, :invalid_count}
+
+  defp decode_message(["CLOSE", subscription_id]) when is_binary(subscription_id) do
+    if valid_subscription_id?(subscription_id) do
+      {:ok, {:close, subscription_id}}
+    else
+      {:error, :invalid_subscription_id}
+    end
+  end
+
+  defp decode_message(["CLOSE", _subscription_id]), do: {:error, :invalid_subscription_id}
+
+  defp decode_message(["AUTH", auth_event]) when is_map(auth_event),
+    do: {:ok, {:auth, auth_event}}
+
+  defp decode_message(["AUTH", _invalid]), do: {:error, :invalid_auth}
+
+  defp decode_message(["NEG-OPEN", subscription_id, payload])
+       when is_binary(subscription_id) and is_map(payload) do
+    if valid_subscription_id?(subscription_id) do
+      {:ok, {:neg_open, subscription_id, payload}}
+    else
+      {:error, :invalid_subscription_id}
+    end
+  end
+
+  defp decode_message(["NEG-MSG", subscription_id, payload])
+       when is_binary(subscription_id) and is_map(payload) do
+    if valid_subscription_id?(subscription_id) do
+      {:ok, {:neg_msg, subscription_id, payload}}
+    else
+      {:error, :invalid_subscription_id}
+    end
+  end
+
+  defp decode_message(["NEG-CLOSE", subscription_id]) when is_binary(subscription_id) do
+    if valid_subscription_id?(subscription_id) do
+      {:ok, {:neg_close, subscription_id}}
+    else
+      {:error, :invalid_subscription_id}
+    end
+  end
+
+  defp decode_message([type | _rest]) when type in ["NEG-OPEN", "NEG-MSG", "NEG-CLOSE"],
+    do: {:error, :invalid_negentropy}
+
+  defp decode_message(_other), do: {:error, :invalid_message}
+
+  defp decode_req_like_message(_kind, subscription_id, filters) do
     cond do
       not valid_subscription_id?(subscription_id) ->
         {:error, :invalid_subscription_id}
@@ -86,25 +169,51 @@ defmodule Parrhesia.Protocol do
     end
   end
 
-  defp decode_message(["REQ", _subscription_id | _filters]),
-    do: {:error, :invalid_subscription_id}
-
-  defp decode_message(["CLOSE", subscription_id]) when is_binary(subscription_id) do
-    if valid_subscription_id?(subscription_id) do
-      {:ok, {:close, subscription_id}}
+  defp split_count_parts(parts) when is_list(parts) do
+    if parts == [] do
+      {:error, :missing_filters}
     else
-      {:error, :invalid_subscription_id}
+      split_count_parts_with_optional_options(parts)
     end
   end
 
-  defp decode_message(["CLOSE", _subscription_id]), do: {:error, :invalid_subscription_id}
-  defp decode_message(_other), do: {:error, :invalid_message}
+  defp split_count_parts(_parts), do: {:error, :invalid_parts}
+
+  defp split_count_parts_with_optional_options(parts) do
+    case List.last(parts) do
+      options when is_map(options) ->
+        maybe_extract_count_options(parts, options)
+
+      _other ->
+        {:ok, parts, %{}}
+    end
+  end
+
+  defp maybe_extract_count_options(parts, options) do
+    if count_options_map?(options) and length(parts) > 1 do
+      filters = Enum.drop(parts, -1)
+      {:ok, filters, options}
+    else
+      {:ok, parts, %{}}
+    end
+  end
+
+  defp count_options_map?(map) do
+    map
+    |> Map.keys()
+    |> Enum.all?(&MapSet.member?(@count_options_keys, &1))
+  end
 
   defp relay_frame({:notice, message}), do: ["NOTICE", message]
   defp relay_frame({:ok, event_id, accepted, message}), do: ["OK", event_id, accepted, message]
   defp relay_frame({:closed, subscription_id, message}), do: ["CLOSED", subscription_id, message]
   defp relay_frame({:eose, subscription_id}), do: ["EOSE", subscription_id]
   defp relay_frame({:event, subscription_id, event}), do: ["EVENT", subscription_id, event]
+  defp relay_frame({:auth, challenge}), do: ["AUTH", challenge]
+  defp relay_frame({:count, subscription_id, payload}), do: ["COUNT", subscription_id, payload]
+
+  defp relay_frame({:neg_msg, subscription_id, payload}),
+    do: ["NEG-MSG", subscription_id, payload]
 
   defp valid_subscription_id?(subscription_id) do
     subscription_id != "" and String.length(subscription_id) <= 64

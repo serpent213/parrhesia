@@ -8,7 +8,10 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
   alias Parrhesia.Storage.Adapters.Postgres.Moderation
 
   setup_all do
-    start_supervised!(Repo)
+    if is_nil(Process.whereis(Repo)) do
+      start_supervised!(Repo)
+    end
+
     Sandbox.mode(Repo, :manual)
     :ok
   end
@@ -124,6 +127,11 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
 
     assert {:ok, stats_logs} = Admin.list_audit_logs(%{}, method: :stats)
     assert Enum.map(stats_logs, & &1.method) == ["stats"]
+
+    assert {:ok, %{"status" => "ok"}} = Admin.execute(%{}, :ping, %{})
+
+    assert {:ok, %{"events" => _events, "banned_pubkeys" => _banned, "blocked_ips" => _ips}} =
+             Admin.execute(%{}, :stats, %{})
 
     assert {:error, {:unsupported_method, "status"}} = Admin.execute(%{}, :status, %{})
   end

@@ -6,6 +6,8 @@ config :parrhesia, Parrhesia.Web.Endpoint,
   port: 0,
   ip: {127, 0, 0, 1}
 
+config :parrhesia, enable_expiration_worker: false
+
 pg_host = System.get_env("PGHOST")
 
 repo_host_opts =

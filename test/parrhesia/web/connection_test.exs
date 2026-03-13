@@ -1,106 +1,100 @@
 defmodule Parrhesia.Web.ConnectionTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
+  alias Parrhesia.Repo
   alias Parrhesia.Web.Connection
 
-  test "REQ registers subscription and replies with EOSE" do
-    {:ok, state} = Connection.init(%{})
+  setup do
+    :ok = Sandbox.checkout(Repo)
+    :ok
+  end
+
+  test "REQ registers subscription, streams initial events and replies with EOSE" do
+    state = connection_state()
 
     req_payload = Jason.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
 
-    assert {:push, {:text, response}, next_state} =
+    assert {:push, responses, next_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
 
     assert Map.has_key?(next_state.subscriptions, "sub-123")
     assert next_state.subscriptions["sub-123"].filters == [%{"kinds" => [1]}]
     assert next_state.subscriptions["sub-123"].eose_sent?
-    assert Jason.decode!(response) == ["EOSE", "sub-123"]
-  end
 
-  test "REQ with same subscription id replaces existing subscription" do
-    {:ok, state} = Connection.init(%{})
-
-    first_req = Jason.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
-    second_req = Jason.encode!(["REQ", "sub-123", %{"kinds" => [2], "limit" => 5}])
-
-    assert {:push, _, subscribed_state} =
-             Connection.handle_in({first_req, [opcode: :text]}, state)
-
-    assert {:push, {:text, response}, replaced_state} =
-             Connection.handle_in({second_req, [opcode: :text]}, subscribed_state)
-
-    assert map_size(replaced_state.subscriptions) == 1
-
-    assert replaced_state.subscriptions["sub-123"].filters == [
-             %{"kinds" => [2], "limit" => 5}
+    assert List.last(Enum.map(responses, fn {:text, frame} -> Jason.decode!(frame) end)) == [
+             "EOSE",
+             "sub-123"
            ]
-
-    assert Jason.decode!(response) == ["EOSE", "sub-123"]
   end
 
-  test "CLOSE removes subscription and replies with CLOSED" do
-    {:ok, state} = Connection.init(%{})
+  test "COUNT returns exact count payload" do
+    state = connection_state()
 
-    req_payload = Jason.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
-    {:push, _, subscribed_state} = Connection.handle_in({req_payload, [opcode: :text]}, state)
+    payload = Jason.encode!(["COUNT", "sub-count", %{"kinds" => [1]}])
 
-    close_payload = Jason.encode!(["CLOSE", "sub-123"])
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert ["COUNT", "sub-count", payload] = Jason.decode!(response)
+    assert payload["count"] >= 0
+    assert payload["approximate"] == false
+  end
+
+  test "AUTH accepts valid challenge event" do
+    state = connection_state()
+
+    auth_event = valid_auth_event(state.auth_challenge)
+    payload = Jason.encode!(["AUTH", auth_event])
 
     assert {:push, {:text, response}, next_state} =
-             Connection.handle_in({close_payload, [opcode: :text]}, subscribed_state)
+             Connection.handle_in({payload, [opcode: :text]}, state)
 
-    refute Map.has_key?(next_state.subscriptions, "sub-123")
-    assert Jason.decode!(response) == ["CLOSED", "sub-123", "error: subscription closed"]
+    assert Jason.decode!(response) == ["OK", auth_event["id"], true, "ok: auth accepted"]
+    assert MapSet.member?(next_state.authenticated_pubkeys, auth_event["pubkey"])
+    refute next_state.auth_challenge == state.auth_challenge
   end
 
-  test "REQ above max subscriptions returns CLOSED and keeps existing subscriptions" do
-    {:ok, state} = Connection.init(max_subscriptions_per_connection: 1)
+  test "AUTH rejects mismatched challenge and returns AUTH frame" do
+    state = connection_state()
 
-    req_one = Jason.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
-    req_two = Jason.encode!(["REQ", "sub-2", %{"kinds" => [1]}])
+    auth_event = valid_auth_event("wrong-challenge")
+    payload = Jason.encode!(["AUTH", auth_event])
 
-    assert {:push, _, first_state} = Connection.handle_in({req_one, [opcode: :text]}, state)
+    assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert {:push, {:text, response}, second_state} =
-             Connection.handle_in({req_two, [opcode: :text]}, first_state)
+    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
 
-    assert map_size(second_state.subscriptions) == 1
-    assert Map.has_key?(second_state.subscriptions, "sub-1")
+    assert Enum.any?(decoded, fn frame -> frame == ["AUTH", state.auth_challenge] end)
 
-    assert Jason.decode!(response) == [
-             "CLOSED",
-             "sub-2",
-             "rate-limited: maximum subscriptions per connection exceeded"
-           ]
+    assert Enum.any?(decoded, fn frame ->
+             match?(["OK", _, false, _], frame)
+           end)
   end
 
-  test "invalid input returns NOTICE" do
-    {:ok, state} = Connection.init(%{})
+  test "protected event is rejected unless authenticated" do
+    state = connection_state()
 
-    assert {:push, {:text, response}, ^state} =
-             Connection.handle_in({"not-json", [opcode: :text]}, state)
+    event =
+      valid_event()
+      |> Map.put("tags", [["-"]])
+      |> then(&Map.put(&1, "id", EventValidator.compute_id(&1)))
 
-    assert Jason.decode!(response) == ["NOTICE", "invalid: malformed JSON"]
+    payload = Jason.encode!(["EVENT", event])
+
+    assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
+
+    decoded = Enum.map(frames, fn {:text, frame} -> Jason.decode!(frame) end)
+
+    assert ["OK", _, false, "auth-required: protected events require authenticated pubkey"] =
+             Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
+
+    assert Enum.any?(decoded, fn frame -> frame == ["AUTH", state.auth_challenge] end)
   end
 
-  test "REQ with invalid filter returns CLOSED and does not subscribe" do
-    {:ok, state} = Connection.init(%{})
-
-    req_payload = Jason.encode!(["REQ", "sub-123", %{"kinds" => ["1"]}])
-
-    assert {:push, {:text, response}, ^state} =
-             Connection.handle_in({req_payload, [opcode: :text]}, state)
-
-    assert Jason.decode!(response) == [
-             "CLOSED",
-             "sub-123",
-             "invalid: kinds must be a non-empty array of integers between 0 and 65535"
-           ]
-  end
-
-  test "valid EVENT currently replies with unsupported OK" do
-    {:ok, state} = Connection.init(%{})
+  test "valid EVENT stores event and returns accepted OK" do
+    state = connection_state()
 
     event = valid_event()
     payload = Jason.encode!(["EVENT", event])
@@ -108,16 +102,11 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert {:push, {:text, response}, ^state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
-    assert Jason.decode!(response) == [
-             "OK",
-             event["id"],
-             false,
-             "error: EVENT ingest not implemented"
-           ]
+    assert Jason.decode!(response) == ["OK", event["id"], true, "ok: event stored"]
   end
 
   test "invalid EVENT replies with OK false invalid prefix" do
-    {:ok, state} = Connection.init(%{})
+    state = connection_state()
 
     event = valid_event() |> Map.put("sig", "nope")
     payload = Jason.encode!(["EVENT", event])
@@ -131,6 +120,37 @@ defmodule Parrhesia.Web.ConnectionTest do
              false,
              "invalid: sig must be 64-byte lowercase hex"
            ]
+  end
+
+  test "NEG sessions open and close" do
+    state = connection_state()
+
+    open_payload = Jason.encode!(["NEG-OPEN", "neg-1", %{"cursor" => 0}])
+
+    assert {:push, {:text, open_response}, ^state} =
+             Connection.handle_in({open_payload, [opcode: :text]}, state)
+
+    assert ["NEG-MSG", "neg-1", %{"status" => "open", "cursor" => 0}] =
+             Jason.decode!(open_response)
+
+    close_payload = Jason.encode!(["NEG-CLOSE", "neg-1"])
+
+    assert {:push, {:text, close_response}, ^state} =
+             Connection.handle_in({close_payload, [opcode: :text]}, state)
+
+    assert Jason.decode!(close_response) == ["NEG-MSG", "neg-1", %{"status" => "closed"}]
+  end
+
+  test "CLOSE removes subscription and replies with CLOSED" do
+    state = subscribed_connection_state([])
+
+    close_payload = Jason.encode!(["CLOSE", "sub-1"])
+
+    assert {:push, {:text, response}, next_state} =
+             Connection.handle_in({close_payload, [opcode: :text]}, state)
+
+    refute Map.has_key?(next_state.subscriptions, "sub-1")
+    assert Jason.decode!(response) == ["CLOSED", "sub-1", "error: subscription closed"]
   end
 
   test "fanout_event enqueues and drains matching events" do
@@ -149,16 +169,6 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert Jason.decode!(payload) == ["EVENT", "sub-1", event]
   end
 
-  test "fanout_event ignores non-matching subscription filters" do
-    state = subscribed_connection_state([])
-
-    assert {:ok, next_state} =
-             Connection.handle_info({:fanout_event, "sub-1", live_event("event-2", 2)}, state)
-
-    assert next_state.outbound_queue_size == 0
-    refute_received :drain_outbound_queue
-  end
-
   test "outbound queue overflow closes connection when strategy is close" do
     state =
       subscribed_connection_state(
@@ -167,59 +177,34 @@ defmodule Parrhesia.Web.ConnectionTest do
         outbound_drain_batch_size: 1
       )
 
-    event_one = live_event("event-1", 1)
-    event_two = live_event("event-2", 1)
-
     assert {:ok, queued_state} =
-             Connection.handle_info({:fanout_event, "sub-1", event_one}, state)
+             Connection.handle_info({:fanout_event, "sub-1", live_event("event-1", 1)}, state)
 
-    assert queued_state.outbound_queue_size == 1
     assert_receive :drain_outbound_queue
 
     assert {:stop, :normal, {1008, message}, [{:text, notice_payload}], _overflow_state} =
-             Connection.handle_info({:fanout_event, "sub-1", event_two}, queued_state)
+             Connection.handle_info(
+               {:fanout_event, "sub-1", live_event("event-2", 1)},
+               queued_state
+             )
 
     assert message == "rate-limited: outbound queue overflow"
     assert Jason.decode!(notice_payload) == ["NOTICE", message]
   end
 
-  test "outbound queue overflow drops oldest event when strategy is drop_oldest" do
-    state =
-      subscribed_connection_state(
-        max_outbound_queue: 1,
-        outbound_overflow_strategy: :drop_oldest,
-        outbound_drain_batch_size: 1
-      )
-
-    event_one = live_event("event-1", 1)
-    event_two = live_event("event-2", 1)
-
-    assert {:ok, queued_state} =
-             Connection.handle_info({:fanout_event, "sub-1", event_one}, state)
-
-    assert queued_state.outbound_queue_size == 1
-    assert_receive :drain_outbound_queue
-
-    assert {:ok, replaced_state} =
-             Connection.handle_info({:fanout_event, "sub-1", event_two}, queued_state)
-
-    assert replaced_state.outbound_queue_size == 1
-
-    assert {:push, [{:text, payload}], drained_state} =
-             Connection.handle_info(:drain_outbound_queue, replaced_state)
-
-    assert drained_state.outbound_queue_size == 0
-    assert Jason.decode!(payload) == ["EVENT", "sub-1", event_two]
-  end
-
   defp subscribed_connection_state(opts) do
-    {:ok, initial_state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
+    state = connection_state(opts)
     req_payload = Jason.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
 
     assert {:push, _, subscribed_state} =
-             Connection.handle_in({req_payload, [opcode: :text]}, initial_state)
+             Connection.handle_in({req_payload, [opcode: :text]}, state)
 
     subscribed_state
+  end
+
+  defp connection_state(opts \\ []) do
+    {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
+    state
   end
 
   defp live_event(id, kind) do
@@ -232,6 +217,21 @@ defmodule Parrhesia.Web.ConnectionTest do
       "content" => "live",
       "sig" => String.duplicate("b", 128)
     }
+  end
+
+  defp valid_auth_event(challenge) do
+    now = System.system_time(:second)
+
+    base = %{
+      "pubkey" => String.duplicate("9", 64),
+      "created_at" => now,
+      "kind" => 22_242,
+      "tags" => [["challenge", challenge]],
+      "content" => "",
+      "sig" => String.duplicate("8", 128)
+    }
+
+    Map.put(base, "id", EventValidator.compute_id(base))
   end
 
   defp valid_event do

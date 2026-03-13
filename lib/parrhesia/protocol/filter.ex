@@ -18,9 +18,10 @@ defmodule Parrhesia.Protocol.Filter do
           | :invalid_since
           | :invalid_until
           | :invalid_limit
+          | :invalid_search
           | :invalid_tag_filter
 
-  @allowed_keys MapSet.new(["ids", "authors", "kinds", "since", "until", "limit"])
+  @allowed_keys MapSet.new(["ids", "authors", "kinds", "since", "until", "limit", "search"])
 
   @error_messages %{
     invalid_filters: "invalid: filters must be a non-empty array of objects",
@@ -34,6 +35,7 @@ defmodule Parrhesia.Protocol.Filter do
     invalid_since: "invalid: since must be a non-negative integer",
     invalid_until: "invalid: until must be a non-negative integer",
     invalid_limit: "invalid: limit must be a positive integer",
+    invalid_search: "invalid: search must be a non-empty string",
     invalid_tag_filter:
       "invalid: tag filters must use #<single-letter> with non-empty string arrays"
   }
@@ -71,7 +73,8 @@ defmodule Parrhesia.Protocol.Filter do
          :ok <- validate_kinds(Map.get(filter, "kinds")),
          :ok <- validate_since(Map.get(filter, "since")),
          :ok <- validate_until(Map.get(filter, "until")),
-         :ok <- validate_limit(Map.get(filter, "limit")) do
+         :ok <- validate_limit(Map.get(filter, "limit")),
+         :ok <- validate_search(Map.get(filter, "search")) do
       validate_tag_filters(filter)
     end
   end
@@ -89,12 +92,9 @@ defmodule Parrhesia.Protocol.Filter do
   def matches_filter?(event, filter) when is_map(event) and is_map(filter) do
     case validate_filter(filter) do
       :ok ->
-        ids_match?(event, Map.get(filter, "ids")) and
-          authors_match?(event, Map.get(filter, "authors")) and
-          kinds_match?(event, Map.get(filter, "kinds")) and
-          since_match?(event, Map.get(filter, "since")) and
-          until_match?(event, Map.get(filter, "until")) and
-          tags_match?(event, filter)
+        event
+        |> filter_predicates(filter)
+        |> Enum.all?()
 
       {:error, _reason} ->
         false
@@ -170,6 +170,10 @@ defmodule Parrhesia.Protocol.Filter do
   defp validate_limit(limit) when is_integer(limit) and limit > 0, do: :ok
   defp validate_limit(_limit), do: {:error, :invalid_limit}
 
+  defp validate_search(nil), do: :ok
+  defp validate_search(search) when is_binary(search) and search != "", do: :ok
+  defp validate_search(_search), do: {:error, :invalid_search}
+
   defp validate_tag_filters(filter) do
     filter
     |> Enum.filter(fn {key, _value} -> valid_tag_filter_key?(key) end)
@@ -187,6 +191,18 @@ defmodule Parrhesia.Protocol.Filter do
   end
 
   defp valid_tag_filter_values?(_values), do: false
+
+  defp filter_predicates(event, filter) do
+    [
+      ids_match?(event, Map.get(filter, "ids")),
+      authors_match?(event, Map.get(filter, "authors")),
+      kinds_match?(event, Map.get(filter, "kinds")),
+      since_match?(event, Map.get(filter, "since")),
+      until_match?(event, Map.get(filter, "until")),
+      search_match?(event, Map.get(filter, "search")),
+      tags_match?(event, filter)
+    ]
+  end
 
   defp ids_match?(_event, nil), do: true
 
@@ -218,6 +234,13 @@ defmodule Parrhesia.Protocol.Filter do
   defp until_match?(event, until) do
     created_at = Map.get(event, "created_at")
     is_integer(created_at) and created_at <= until
+  end
+
+  defp search_match?(_event, nil), do: true
+
+  defp search_match?(event, search) do
+    content = Map.get(event, "content", "")
+    String.contains?(String.downcase(content), String.downcase(search))
   end
 
   defp tags_match?(event, filter) do

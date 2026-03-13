@@ -116,7 +116,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
         filters
         |> Enum.flat_map(fn filter ->
           filter
-          |> event_id_query_for_filter(now)
+          |> event_id_query_for_filter(now, opts)
           |> Repo.all()
         end)
         |> MapSet.new()
@@ -129,10 +129,50 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   def count(_context, _filters, _opts), do: {:error, :invalid_opts}
 
   @impl true
-  def delete_by_request(_context, _event), do: {:error, :not_implemented}
+  def delete_by_request(_context, event) do
+    with {:ok, deleter_pubkey} <- decode_hex(Map.get(event, "pubkey"), 32, :invalid_pubkey),
+         {:ok, delete_ids} <- extract_delete_event_ids(event) do
+      query =
+        from(stored_event in "events",
+          where:
+            stored_event.id in ^delete_ids and
+              stored_event.pubkey == ^deleter_pubkey and
+              is_nil(stored_event.deleted_at)
+        )
+
+      deleted_at = System.system_time(:second)
+      {count, _result} = Repo.update_all(query, set: [deleted_at: deleted_at])
+      {:ok, count}
+    end
+  end
 
   @impl true
-  def vanish(_context, _event), do: {:error, :not_implemented}
+  def vanish(_context, event) do
+    with {:ok, pubkey} <- decode_hex(Map.get(event, "pubkey"), 32, :invalid_pubkey),
+         {:ok, created_at} <-
+           validate_non_negative_integer(Map.get(event, "created_at"), :invalid_created_at) do
+      own_events_query =
+        from(stored_event in "events",
+          where: stored_event.pubkey == ^pubkey and stored_event.created_at <= ^created_at
+        )
+
+      giftwrap_query =
+        from(stored_event in "events",
+          join: tag in "event_tags",
+          on: tag.event_created_at == stored_event.created_at and tag.event_id == stored_event.id,
+          where:
+            stored_event.kind == 1059 and
+              tag.name == "p" and
+              tag.value == ^Base.encode16(pubkey, case: :lower) and
+              stored_event.created_at <= ^created_at
+        )
+
+      {own_events_count, _result} = Repo.delete_all(own_events_query)
+      {giftwrap_count, _result} = Repo.delete_all(giftwrap_query)
+
+      {:ok, own_events_count + giftwrap_count}
+    end
+  end
 
   @impl true
   def purge_expired(opts) when is_list(opts) do
@@ -158,6 +198,11 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
          {:ok, kind} <- validate_non_negative_integer(Map.get(event, "kind"), :invalid_kind),
          {:ok, content} <- validate_binary(Map.get(event, "content"), :invalid_content),
          {:ok, tags} <- validate_tags(Map.get(event, "tags")) do
+      expires_at =
+        tags
+        |> extract_expiration()
+        |> maybe_apply_mls_group_retention(kind, created_at)
+
       {:ok,
        %{
          id: id,
@@ -167,7 +212,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
          content: content,
          sig: sig,
          d_tag: extract_d_tag(tags),
-         expires_at: extract_expiration(tags),
+         expires_at: expires_at,
          tags: tags
        }}
     end
@@ -531,12 +576,14 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
       |> maybe_filter_kinds(Map.get(filter, "kinds"))
       |> maybe_filter_since(Map.get(filter, "since"))
       |> maybe_filter_until(Map.get(filter, "until"))
+      |> maybe_filter_search(Map.get(filter, "search"))
       |> filter_by_tags(filter)
+      |> maybe_restrict_giftwrap_access(filter, opts)
 
     maybe_limit_query(query, effective_filter_limit(filter, opts))
   end
 
-  defp event_id_query_for_filter(filter, now) do
+  defp event_id_query_for_filter(filter, now, opts) do
     from(event in "events",
       where: is_nil(event.deleted_at) and (is_nil(event.expires_at) or event.expires_at > ^now),
       select: event.id
@@ -546,7 +593,9 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     |> maybe_filter_kinds(Map.get(filter, "kinds"))
     |> maybe_filter_since(Map.get(filter, "since"))
     |> maybe_filter_until(Map.get(filter, "until"))
+    |> maybe_filter_search(Map.get(filter, "search"))
     |> filter_by_tags(filter)
+    |> maybe_restrict_giftwrap_access(filter, opts)
   end
 
   defp maybe_filter_ids(query, nil), do: query
@@ -571,6 +620,14 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp maybe_filter_until(query, nil), do: query
   defp maybe_filter_until(query, until), do: where(query, [event], event.created_at <= ^until)
+
+  defp maybe_filter_search(query, nil), do: query
+
+  defp maybe_filter_search(query, search) when is_binary(search) and search != "" do
+    where(query, [event], ilike(event.content, ^"%#{search}%"))
+  end
+
+  defp maybe_filter_search(query, _search), do: query
 
   defp filter_by_tags(query, filter) do
     filter
@@ -599,6 +656,32 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp decode_hex_list(values, decode_case) when is_list(values) do
     Enum.map(values, &Base.decode16!(&1, case: decode_case))
+  end
+
+  defp maybe_restrict_giftwrap_access(query, filter, opts) do
+    requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
+
+    if targets_giftwrap?(filter) and requester_pubkeys != [] do
+      where(
+        query,
+        [event],
+        fragment(
+          "EXISTS (SELECT 1 FROM event_tags AS tag WHERE tag.event_created_at = ? AND tag.event_id = ? AND tag.name = 'p' AND tag.value = ANY(?))",
+          event.created_at,
+          event.id,
+          type(^requester_pubkeys, {:array, :string})
+        )
+      )
+    else
+      query
+    end
+  end
+
+  defp targets_giftwrap?(filter) do
+    case Map.get(filter, "kinds") do
+      kinds when is_list(kinds) -> 1059 in kinds
+      _other -> false
+    end
   end
 
   defp effective_filter_limit(filter, opts) do
@@ -730,6 +813,25 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     end)
   end
 
+  defp extract_delete_event_ids(event) do
+    delete_ids =
+      event
+      |> Map.get("tags", [])
+      |> Enum.reduce([], fn
+        ["e", event_id | _rest], acc when is_binary(event_id) -> [event_id | acc]
+        _tag, acc -> acc
+      end)
+      |> Enum.uniq()
+
+    if delete_ids == [] do
+      {:error, :no_delete_targets}
+    else
+      {:ok, Enum.map(delete_ids, &Base.decode16!(&1, case: :mixed))}
+    end
+  rescue
+    ArgumentError -> {:error, :invalid_delete_target}
+  end
+
   defp extract_expiration(tags) do
     tags
     |> Enum.find_value(fn
@@ -746,4 +848,19 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp parse_unix_seconds(_unix_seconds), do: nil
+
+  defp maybe_apply_mls_group_retention(nil, 445, created_at) do
+    if Application.get_env(:parrhesia, :features, []) |> Keyword.get(:nip_ee_mls, false) do
+      ttl =
+        :parrhesia
+        |> Application.get_env(:policies, [])
+        |> Keyword.get(:mls_group_event_ttl_seconds, 300)
+
+      created_at + ttl
+    else
+      nil
+    end
+  end
+
+  defp maybe_apply_mls_group_retention(expires_at, _kind, _created_at), do: expires_at
 end

@@ -11,6 +11,10 @@ defmodule Parrhesia.Auth.Supervisor do
 
   @impl true
   def init(_init_arg) do
-    Supervisor.init([], strategy: :one_for_one)
+    children = [
+      {Parrhesia.Auth.Challenges, name: Parrhesia.Auth.Challenges}
+    ]
+
+    Supervisor.init(children, strategy: :one_for_one)
   end
 end

@@ -7,7 +7,10 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
   alias Parrhesia.Storage.Adapters.Postgres.Events
 
   setup_all do
-    start_supervised!(Repo)
+    if is_nil(Process.whereis(Repo)) do
+      start_supervised!(Repo)
+    end
+
     Sandbox.mode(Repo, :manual)
     :ok
   end
@@ -215,6 +218,57 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert result["id"] == winner_id
     assert {:ok, nil} = Events.get_event(%{}, loser_id)
     assert {:ok, 1} = Events.count(%{}, [%{"ids" => [first["id"], second["id"]]}], [])
+  end
+
+  test "query/3 supports search filter and giftwrap recipient restriction" do
+    recipient = String.duplicate("9", 64)
+
+    allowed =
+      persist_event(%{
+        "kind" => 1059,
+        "tags" => [["p", recipient]],
+        "content" => "encrypted hello to recipient"
+      })
+
+    _other =
+      persist_event(%{
+        "kind" => 1059,
+        "tags" => [["p", String.duplicate("1", 64)]],
+        "content" => "encrypted hello to somebody else"
+      })
+
+    filters = [%{"kinds" => [1059], "search" => "recipient"}]
+
+    assert {:ok, [result]} =
+             Events.query(%{}, filters, requester_pubkeys: [recipient])
+
+    assert result["id"] == allowed["id"]
+  end
+
+  test "mls keypackage relay list kind 10051 follows replaceable conflict semantics" do
+    author = String.duplicate("c", 64)
+
+    first =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_500,
+        "kind" => 10_051,
+        "content" => "v1"
+      })
+
+    second =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_501,
+        "kind" => 10_051,
+        "content" => "v2"
+      })
+
+    assert {:ok, [result]} =
+             Events.query(%{}, [%{"authors" => [author], "kinds" => [10_051]}], [])
+
+    assert result["id"] == second["id"]
+    assert {:ok, nil} = Events.get_event(%{}, first["id"])
   end
 
   defp persist_event(overrides) do

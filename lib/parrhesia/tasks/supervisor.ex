@@ -11,6 +11,13 @@ defmodule Parrhesia.Tasks.Supervisor do
 
   @impl true
   def init(_init_arg) do
-    Supervisor.init([], strategy: :one_for_one)
+    children =
+      if Application.get_env(:parrhesia, :enable_expiration_worker, true) do
+        [{Parrhesia.Tasks.ExpirationWorker, name: Parrhesia.Tasks.ExpirationWorker}]
+      else
+        []
+      end
+
+    Supervisor.init(children, strategy: :one_for_one)
   end
 end

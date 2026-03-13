@@ -12,12 +12,16 @@ defmodule Parrhesia.ProtocolTest do
     assert event["content"] == "hello"
   end
 
-  test "decodes valid REQ and CLOSE frames" do
+  test "decodes valid REQ, COUNT and CLOSE frames" do
     req_payload = Jason.encode!(["REQ", "sub-1", %{"authors" => [String.duplicate("a", 64)]}])
+    count_payload = Jason.encode!(["COUNT", "sub-1", %{"kinds" => [1]}, %{"hll" => true}])
     close_payload = Jason.encode!(["CLOSE", "sub-1"])
 
     assert {:ok, {:req, "sub-1", [%{"authors" => [_author]}]}} =
              Protocol.decode_client(req_payload)
+
+    assert {:ok, {:count, "sub-1", [%{"kinds" => [1]}], %{"hll" => true}}} =
+             Protocol.decode_client(count_payload)
 
     assert {:ok, {:close, "sub-1"}} = Protocol.decode_client(close_payload)
   end
@@ -30,9 +34,27 @@ defmodule Parrhesia.ProtocolTest do
     assert {:error, :invalid_subscription_id} = Protocol.decode_client(long_sub_payload)
   end
 
+  test "decodes AUTH and NEG frames" do
+    auth_event = valid_event() |> Map.put("kind", 22_242) |> Map.put("content", "")
+    auth_event = Map.put(auth_event, "id", EventValidator.compute_id(auth_event))
+
+    assert {:ok, {:auth, ^auth_event}} =
+             Protocol.decode_client(Jason.encode!(["AUTH", auth_event]))
+
+    assert {:ok, {:neg_open, "sub-neg", %{"cursor" => 0}}} =
+             Protocol.decode_client(Jason.encode!(["NEG-OPEN", "sub-neg", %{"cursor" => 0}]))
+
+    assert {:ok, {:neg_msg, "sub-neg", %{"delta" => "abc"}}} =
+             Protocol.decode_client(Jason.encode!(["NEG-MSG", "sub-neg", %{"delta" => "abc"}]))
+
+    assert {:ok, {:neg_close, "sub-neg"}} =
+             Protocol.decode_client(Jason.encode!(["NEG-CLOSE", "sub-neg"]))
+  end
+
   test "returns decode errors for malformed messages" do
     assert {:error, :invalid_json} = Protocol.decode_client("not-json")
     assert {:error, :invalid_filters} = Protocol.decode_client(Jason.encode!(["REQ", "sub-1"]))
+    assert {:error, :invalid_count} = Protocol.decode_client(Jason.encode!(["COUNT", "sub-1"]))
 
     assert {:error, :invalid_event} =
              Protocol.decode_client(Jason.encode!(["EVENT", "not-a-map"]))
@@ -62,6 +84,12 @@ defmodule Parrhesia.ProtocolTest do
   test "encodes relay messages" do
     frame = Protocol.encode_relay({:closed, "sub-1", "error: subscription closed"})
     assert Jason.decode!(frame) == ["CLOSED", "sub-1", "error: subscription closed"]
+
+    auth_frame = Protocol.encode_relay({:auth, "challenge"})
+    assert Jason.decode!(auth_frame) == ["AUTH", "challenge"]
+
+    count_frame = Protocol.encode_relay({:count, "sub-1", %{"count" => 1}})
+    assert Jason.decode!(count_frame) == ["COUNT", "sub-1", %{"count" => 1}]
   end
 
   defp valid_event do

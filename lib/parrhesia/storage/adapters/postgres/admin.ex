@@ -13,9 +13,20 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
   @max_limit 1_000
 
   @impl true
-  def execute(_context, method, _params) do
-    {:error, {:unsupported_method, normalize_method_name(method)}}
+  def execute(_context, method, params) when is_map(params) do
+    moderation = Parrhesia.Storage.moderation()
+    method_name = normalize_method_name(method)
+
+    case method_name do
+      "ping" -> {:ok, %{"status" => "ok"}}
+      "stats" -> {:ok, relay_stats()}
+      "list_audit_logs" -> list_audit_logs(%{}, audit_list_opts(params))
+      _other -> execute_moderation_method(moderation, method_name, params)
+    end
   end
+
+  def execute(_context, method, _params),
+    do: {:error, {:unsupported_method, normalize_method_name(method)}}
 
   @impl true
   def append_audit_log(_context, audit_entry) when is_map(audit_entry) do
@@ -69,6 +80,91 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
   end
 
   def list_audit_logs(_context, _opts), do: {:error, :invalid_opts}
+
+  defp relay_stats do
+    events_count = Repo.aggregate("events", :count, :id)
+    banned_pubkeys = Repo.aggregate("banned_pubkeys", :count, :pubkey)
+    blocked_ips = Repo.aggregate("blocked_ips", :count, :ip)
+
+    %{
+      "events" => events_count,
+      "banned_pubkeys" => banned_pubkeys,
+      "blocked_ips" => blocked_ips
+    }
+  end
+
+  defp execute_moderation_method(moderation, "ban_pubkey", params),
+    do: execute_pubkey_method(fn ctx, value -> moderation.ban_pubkey(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "unban_pubkey", params),
+    do: execute_pubkey_method(fn ctx, value -> moderation.unban_pubkey(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "allow_pubkey", params),
+    do: execute_pubkey_method(fn ctx, value -> moderation.allow_pubkey(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "disallow_pubkey", params),
+    do: execute_pubkey_method(fn ctx, value -> moderation.disallow_pubkey(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "ban_event", params),
+    do: execute_event_method(fn ctx, value -> moderation.ban_event(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "unban_event", params),
+    do: execute_event_method(fn ctx, value -> moderation.unban_event(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "block_ip", params),
+    do: execute_ip_method(fn ctx, value -> moderation.block_ip(ctx, value) end, params)
+
+  defp execute_moderation_method(moderation, "unblock_ip", params),
+    do: execute_ip_method(fn ctx, value -> moderation.unblock_ip(ctx, value) end, params)
+
+  defp execute_moderation_method(_moderation, method_name, _params),
+    do: {:error, {:unsupported_method, method_name}}
+
+  defp audit_list_opts(params) do
+    []
+    |> maybe_put_opt(:limit, Map.get(params, "limit"))
+    |> maybe_put_opt(:method, Map.get(params, "method"))
+    |> maybe_put_opt(:actor_pubkey, Map.get(params, "actor_pubkey"))
+  end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp execute_pubkey_method(fun, params) do
+    case Map.get(params, "pubkey") do
+      pubkey when is_binary(pubkey) ->
+        with :ok <- fun.(%{}, pubkey) do
+          {:ok, %{"ok" => true}}
+        end
+
+      _other ->
+        {:error, :invalid_pubkey}
+    end
+  end
+
+  defp execute_event_method(fun, params) do
+    case Map.get(params, "event_id") do
+      event_id when is_binary(event_id) ->
+        with :ok <- fun.(%{}, event_id) do
+          {:ok, %{"ok" => true}}
+        end
+
+      _other ->
+        {:error, :invalid_event_id}
+    end
+  end
+
+  defp execute_ip_method(fun, params) do
+    case Map.get(params, "ip") do
+      ip when is_binary(ip) ->
+        with :ok <- fun.(%{}, ip) do
+          {:ok, %{"ok" => true}}
+        end
+
+      _other ->
+        {:error, :invalid_ip}
+    end
+  end
 
   defp fetch_required_method(audit_entry) do
     audit_entry

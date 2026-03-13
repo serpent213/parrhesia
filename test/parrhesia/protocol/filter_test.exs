@@ -20,10 +20,11 @@ defmodule Parrhesia.Protocol.FilterTest do
     assert :ok = Filter.validate_filters(filters)
   end
 
-  test "rejects unsupported filter keys" do
-    filters = [%{"search" => "hello"}]
+  test "accepts search filter key and rejects unknown keys" do
+    assert :ok = Filter.validate_filters([%{"search" => "hello"}])
 
-    assert {:error, :invalid_filter_key} = Filter.validate_filters(filters)
+    assert {:error, :invalid_filter_key} =
+             Filter.validate_filters([%{"unknown" => "value"}])
 
     assert Filter.error_message(:invalid_filter_key) ==
              "invalid: filter contains unknown elements"
@@ -36,6 +37,7 @@ defmodule Parrhesia.Protocol.FilterTest do
              Filter.validate_filters([%{"authors" => [String.duplicate("A", 64)]}])
 
     assert {:error, :invalid_kinds} = Filter.validate_filters([%{"kinds" => ["1"]}])
+    assert {:error, :invalid_search} = Filter.validate_filters([%{"search" => ""}])
   end
 
   test "matches with AND semantics inside filter and OR across filters" do
@@ -46,7 +48,8 @@ defmodule Parrhesia.Protocol.FilterTest do
       "kinds" => [event["kind"]],
       "#e" => ["ref-2"],
       "since" => event["created_at"],
-      "until" => event["created_at"]
+      "until" => event["created_at"],
+      "search" => "HEL"
     }
 
     non_matching_filter = %{"authors" => [String.duplicate("d", 64)]}

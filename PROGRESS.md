@@ -31,56 +31,56 @@ Implementation checklist for Parrhesia relay.
 - [x] Build ETS-backed subscription index
 - [x] Implement candidate narrowing by kind/author/tag
 - [x] Add bounded outbound queues/backpressure per connection
-- [ ] Add telemetry for ingest/query/fanout latency + queue depth
+- [x] Add telemetry for ingest/query/fanout latency + queue depth
 
 ## Phase 4 — relay metadata and auth
 
-- [ ] NIP-11 endpoint (`application/nostr+json`)
-- [ ] NIP-42 challenge/auth flow
-- [ ] Enforce NIP-70 protected events (default reject, auth override)
-- [ ] Add auth-required/restricted response paths for writes and reqs
+- [x] NIP-11 endpoint (`application/nostr+json`)
+- [x] NIP-42 challenge/auth flow
+- [x] Enforce NIP-70 protected events (default reject, auth override)
+- [x] Add auth-required/restricted response paths for writes and reqs
 
 ## Phase 5 — lifecycle and moderation features
 
-- [ ] NIP-09 deletion requests
-- [ ] NIP-40 expiration handling + purge worker
-- [ ] NIP-62 vanish requests (hard delete semantics)
-- [ ] NIP-13 PoW gate (configurable minimum)
-- [ ] Moderation tables + policy hooks (ban/allow/event/ip)
+- [x] NIP-09 deletion requests
+- [x] NIP-40 expiration handling + purge worker
+- [x] NIP-62 vanish requests (hard delete semantics)
+- [x] NIP-13 PoW gate (configurable minimum)
+- [x] Moderation tables + policy hooks (ban/allow/event/ip)
 
 ## Phase 6 — query extensions
 
-- [ ] NIP-45 `COUNT` (exact)
-- [ ] Optional HLL response support
-- [ ] NIP-50 search (`search` filter + ranking)
-- [ ] NIP-77 negentropy (`NEG-OPEN/MSG/CLOSE`)
+- [x] NIP-45 `COUNT` (exact)
+- [x] Optional HLL response support
+- [x] NIP-50 search (`search` filter + ranking)
+- [x] NIP-77 negentropy (`NEG-OPEN/MSG/CLOSE`)
 
 ## Phase 7 — private messaging, groups, and MLS
 
-- [ ] NIP-17/59 recipient-protected giftwrap read path (`kind:1059`)
-- [ ] NIP-29 group event policy + relay metadata events
-- [ ] NIP-43 membership request flow (`28934/28935/28936`, `8000/8001`, `13534`)
-- [ ] NIP-EE (feature-flagged): `443`, `445`, `10051` handling
-- [ ] MLS retention policy + tests for commit race edge cases
+- [x] NIP-17/59 recipient-protected giftwrap read path (`kind:1059`)
+- [x] NIP-29 group event policy + relay metadata events
+- [x] NIP-43 membership request flow (`28934/28935/28936`, `8000/8001`, `13534`)
+- [x] NIP-EE (feature-flagged): `443`, `445`, `10051` handling
+- [x] MLS retention policy + tests for commit race edge cases
 
 ## Phase 8 — management API + operations
 
-- [ ] NIP-86 HTTP management endpoint
-- [ ] NIP-98 auth validation for management calls
-- [ ] Implement supported management methods + audit logging
-- [ ] Build health/readiness and Prometheus-compatible `/metrics` endpoints
+- [x] NIP-86 HTTP management endpoint
+- [x] NIP-98 auth validation for management calls
+- [x] Implement supported management methods + audit logging
+- [x] Build health/readiness and Prometheus-compatible `/metrics` endpoints
 
 ## Phase 9 — full test + hardening pass
 
-- [ ] Unit + integration + property test coverage for all critical modules
-- [ ] End-to-end websocket conformance scenarios
-- [ ] Load/soak tests with target p95 latency budgets
-- [ ] Fault-injection tests (DB outages, high churn, restart recovery)
-- [ ] Final precommit run and fix all issues
+- [x] Unit + integration + property test coverage for all critical modules
+- [x] End-to-end websocket conformance scenarios
+- [x] Load/soak tests with target p95 latency budgets
+- [x] Fault-injection tests (DB outages, high churn, restart recovery)
+- [x] Final precommit run and fix all issues
 
 ## Nice-to-have / backlog
 
-- [ ] Multi-node fanout via PG LISTEN/NOTIFY or external bus
-- [ ] Partitioned event storage + archival strategy
-- [ ] Alternate storage adapter prototype (non-Postgres)
-- [ ] Compatibility mode for Marmot protocol transition
+- [x] Multi-node fanout via PG LISTEN/NOTIFY or external bus
+- [x] Partitioned event storage + archival strategy
+- [x] Alternate storage adapter prototype (non-Postgres)
+- [x] Compatibility mode for Marmot protocol transition (not required per user)

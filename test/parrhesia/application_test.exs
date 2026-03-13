@@ -16,5 +16,8 @@ defmodule Parrhesia.ApplicationTest do
                                                                             modules} ->
              is_pid(pid) and modules == [Bandit]
            end)
+
+    assert is_pid(Process.whereis(Parrhesia.Auth.Challenges))
+    assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))
   end
 end

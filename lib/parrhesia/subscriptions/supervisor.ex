@@ -12,7 +12,9 @@ defmodule Parrhesia.Subscriptions.Supervisor do
   @impl true
   def init(_init_arg) do
     children = [
-      {Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index}
+      {Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index},
+      {Parrhesia.Negentropy.Sessions, name: Parrhesia.Negentropy.Sessions},
+      {Parrhesia.Fanout.MultiNode, name: Parrhesia.Fanout.MultiNode}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
