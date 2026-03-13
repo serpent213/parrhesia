@@ -109,9 +109,9 @@ Ordered stages:
 2. `id` recomputation and signature verification
 3. NIP semantic checks (timestamps, tag forms, size limits)
 4. Policy checks (banlists, kind allowlists, auth-required, NIP-70, PoW)
-5. Storage write (or no-store for ephemeral policy)
+5. Storage write (including ephemeral events with short TTL retention)
 6. Live fanout to matching subscriptions
-7. Return canonical `OK` response with machine prefix when needed
+7. Return canonical `OK` response with machine prefix when needed, **only after durable DB commit succeeds**
 
 ### 5.4 Subscription index + fanout
 
@@ -151,7 +151,7 @@ Initial adapter: `Parrhesia.Storage.Adapters.Postgres` with Ecto.
 
 Schema outline:
 
-- `events` (id PK, pubkey, created_at, kind, content, sig, d_tag, deleted_at, expires_at)
+- `events` (partitioned by `created_at`; `id`, `pubkey`, `sig` stored in compact binary form; `kind`, `content`, `d_tag`, `deleted_at`, `expires_at`)
 - `event_tags` (event_id, name, value, idx)
 - moderation tables (banned/allowed pubkeys, banned events, blocked IPs)
 - relay/group membership tables
@@ -163,12 +163,22 @@ Indexing strategy:
 - `(pubkey, created_at DESC)`
 - `(created_at DESC)`
 - `(name, value, created_at DESC)` on `event_tags`
-- partial/unique indexes for replaceable and addressable semantics
+- partial/unique indexes and deterministic upsert paths for replaceable `(pubkey, kind)` and addressable `(pubkey, kind, d_tag)` semantics
+- targeted partial indexes for high-traffic single-letter tags (`e`, `p`, `d` first), with additional tag indexes added from production query telemetry
 
 Retention strategy:
 
-- Optional table partitioning by time for hot pruning
+- Mandatory time partitioning for `events` (monthly default, configurable)
+- Partition-aligned pruning for expired/deleted data where possible
 - Periodic purge job for expired/deleted tombstoned rows
+
+### 6.3 Postgres operating defaults (locked before implementation)
+
+- **Durability invariant:** relay returns `OK` only after transaction commit for accepted events.
+- **Pool separation:** independent DB pools/queues for ingest writes, REQ/COUNT reads, and maintenance/admin operations.
+- **Server-side guardrails:** enforce `max_filter_limit`, max filters per REQ, max entries for `ids`/`authors`/`#tag`, and bounded `since/until` windows.
+- **Deterministic conflict resolution:** tie-break replaceable/addressable collisions by `created_at`, then lexical `id` (NIP-01-consistent).
+- **Conformance lock-in:** treat `since <= created_at <= until`, newest-first initial query ordering, and single `EOSE` emission as fixed behavior.
 
 ## 7) Feature-specific implementation notes
 
@@ -239,7 +249,8 @@ Targets (initial):
 5. **NIP conformance tests**: machine-prefix responses, ordering, EOSE behavior
 6. **MLS scenario tests**: keypackage/group-event acceptance and policy handling
 7. **Performance tests**: soak + burst + large fanout profiles
-8. **Fault-injection tests**: DB outage, slow query, connection churn, node restart
+8. **Query-plan regression tests**: representative `EXPLAIN (ANALYZE, BUFFERS)` checks for core REQ/COUNT shapes
+9. **Fault-injection tests**: DB outage, slow query, connection churn, node restart
 
 ## 10) Implementation principles
 
