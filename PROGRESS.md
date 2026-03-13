@@ -22,7 +22,7 @@ Implementation checklist for Parrhesia relay.
 
 - [x] Define `Parrhesia.Storage.*` behaviors (events/moderation/groups/admin)
 - [ ] Implement Postgres adapter modules behind behaviors
-- [ ] Create migrations for events, tags, moderation, membership
+- [x] Create migrations for events, tags, moderation, membership
 - [ ] Implement replaceable/addressable semantics at storage layer
 - [ ] Add adapter contract test suite
 
