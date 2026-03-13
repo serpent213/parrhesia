@@ -12,7 +12,30 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert {:push, {:text, response}, next_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
 
-    assert MapSet.member?(next_state.subscriptions, "sub-123")
+    assert Map.has_key?(next_state.subscriptions, "sub-123")
+    assert next_state.subscriptions["sub-123"].filters == [%{"kinds" => [1]}]
+    assert next_state.subscriptions["sub-123"].eose_sent?
+    assert Jason.decode!(response) == ["EOSE", "sub-123"]
+  end
+
+  test "REQ with same subscription id replaces existing subscription" do
+    {:ok, state} = Connection.init(%{})
+
+    first_req = Jason.encode!(["REQ", "sub-123", %{"kinds" => [1]}])
+    second_req = Jason.encode!(["REQ", "sub-123", %{"kinds" => [2], "limit" => 5}])
+
+    assert {:push, _, subscribed_state} =
+             Connection.handle_in({first_req, [opcode: :text]}, state)
+
+    assert {:push, {:text, response}, replaced_state} =
+             Connection.handle_in({second_req, [opcode: :text]}, subscribed_state)
+
+    assert map_size(replaced_state.subscriptions) == 1
+
+    assert replaced_state.subscriptions["sub-123"].filters == [
+             %{"kinds" => [2], "limit" => 5}
+           ]
+
     assert Jason.decode!(response) == ["EOSE", "sub-123"]
   end
 
@@ -27,8 +50,29 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert {:push, {:text, response}, next_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, subscribed_state)
 
-    refute MapSet.member?(next_state.subscriptions, "sub-123")
+    refute Map.has_key?(next_state.subscriptions, "sub-123")
     assert Jason.decode!(response) == ["CLOSED", "sub-123", "error: subscription closed"]
+  end
+
+  test "REQ above max subscriptions returns CLOSED and keeps existing subscriptions" do
+    {:ok, state} = Connection.init(max_subscriptions_per_connection: 1)
+
+    req_one = Jason.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
+    req_two = Jason.encode!(["REQ", "sub-2", %{"kinds" => [1]}])
+
+    assert {:push, _, first_state} = Connection.handle_in({req_one, [opcode: :text]}, state)
+
+    assert {:push, {:text, response}, second_state} =
+             Connection.handle_in({req_two, [opcode: :text]}, first_state)
+
+    assert map_size(second_state.subscriptions) == 1
+    assert Map.has_key?(second_state.subscriptions, "sub-1")
+
+    assert Jason.decode!(response) == [
+             "CLOSED",
+             "sub-2",
+             "rate-limited: maximum subscriptions per connection exceeded"
+           ]
   end
 
   test "invalid input returns NOTICE" do

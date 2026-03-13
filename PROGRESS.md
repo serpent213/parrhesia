@@ -15,7 +15,7 @@ Implementation checklist for Parrhesia relay.
 - [x] Implement message decode/encode for `EVENT`, `REQ`, `CLOSE`
 - [x] Implement strict event validation (`id`, `sig`, shape, timestamps)
 - [x] Implement filter evaluation engine (AND/OR semantics)
-- [ ] Implement subscription lifecycle + `EOSE` behavior
+- [x] Implement subscription lifecycle + `EOSE` behavior
 - [x] Implement canonical `OK`, `NOTICE`, `CLOSED` responses + prefixes
 
 ## Phase 2 — storage boundary + postgres adapter
