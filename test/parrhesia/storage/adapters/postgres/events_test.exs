@@ -28,11 +28,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
     assert normalized.pubkey == Base.decode16!(pubkey, case: :lower)
   end
 
-  test "applies MLS retention TTL to kind 445 when enabled" do
-    previous_features = Application.get_env(:parrhesia, :features, [])
+  test "applies MLS retention TTL to kind 445" do
     previous_policies = Application.get_env(:parrhesia, :policies, [])
-
-    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
 
     Application.put_env(
       :parrhesia,
@@ -41,7 +38,6 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
     )
 
     on_exit(fn ->
-      Application.put_env(:parrhesia, :features, previous_features)
       Application.put_env(:parrhesia, :policies, previous_policies)
     end)
 
@@ -60,10 +56,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
   end
 
   test "keeps explicit expiration tag for kind 445 when present" do
-    previous_features = Application.get_env(:parrhesia, :features, [])
     previous_policies = Application.get_env(:parrhesia, :policies, [])
-
-    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
 
     Application.put_env(
       :parrhesia,
@@ -72,7 +65,6 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
     )
 
     on_exit(fn ->
-      Application.put_env(:parrhesia, :features, previous_features)
       Application.put_env(:parrhesia, :policies, previous_policies)
     end)
 

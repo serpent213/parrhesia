@@ -229,7 +229,6 @@ defmodule Parrhesia.Policy.EventPolicyTest do
     Application.put_env(
       :parrhesia,
       :features,
-      nip_ee_mls: false,
       marmot_push_notifications: true
     )
 
@@ -281,7 +280,6 @@ defmodule Parrhesia.Policy.EventPolicyTest do
     Application.put_env(
       :parrhesia,
       :features,
-      nip_ee_mls: false,
       marmot_push_notifications: true
     )
 
@@ -337,7 +335,6 @@ defmodule Parrhesia.Policy.EventPolicyTest do
     Application.put_env(
       :parrhesia,
       :features,
-      nip_ee_mls: false,
       marmot_push_notifications: true
     )
 
@@ -422,15 +419,6 @@ defmodule Parrhesia.Policy.EventPolicyTest do
                multi_server_target,
                MapSet.new([String.duplicate("d", 64)])
              )
-  end
-
-  test "rejects mls kinds when feature is disabled" do
-    Application.put_env(:parrhesia, :features, nip_ee_mls: false)
-
-    event = %{"kind" => 443, "tags" => [], "pubkey" => String.duplicate("d", 64), "id" => ""}
-
-    assert {:error, :mls_disabled} =
-             EventPolicy.authorize_write(event, MapSet.new([String.duplicate("d", 64)]))
   end
 
   test "enforces min pow difficulty" do

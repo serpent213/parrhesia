@@ -159,14 +159,6 @@ defmodule Parrhesia.Web.ConnectionTest do
   end
 
   test "malformed kind 445 envelope EVENT is rejected" do
-    previous_features = Application.get_env(:parrhesia, :features, [])
-
-    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
-
-    on_exit(fn ->
-      Application.put_env(:parrhesia, :features, previous_features)
-    end)
-
     state = connection_state()
 
     event =
@@ -232,9 +224,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     Application.put_env(
       :parrhesia,
       :features,
-      previous_features
-      |> Keyword.put(:marmot_push_notifications, true)
-      |> Keyword.put(:nip_ee_mls, false)
+      Keyword.put(previous_features, :marmot_push_notifications, true)
     )
 
     Application.put_env(
@@ -285,9 +275,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     Application.put_env(
       :parrhesia,
       :features,
-      previous_features
-      |> Keyword.put(:marmot_push_notifications, true)
-      |> Keyword.put(:nip_ee_mls, false)
+      Keyword.put(previous_features, :marmot_push_notifications, true)
     )
 
     Application.put_env(

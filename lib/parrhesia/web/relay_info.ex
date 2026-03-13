@@ -37,15 +37,6 @@ defmodule Parrhesia.Web.RelayInfo do
       86,
       98
     ]
-    |> maybe_add_mls()
-  end
-
-  defp maybe_add_mls(nips) do
-    if Parrhesia.Config.get([:features, :nip_ee_mls], false) do
-      ["EE" | nips]
-    else
-      nips
-    end
   end
 
   defp limitations do

@@ -346,7 +346,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
       })
 
     assert {:ok, results} =
-             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], [])
+             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], now: 1_700_000_700)
 
     tie_winner_id = Enum.min([tie_a["id"], tie_b["id"]])
     tie_loser_id = Enum.max([tie_a["id"], tie_b["id"]])
@@ -368,7 +368,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
       end)
 
     assert {:ok, results} =
-             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], [])
+             Events.query(%{}, [%{"kinds" => [445], "#h" => [group_id]}], now: 1_700_001_100)
 
     expected_ids =
       events

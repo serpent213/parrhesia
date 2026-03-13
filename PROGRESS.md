@@ -60,7 +60,7 @@ Implementation checklist for Parrhesia relay.
 - [x] NIP-17/59 recipient-protected giftwrap read path (`kind:1059`)
 - [x] NIP-29 group event policy + relay metadata events
 - [x] NIP-43 membership request flow (`28934/28935/28936`, `8000/8001`, `13534`)
-- [x] NIP-EE (feature-flagged): `443`, `445`, `10051` handling
+- [x] Marmot MIP relay surface: `443`, `445`, `10051` handling
 - [x] MLS retention policy + tests for commit race edge cases
 
 ## Phase 8 — management API + operations

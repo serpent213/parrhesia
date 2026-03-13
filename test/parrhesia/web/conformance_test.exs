@@ -97,14 +97,6 @@ defmodule Parrhesia.Web.ConformanceTest do
   end
 
   test "kind 445 commit ACK implies durable visibility before wrapped welcome ACK" do
-    previous_features = Application.get_env(:parrhesia, :features, [])
-
-    Application.put_env(:parrhesia, :features, Keyword.put(previous_features, :nip_ee_mls, true))
-
-    on_exit(fn ->
-      Application.put_env(:parrhesia, :features, previous_features)
-    end)
-
     {:ok, state} = Connection.init(subscription_index: nil)
 
     commit_event =
@@ -158,9 +150,7 @@ defmodule Parrhesia.Web.ConformanceTest do
     Application.put_env(
       :parrhesia,
       :features,
-      previous_features
-      |> Keyword.put(:marmot_push_notifications, true)
-      |> Keyword.put(:nip_ee_mls, false)
+      Keyword.put(previous_features, :marmot_push_notifications, true)
     )
 
     Application.put_env(

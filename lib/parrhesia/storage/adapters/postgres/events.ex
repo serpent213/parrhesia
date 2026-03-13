@@ -855,12 +855,12 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   defp parse_unix_seconds(_unix_seconds), do: nil
 
   defp maybe_apply_mls_group_retention(nil, 445, created_at) do
-    if Application.get_env(:parrhesia, :features, []) |> Keyword.get(:nip_ee_mls, false) do
-      ttl =
-        :parrhesia
-        |> Application.get_env(:policies, [])
-        |> Keyword.get(:mls_group_event_ttl_seconds, 300)
+    ttl =
+      :parrhesia
+      |> Application.get_env(:policies, [])
+      |> Keyword.get(:mls_group_event_ttl_seconds, 300)
 
+    if is_integer(ttl) and ttl > 0 do
       created_at + ttl
     else
       nil

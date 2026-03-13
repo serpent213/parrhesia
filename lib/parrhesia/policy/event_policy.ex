@@ -30,7 +30,6 @@ defmodule Parrhesia.Policy.EventPolicy do
           | :pow_below_minimum
           | :pubkey_banned
           | :event_banned
-          | :mls_disabled
 
   @spec authorize_read([map()], MapSet.t(String.t())) :: :ok | {:error, policy_error()}
   def authorize_read(filters, authenticated_pubkeys) when is_list(filters) do
@@ -57,8 +56,7 @@ defmodule Parrhesia.Policy.EventPolicy do
       fn -> enforce_pow(event) end,
       fn -> enforce_protected_event(event, authenticated_pubkeys) end,
       fn -> enforce_media_metadata_policy(event) end,
-      fn -> enforce_push_notification_policy(event) end,
-      fn -> enforce_mls_feature_flag(event) end
+      fn -> enforce_push_notification_policy(event) end
     ]
 
     Enum.reduce_while(checks, :ok, fn check, :ok ->
@@ -135,7 +133,6 @@ defmodule Parrhesia.Policy.EventPolicy do
   def error_message(:pow_below_minimum), do: "pow: minimum proof-of-work difficulty not met"
   def error_message(:pubkey_banned), do: "blocked: pubkey is banned"
   def error_message(:event_banned), do: "blocked: event is banned"
-  def error_message(:mls_disabled), do: "blocked: mls feature flag is disabled"
 
   defp maybe_require_auth_for_write(authenticated_pubkeys) do
     if config_bool([:policies, :auth_required_for_writes], false) and
@@ -646,14 +643,6 @@ defmodule Parrhesia.Policy.EventPolicy do
         MapSet.member?(authenticated_pubkeys, pubkey) -> :ok
         true -> {:error, :protected_event_pubkey_mismatch}
       end
-    else
-      :ok
-    end
-  end
-
-  defp enforce_mls_feature_flag(event) do
-    if event["kind"] in [443, 445, 10_051] and not config_bool([:features, :nip_ee_mls], false) do
-      {:error, :mls_disabled}
     else
       :ok
     end

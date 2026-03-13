@@ -443,8 +443,7 @@ defmodule Parrhesia.Web.Connection do
               :push_notification_replay_window_exceeded,
               :push_notification_missing_expiration,
               :push_notification_expiration_too_far,
-              :push_notification_server_recipients_exceeded,
-              :mls_disabled
+              :push_notification_server_recipients_exceeded
             ],
        do: EventPolicy.error_message(reason)
 

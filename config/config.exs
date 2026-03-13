@@ -39,7 +39,6 @@ config :parrhesia,
     nip_45_count: true,
     nip_50_search: true,
     nip_77_negentropy: true,
-    nip_ee_mls: false,
     marmot_push_notifications: false
   ],
   storage: [
