@@ -2,13 +2,13 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
   use ExUnit.Case, async: false
 
   alias Parrhesia.Tasks.PartitionRetentionWorker
-  alias Parrhesia.TestSupport.PartitionRetentionStubArchiver
+  alias Parrhesia.TestSupport.PartitionRetentionStubPartitions
 
   @bytes_per_gib 1_073_741_824
 
   test "drops oldest partition when max_months_to_keep is exceeded" do
     start_supervised!(
-      {PartitionRetentionStubArchiver,
+      {PartitionRetentionStubPartitions,
        partitions: [
          partition(2026, 1),
          partition(2026, 2),
@@ -24,7 +24,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
       start_supervised!(
         {PartitionRetentionWorker,
          name: nil,
-         archiver: PartitionRetentionStubArchiver,
+         partition_ops: PartitionRetentionStubPartitions,
          interval_ms: :timer.hours(24),
          months_ahead: 0,
          max_db_bytes: :infinity,
@@ -42,7 +42,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
 
   test "drops oldest completed partition when size exceeds max_db_bytes" do
     start_supervised!(
-      {PartitionRetentionStubArchiver,
+      {PartitionRetentionStubPartitions,
        partitions: [partition(2026, 3), partition(2026, 4), partition(2026, 5)],
        db_size_bytes: 12 * @bytes_per_gib,
        test_pid: self()}
@@ -52,7 +52,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
       start_supervised!(
         {PartitionRetentionWorker,
          name: nil,
-         archiver: PartitionRetentionStubArchiver,
+         partition_ops: PartitionRetentionStubPartitions,
          interval_ms: :timer.hours(24),
          months_ahead: 0,
          max_db_bytes: 10,
@@ -69,7 +69,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
 
   test "does not drop partitions when both limits are infinity" do
     start_supervised!(
-      {PartitionRetentionStubArchiver,
+      {PartitionRetentionStubPartitions,
        partitions: [partition(2026, 1), partition(2026, 2), partition(2026, 3)],
        db_size_bytes: 50 * @bytes_per_gib,
        test_pid: self()}
@@ -79,7 +79,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
       start_supervised!(
         {PartitionRetentionWorker,
          name: nil,
-         archiver: PartitionRetentionStubArchiver,
+         partition_ops: PartitionRetentionStubPartitions,
          interval_ms: :timer.hours(24),
          months_ahead: 0,
          max_db_bytes: :infinity,

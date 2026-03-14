@@ -1,4 +1,4 @@
-defmodule Parrhesia.TestSupport.PartitionRetentionStubArchiver do
+defmodule Parrhesia.TestSupport.PartitionRetentionStubPartitions do
   @moduledoc false
 
   use Agent

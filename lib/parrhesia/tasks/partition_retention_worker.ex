@@ -5,7 +5,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
 
   use GenServer
 
-  alias Parrhesia.Storage.Archiver
+  alias Parrhesia.Storage.Partitions
   alias Parrhesia.Telemetry
 
   @default_check_interval_hours 24
@@ -13,7 +13,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
   @default_max_partitions_to_drop_per_run 1
   @bytes_per_gib 1_073_741_824
 
-  @type monthly_partition :: Archiver.monthly_partition()
+  @type monthly_partition :: Partitions.monthly_partition()
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -26,7 +26,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
     retention_config = Application.get_env(:parrhesia, :retention, [])
 
     state = %{
-      archiver: Keyword.get(opts, :archiver, Archiver),
+      partition_ops: Keyword.get(opts, :partition_ops, Partitions),
       interval_ms: interval_ms(opts, retention_config),
       months_ahead: months_ahead(opts, retention_config),
       max_db_gib: max_db_gib(opts, retention_config),
@@ -65,7 +65,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp run_maintenance(state) do
-    case state.archiver.ensure_monthly_partitions(months_ahead: state.months_ahead) do
+    case state.partition_ops.ensure_monthly_partitions(months_ahead: state.months_ahead) do
       :ok -> maybe_drop_oldest_partitions(state)
       {:error, reason} -> {:error, reason}
     end
@@ -92,14 +92,14 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
   defp apply_partition_drop(_state, nil, dropped_count), do: {:halt, {:ok, dropped_count}}
 
   defp apply_partition_drop(state, partition, dropped_count) do
-    case state.archiver.drop_partition(partition.name) do
+    case state.partition_ops.drop_partition(partition.name) do
       :ok -> {:cont, {:ok, dropped_count + 1}}
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 
   defp next_partition_to_drop(state) do
-    partitions = state.archiver.list_monthly_partitions()
+    partitions = state.partition_ops.list_monthly_partitions()
     current_month_index = current_month_index(state.today_fun)
 
     month_limit_candidate =
@@ -114,7 +114,7 @@ defmodule Parrhesia.Tasks.PartitionRetentionWorker do
              partitions,
              state.max_db_gib,
              current_month_index,
-             state.archiver
+             state.partition_ops
            ) do
       {:ok, pick_oldest_partition(month_limit_candidate, size_limit_candidate)}
     end

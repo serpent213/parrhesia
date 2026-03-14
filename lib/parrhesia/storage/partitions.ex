@@ -1,6 +1,6 @@
-defmodule Parrhesia.Storage.Archiver do
+defmodule Parrhesia.Storage.Partitions do
   @moduledoc """
-  Partition-aware archival helpers for Postgres event partitions.
+  Partition lifecycle helpers for Postgres `events` and `event_tags` monthly partitions.
   """
 
   import Ecto.Query
@@ -108,17 +108,6 @@ defmodule Parrhesia.Storage.Archiver do
     else
       drop_partition_tables(partition_name)
     end
-  end
-
-  @doc """
-  Generates an archive SQL statement for the given partition.
-  """
-  @spec archive_sql(String.t(), String.t()) :: String.t()
-  def archive_sql(partition_name, archive_table_name) do
-    quoted_archive_table_name = quote_identifier!(archive_table_name)
-    quoted_partition_name = quote_identifier!(partition_name)
-
-    "INSERT INTO #{quoted_archive_table_name} SELECT * FROM #{quoted_partition_name};"
   end
 
   @doc """
