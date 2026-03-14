@@ -12,6 +12,8 @@ defmodule Parrhesia.Storage.Supervisor do
   @impl true
   def init(_init_arg) do
     children = [
+      {Parrhesia.Storage.Adapters.Postgres.ModerationCache,
+       name: Parrhesia.Storage.Adapters.Postgres.ModerationCache},
       Parrhesia.Repo
     ]
 

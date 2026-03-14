@@ -147,17 +147,23 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
   end
 
   defp exists_in_scope?(scope, value) do
+    {table, field} = cache_scope_source!(scope)
+
     if moderation_cache_enabled?() do
-      ensure_cache_scope_loaded(scope)
-      :ets.member(cache_table_ref(), cache_member_key(scope, value))
+      case cache_table_ref() do
+        :undefined ->
+          exists_in_table_db?(table, field, value)
+
+        cache_table ->
+          ensure_cache_scope_loaded(scope, cache_table)
+          :ets.member(cache_table, cache_member_key(scope, value))
+      end
     else
-      {table, field} = cache_scope_source!(scope)
       exists_in_table_db?(table, field, value)
     end
   end
 
-  defp ensure_cache_scope_loaded(scope) do
-    table = cache_table_ref()
+  defp ensure_cache_scope_loaded(scope, table) do
     loaded_key = cache_loaded_key(scope)
 
     if :ets.member(table, loaded_key) do
@@ -188,7 +194,10 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
 
   defp cache_put(scope, value) do
     if moderation_cache_enabled?() do
-      true = :ets.insert(cache_table_ref(), {cache_member_key(scope, value), true})
+      case cache_table_ref() do
+        :undefined -> :ok
+        cache_table -> true = :ets.insert(cache_table, {cache_member_key(scope, value), true})
+      end
     end
 
     :ok
@@ -196,7 +205,10 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
 
   defp cache_delete(scope, value) do
     if moderation_cache_enabled?() do
-      true = :ets.delete(cache_table_ref(), cache_member_key(scope, value))
+      case cache_table_ref() do
+        :undefined -> :ok
+        cache_table -> true = :ets.delete(cache_table, cache_member_key(scope, value))
+      end
     end
 
     :ok
@@ -210,23 +222,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
 
   defp cache_table_ref do
     case :ets.whereis(@cache_table) do
-      :undefined ->
-        try do
-          :ets.new(@cache_table, [
-            :named_table,
-            :set,
-            :public,
-            read_concurrency: true,
-            write_concurrency: true
-          ])
-        rescue
-          ArgumentError -> @cache_table
-        end
-
-        @cache_table
-
-      _table_ref ->
-        @cache_table
+      :undefined -> :undefined
+      _table_ref -> @cache_table
     end
   end
 

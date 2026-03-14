@@ -17,6 +17,12 @@ defmodule Parrhesia.Storage.ArchiverTest do
 
   test "archive_sql builds insert-select statement" do
     assert Archiver.archive_sql("events_2026_03", "events_archive") ==
-             "INSERT INTO events_archive SELECT * FROM events_2026_03;"
+             ~s(INSERT INTO "events_archive" SELECT * FROM "events_2026_03";)
+  end
+
+  test "archive_sql rejects invalid SQL identifiers" do
+    assert_raise ArgumentError, fn ->
+      Archiver.archive_sql("events_default; DROP TABLE events", "events_archive")
+    end
   end
 end

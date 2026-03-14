@@ -43,7 +43,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
 
     payload = JSON.encode!(["EVENT", group_event])
 
-    assert {:push, {:text, error_response}, ^state} =
+    assert {:push, {:text, error_response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(error_response) == ["OK", group_event["id"], false, "error: :db_down"]
@@ -54,7 +54,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
       previous_storage |> Keyword.put(:moderation, PermissiveModeration)
     )
 
-    assert {:push, {:text, ok_response}, ^state} =
+    assert {:push, {:text, ok_response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(ok_response) == ["OK", group_event["id"], true, "ok: event stored"]
@@ -87,7 +87,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
         "content" => Base.encode64("newer")
       })
 
-    assert {:push, {:text, outage_response}, ^state} =
+    assert {:push, {:text, outage_response}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", older_event]), [opcode: :text]},
                state
@@ -101,7 +101,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
       previous_storage |> Keyword.put(:moderation, PermissiveModeration)
     )
 
-    assert {:push, {:text, newer_response}, ^state} =
+    assert {:push, {:text, newer_response}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", newer_event]), [opcode: :text]},
                state
@@ -109,7 +109,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
 
     assert JSON.decode!(newer_response) == ["OK", newer_event["id"], true, "ok: event stored"]
 
-    assert {:push, {:text, older_response}, ^state} =
+    assert {:push, {:text, older_response}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", older_event]), [opcode: :text]},
                state

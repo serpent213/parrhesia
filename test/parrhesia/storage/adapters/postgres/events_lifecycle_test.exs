@@ -26,6 +26,31 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsLifecycleTest do
     assert {:ok, nil} = Events.get_event(%{}, target["id"])
   end
 
+  test "delete_by_request tombstones addressable targets referenced via a tags" do
+    author = String.duplicate("4", 64)
+
+    target =
+      event(%{
+        "pubkey" => author,
+        "kind" => 30_023,
+        "tags" => [["d", "topic"]],
+        "content" => "addressable-target"
+      })
+
+    assert {:ok, _event} = Events.put_event(%{}, target)
+
+    delete_request =
+      event(%{
+        "pubkey" => author,
+        "kind" => 5,
+        "tags" => [["a", "30023:#{author}:topic"]],
+        "content" => "delete-addressable"
+      })
+
+    assert {:ok, 1} = Events.delete_by_request(%{}, delete_request)
+    assert {:ok, nil} = Events.get_event(%{}, target["id"])
+  end
+
   test "vanish hard-deletes events authored by pubkey" do
     author = String.duplicate("3", 64)
 

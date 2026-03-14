@@ -114,13 +114,12 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
       total_count =
         filters
-        |> Enum.flat_map(fn filter ->
-          filter
-          |> event_id_query_for_filter(now, opts)
-          |> Repo.all()
+        |> event_id_union_query_for_filters(now, opts)
+        |> subquery()
+        |> then(fn union_query ->
+          from(event in union_query, select: count(event.id, :distinct))
         end)
-        |> MapSet.new()
-        |> MapSet.size()
+        |> Repo.one()
 
       {:ok, total_count}
     end
@@ -131,18 +130,83 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   @impl true
   def delete_by_request(_context, event) do
     with {:ok, deleter_pubkey} <- decode_hex(Map.get(event, "pubkey"), 32, :invalid_pubkey),
-         {:ok, delete_ids} <- extract_delete_event_ids(event) do
+         {:ok, delete_targets} <- extract_delete_targets(event) do
+      deleted_at = System.system_time(:second)
+
+      deleted_by_id_count =
+        delete_targets
+        |> Map.get(:event_ids, [])
+        |> delete_events_by_ids(deleter_pubkey, deleted_at)
+
+      deleted_by_coordinate_count =
+        delete_targets
+        |> Map.get(:coordinates, [])
+        |> delete_events_by_coordinates(deleter_pubkey, deleted_at)
+
+      {:ok, deleted_by_id_count + deleted_by_coordinate_count}
+    end
+  end
+
+  defp delete_events_by_ids([], _deleter_pubkey, _deleted_at), do: 0
+
+  defp delete_events_by_ids(delete_ids, deleter_pubkey, deleted_at) do
+    query =
+      from(stored_event in "events",
+        where:
+          stored_event.id in ^delete_ids and
+            stored_event.pubkey == ^deleter_pubkey and
+            is_nil(stored_event.deleted_at)
+      )
+
+    {count, _result} = Repo.update_all(query, set: [deleted_at: deleted_at])
+    count
+  end
+
+  defp delete_events_by_coordinates([], _deleter_pubkey, _deleted_at), do: 0
+
+  defp delete_events_by_coordinates(coordinates, deleter_pubkey, deleted_at) do
+    relevant_coordinates =
+      Enum.filter(coordinates, fn coordinate ->
+        coordinate.pubkey == deleter_pubkey and
+          (replaceable_kind?(coordinate.kind) or addressable_kind?(coordinate.kind))
+      end)
+
+    if relevant_coordinates == [] do
+      0
+    else
+      dynamic_conditions =
+        Enum.reduce(relevant_coordinates, dynamic(false), fn coordinate, acc ->
+          coordinate_condition =
+            coordinate_delete_condition(coordinate, deleter_pubkey)
+
+          dynamic([stored_event], ^acc or ^coordinate_condition)
+        end)
+
       query =
         from(stored_event in "events",
-          where:
-            stored_event.id in ^delete_ids and
-              stored_event.pubkey == ^deleter_pubkey and
-              is_nil(stored_event.deleted_at)
+          where: is_nil(stored_event.deleted_at)
         )
+        |> where(^dynamic_conditions)
 
-      deleted_at = System.system_time(:second)
       {count, _result} = Repo.update_all(query, set: [deleted_at: deleted_at])
-      {:ok, count}
+      count
+    end
+  end
+
+  defp coordinate_delete_condition(coordinate, deleter_pubkey) do
+    if addressable_kind?(coordinate.kind) do
+      dynamic(
+        [stored_event],
+        stored_event.kind == ^coordinate.kind and
+          stored_event.pubkey == ^deleter_pubkey and
+          stored_event.d_tag == ^coordinate.d_tag
+      )
+    else
+      dynamic(
+        [stored_event],
+        stored_event.kind == ^coordinate.kind and
+          stored_event.pubkey == ^deleter_pubkey
+      )
     end
   end
 
@@ -598,6 +662,20 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     |> maybe_restrict_giftwrap_access(filter, opts)
   end
 
+  defp event_id_union_query_for_filters([], now, _opts) do
+    from(event in "events",
+      where: event.created_at > ^now and event.created_at < ^now,
+      select: event.id
+    )
+  end
+
+  defp event_id_union_query_for_filters([first_filter | rest_filters], now, opts) do
+    Enum.reduce(rest_filters, event_id_query_for_filter(first_filter, now, opts), fn filter,
+                                                                                     acc ->
+      union_all(acc, ^event_id_query_for_filter(filter, now, opts))
+    end)
+  end
+
   defp maybe_filter_ids(query, nil), do: query
 
   defp maybe_filter_ids(query, ids) do
@@ -826,23 +904,69 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     end)
   end
 
-  defp extract_delete_event_ids(event) do
-    delete_ids =
-      event
-      |> Map.get("tags", [])
-      |> Enum.reduce([], fn
-        ["e", event_id | _rest], acc when is_binary(event_id) -> [event_id | acc]
-        _tag, acc -> acc
-      end)
-      |> Enum.uniq()
+  defp extract_delete_targets(event) do
+    with {:ok, targets} <- parse_delete_targets(Map.get(event, "tags", [])) do
+      event_ids = targets.event_ids |> Enum.uniq()
+      coordinates = targets.coordinates |> Enum.uniq()
 
-    if delete_ids == [] do
-      {:error, :no_delete_targets}
-    else
-      {:ok, Enum.map(delete_ids, &Base.decode16!(&1, case: :mixed))}
+      if event_ids == [] and coordinates == [] do
+        {:error, :no_delete_targets}
+      else
+        {:ok, %{event_ids: event_ids, coordinates: coordinates}}
+      end
     end
-  rescue
-    ArgumentError -> {:error, :invalid_delete_target}
+  end
+
+  defp parse_delete_targets(tags) when is_list(tags) do
+    Enum.reduce_while(tags, {:ok, %{event_ids: [], coordinates: []}}, fn tag, {:ok, acc} ->
+      case parse_delete_target(tag) do
+        {:ok, {:event_id, event_id}} ->
+          {:cont, {:ok, %{acc | event_ids: [event_id | acc.event_ids]}}}
+
+        {:ok, {:coordinate, coordinate}} ->
+          {:cont, {:ok, %{acc | coordinates: [coordinate | acc.coordinates]}}}
+
+        :ignore ->
+          {:cont, {:ok, acc}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp parse_delete_targets(_tags), do: {:error, :invalid_delete_target}
+
+  defp parse_delete_target(["e", event_id | _rest]) when is_binary(event_id) do
+    case decode_hex(event_id, 32, :invalid_delete_target) do
+      {:ok, decoded_event_id} -> {:ok, {:event_id, decoded_event_id}}
+      {:error, _reason} -> {:error, :invalid_delete_target}
+    end
+  end
+
+  defp parse_delete_target(["a", coordinate | _rest]) when is_binary(coordinate) do
+    case parse_address_coordinate(coordinate) do
+      {:ok, parsed_coordinate} -> {:ok, {:coordinate, parsed_coordinate}}
+      {:error, _reason} -> {:error, :invalid_delete_target}
+    end
+  end
+
+  defp parse_delete_target(_tag), do: :ignore
+
+  defp parse_address_coordinate(coordinate) do
+    case String.split(coordinate, ":", parts: 3) do
+      [kind_part, pubkey_hex, d_tag] ->
+        with {kind, ""} <- Integer.parse(kind_part),
+             true <- kind >= 0,
+             {:ok, pubkey} <- decode_hex(pubkey_hex, 32, :invalid_delete_target) do
+          {:ok, %{kind: kind, pubkey: pubkey, d_tag: d_tag}}
+        else
+          _other -> {:error, :invalid_delete_target}
+        end
+
+      _other ->
+        {:error, :invalid_delete_target}
+    end
   end
 
   defp extract_expiration(tags) do

@@ -29,7 +29,7 @@ defmodule Parrhesia.FaultInjectionTest do
     {:ok, state} = Connection.init(subscription_index: nil)
     event = valid_event()
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
 
     assert JSON.decode!(response) == ["OK", event["id"], false, "error: :db_down"]

@@ -227,37 +227,58 @@ defmodule Parrhesia.Web.Connection do
 
     case maybe_allow_event_ingest(state) do
       {:ok, next_state} ->
-        with :ok <- validate_event_payload_size(event, next_state.max_event_bytes),
-             :ok <- Protocol.validate_event(event),
-             :ok <- EventPolicy.authorize_write(event, next_state.authenticated_pubkeys),
-             :ok <- maybe_process_group_event(event),
-             {:ok, _result, message} <- persist_event(event) do
-          Telemetry.emit(
-            [:parrhesia, :ingest, :stop],
-            %{duration: System.monotonic_time() - started_at},
-            telemetry_metadata_for_event(event)
-          )
+        result =
+          with :ok <- validate_event_payload_size(event, next_state.max_event_bytes),
+               :ok <- Protocol.validate_event(event),
+               :ok <- EventPolicy.authorize_write(event, next_state.authenticated_pubkeys),
+               :ok <- maybe_process_group_event(event),
+               {:ok, _result, message} <- persist_event(event) do
+            {:ok, message}
+          end
 
-          send(self(), {@post_ack_ingest, event})
-
-          response = Protocol.encode_relay({:ok, event_id, true, message})
-          {:push, {:text, response}, next_state}
-        else
-          {:error, reason} ->
-            message = error_message_for_ingest_failure(reason)
-            response = Protocol.encode_relay({:ok, event_id, false, message})
-
-            if reason in [:auth_required, :protected_event_requires_auth] do
-              with_auth_challenge_frame(next_state, {:push, {:text, response}, next_state})
-            else
-              {:push, {:text, response}, next_state}
-            end
-        end
+        handle_event_ingest_result(result, next_state, event, event_id, started_at)
 
       {:error, reason} ->
-        message = error_message_for_ingest_failure(reason)
-        response = Protocol.encode_relay({:ok, event_id, false, message})
-        {:push, {:text, response}, state}
+        ingest_error_response(state, event_id, reason)
+    end
+  end
+
+  defp handle_event_ingest_result(
+         {:ok, message},
+         %__MODULE__{} = state,
+         event,
+         event_id,
+         started_at
+       ) do
+    Telemetry.emit(
+      [:parrhesia, :ingest, :stop],
+      %{duration: System.monotonic_time() - started_at},
+      telemetry_metadata_for_event(event)
+    )
+
+    send(self(), {@post_ack_ingest, event})
+
+    response = Protocol.encode_relay({:ok, event_id, true, message})
+    {:push, {:text, response}, state}
+  end
+
+  defp handle_event_ingest_result(
+         {:error, reason},
+         %__MODULE__{} = state,
+         _event,
+         event_id,
+         _started_at
+       ),
+       do: ingest_error_response(state, event_id, reason)
+
+  defp ingest_error_response(%__MODULE__{} = state, event_id, reason) do
+    message = error_message_for_ingest_failure(reason)
+    response = Protocol.encode_relay({:ok, event_id, false, message})
+
+    if reason in [:auth_required, :protected_event_requires_auth] do
+      with_auth_challenge_frame(state, {:push, {:text, response}, state})
+    else
+      {:push, {:text, response}, state}
     end
   end
 
@@ -468,28 +489,37 @@ defmodule Parrhesia.Web.Connection do
     kind = Map.get(event, "kind")
 
     cond do
-      kind == 5 ->
-        with {:ok, deleted_count} <- Storage.events().delete_by_request(%{}, event) do
-          {:ok, deleted_count, "ok: deletion request processed"}
-        end
+      kind in [5, 62] -> persist_control_event(kind, event)
+      ephemeral_kind?(kind) -> persist_ephemeral_event()
+      true -> persist_regular_event(event)
+    end
+  end
 
-      kind == 62 ->
-        with {:ok, deleted_count} <- Storage.events().vanish(%{}, event) do
-          {:ok, deleted_count, "ok: vanish request processed"}
-        end
+  defp persist_control_event(5, event) do
+    with {:ok, deleted_count} <- Storage.events().delete_by_request(%{}, event) do
+      {:ok, deleted_count, "ok: deletion request processed"}
+    end
+  end
 
-      ephemeral_kind?(kind) and accept_ephemeral_events?() ->
-        {:ok, :ephemeral, "ok: ephemeral event accepted"}
+  defp persist_control_event(62, event) do
+    with {:ok, deleted_count} <- Storage.events().vanish(%{}, event) do
+      {:ok, deleted_count, "ok: vanish request processed"}
+    end
+  end
 
-      ephemeral_kind?(kind) ->
-        {:error, :ephemeral_events_disabled}
+  defp persist_ephemeral_event do
+    if accept_ephemeral_events?() do
+      {:ok, :ephemeral, "ok: ephemeral event accepted"}
+    else
+      {:error, :ephemeral_events_disabled}
+    end
+  end
 
-      true ->
-        case Storage.events().put_event(%{}, event) do
-          {:ok, persisted_event} -> {:ok, persisted_event, "ok: event stored"}
-          {:error, :duplicate_event} -> {:error, :duplicate_event}
-          {:error, reason} -> {:error, reason}
-        end
+  defp persist_regular_event(event) do
+    case Storage.events().put_event(%{}, event) do
+      {:ok, persisted_event} -> {:ok, persisted_event, "ok: event stored"}
+      {:error, :duplicate_event} -> {:error, :duplicate_event}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -644,9 +674,8 @@ defmodule Parrhesia.Web.Connection do
       end)
 
     with :ok <- maybe_validate(challenge_tag?, :missing_challenge_tag),
-         :ok <- validate_auth_relay_tag(state, tags),
-         :ok <- validate_auth_created_at_freshness(auth_event, state.auth_max_age_seconds) do
-      :ok
+         :ok <- validate_auth_relay_tag(state, tags) do
+      validate_auth_created_at_freshness(auth_event, state.auth_max_age_seconds)
     end
   end
 

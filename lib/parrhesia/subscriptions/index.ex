@@ -11,6 +11,13 @@ defmodule Parrhesia.Subscriptions.Index do
   alias Parrhesia.Protocol.Filter
 
   @wildcard_key :all
+  @subscriptions_table_name :parrhesia_subscriptions_table
+  @kind_index_table_name :parrhesia_subscription_kind_index
+  @author_index_table_name :parrhesia_subscription_author_index
+  @tag_index_table_name :parrhesia_subscription_tag_index
+  @kind_wildcard_table_name :parrhesia_subscription_kind_wildcard_index
+  @author_wildcard_table_name :parrhesia_subscription_author_wildcard_index
+  @tag_wildcard_table_name :parrhesia_subscription_tag_wildcard_index
 
   @type subscription_id :: String.t()
   @type owner :: pid()
@@ -20,11 +27,12 @@ defmodule Parrhesia.Subscriptions.Index do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name)
+    init_arg = %{named_tables?: name == __MODULE__}
 
     if is_nil(name) do
-      GenServer.start_link(__MODULE__, :ok)
+      GenServer.start_link(__MODULE__, init_arg)
     else
-      GenServer.start_link(__MODULE__, :ok, name: name)
+      GenServer.start_link(__MODULE__, init_arg, name: name)
     end
   end
 
@@ -65,6 +73,13 @@ defmodule Parrhesia.Subscriptions.Index do
   end
 
   @spec candidate_subscription_keys(GenServer.server(), map()) :: [subscription_key()]
+  def candidate_subscription_keys(__MODULE__, event) do
+    case named_tables() do
+      {:ok, tables} -> candidate_subscription_keys_for_tables(tables, event)
+      :error -> GenServer.call(__MODULE__, {:candidate_subscription_keys, event})
+    end
+  end
+
   def candidate_subscription_keys(server, event) do
     GenServer.call(server, {:candidate_subscription_keys, event})
   end
@@ -76,20 +91,15 @@ defmodule Parrhesia.Subscriptions.Index do
   end
 
   @impl true
-  def init(:ok) do
+  def init(%{named_tables?: named_tables?}) do
+    tables = create_tables(named_tables?)
+
     {:ok,
-     %{
-       subscriptions_table: :ets.new(:subscriptions_table, [:set, :protected]),
-       kind_index_table: :ets.new(:subscription_kind_index, [:bag, :protected]),
-       author_index_table: :ets.new(:subscription_author_index, [:bag, :protected]),
-       tag_index_table: :ets.new(:subscription_tag_index, [:bag, :protected]),
-       kind_wildcard_table: :ets.new(:subscription_kind_wildcard_index, [:bag, :protected]),
-       author_wildcard_table: :ets.new(:subscription_author_wildcard_index, [:bag, :protected]),
-       tag_wildcard_table: :ets.new(:subscription_tag_wildcard_index, [:bag, :protected]),
+     Map.merge(tables, %{
        owner_subscriptions: %{},
        owner_monitors: %{},
        monitor_owners: %{}
-     }}
+     })}
   end
 
   @impl true
@@ -128,14 +138,7 @@ defmodule Parrhesia.Subscriptions.Index do
   end
 
   def handle_call({:candidate_subscription_keys, event}, _from, state) do
-    candidates =
-      state
-      |> kind_candidates(event)
-      |> MapSet.intersection(author_candidates(state, event))
-      |> MapSet.intersection(tag_candidates(state, event))
-      |> MapSet.to_list()
-
-    {:reply, candidates, state}
+    {:reply, candidate_subscription_keys_for_tables(state, event), state}
   end
 
   def handle_call({:fetch_filters, owner_pid, subscription_id}, _from, state) do
@@ -371,28 +374,110 @@ defmodule Parrhesia.Subscriptions.Index do
     |> update_in([:owner_subscriptions], &Map.delete(&1, owner_pid))
   end
 
-  defp kind_candidates(state, event) do
+  defp create_tables(true) do
+    %{
+      subscriptions_table:
+        :ets.new(@subscriptions_table_name, [
+          :set,
+          :protected,
+          :named_table,
+          read_concurrency: true
+        ]),
+      kind_index_table:
+        :ets.new(@kind_index_table_name, [:bag, :protected, :named_table, read_concurrency: true]),
+      author_index_table:
+        :ets.new(@author_index_table_name, [
+          :bag,
+          :protected,
+          :named_table,
+          read_concurrency: true
+        ]),
+      tag_index_table:
+        :ets.new(@tag_index_table_name, [:bag, :protected, :named_table, read_concurrency: true]),
+      kind_wildcard_table:
+        :ets.new(@kind_wildcard_table_name, [
+          :bag,
+          :protected,
+          :named_table,
+          read_concurrency: true
+        ]),
+      author_wildcard_table:
+        :ets.new(@author_wildcard_table_name, [
+          :bag,
+          :protected,
+          :named_table,
+          read_concurrency: true
+        ]),
+      tag_wildcard_table:
+        :ets.new(@tag_wildcard_table_name, [
+          :bag,
+          :protected,
+          :named_table,
+          read_concurrency: true
+        ])
+    }
+  end
+
+  defp create_tables(false) do
+    %{
+      subscriptions_table: :ets.new(:subscriptions_table, [:set, :protected]),
+      kind_index_table: :ets.new(:subscription_kind_index, [:bag, :protected]),
+      author_index_table: :ets.new(:subscription_author_index, [:bag, :protected]),
+      tag_index_table: :ets.new(:subscription_tag_index, [:bag, :protected]),
+      kind_wildcard_table: :ets.new(:subscription_kind_wildcard_index, [:bag, :protected]),
+      author_wildcard_table: :ets.new(:subscription_author_wildcard_index, [:bag, :protected]),
+      tag_wildcard_table: :ets.new(:subscription_tag_wildcard_index, [:bag, :protected])
+    }
+  end
+
+  defp named_tables do
+    tables = %{
+      subscriptions_table: :ets.whereis(@subscriptions_table_name),
+      kind_index_table: :ets.whereis(@kind_index_table_name),
+      author_index_table: :ets.whereis(@author_index_table_name),
+      tag_index_table: :ets.whereis(@tag_index_table_name),
+      kind_wildcard_table: :ets.whereis(@kind_wildcard_table_name),
+      author_wildcard_table: :ets.whereis(@author_wildcard_table_name),
+      tag_wildcard_table: :ets.whereis(@tag_wildcard_table_name)
+    }
+
+    if Enum.any?(tables, fn {_key, table_ref} -> table_ref == :undefined end) do
+      :error
+    else
+      {:ok, tables}
+    end
+  end
+
+  defp candidate_subscription_keys_for_tables(tables, event) do
+    tables
+    |> kind_candidates(event)
+    |> MapSet.intersection(author_candidates(tables, event))
+    |> MapSet.intersection(tag_candidates(tables, event))
+    |> MapSet.to_list()
+  end
+
+  defp kind_candidates(tables, event) do
     event
     |> Map.get("kind")
-    |> index_candidates_for_value(state.kind_index_table, state.kind_wildcard_table)
+    |> index_candidates_for_value(tables.kind_index_table, tables.kind_wildcard_table)
   end
 
-  defp author_candidates(state, event) do
+  defp author_candidates(tables, event) do
     event
     |> Map.get("pubkey")
-    |> index_candidates_for_value(state.author_index_table, state.author_wildcard_table)
+    |> index_candidates_for_value(tables.author_index_table, tables.author_wildcard_table)
   end
 
-  defp tag_candidates(state, event) do
+  defp tag_candidates(tables, event) do
     tag_pairs = event_tag_pairs(Map.get(event, "tags"))
-    wildcard_candidates = lookup_candidates(state.tag_wildcard_table, @wildcard_key)
+    wildcard_candidates = lookup_candidates(tables.tag_wildcard_table, @wildcard_key)
 
     if MapSet.size(tag_pairs) == 0 do
       wildcard_candidates
     else
       matched_candidates =
         Enum.reduce(tag_pairs, MapSet.new(), fn {tag_name, value}, acc ->
-          MapSet.union(acc, lookup_candidates(state.tag_index_table, {tag_name, value}))
+          MapSet.union(acc, lookup_candidates(tables.tag_index_table, {tag_name, value}))
         end)
 
       MapSet.union(matched_candidates, wildcard_candidates)
