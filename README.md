@@ -107,6 +107,7 @@ For runtime overrides, use the `PARRHESIA_...` prefix:
 - `PARRHESIA_LIMITS_*`
 - `PARRHESIA_POLICIES_*`
 - `PARRHESIA_METRICS_*`
+- `PARRHESIA_RETENTION_*`
 - `PARRHESIA_FEATURES_*`
 - `PARRHESIA_METRICS_ENDPOINT_*`
 
@@ -135,6 +136,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
 | `:policies` | `PARRHESIA_POLICIES_*` | see table below | Runtime override group |
 | `:metrics` | `PARRHESIA_METRICS_*` | see table below | Runtime override group |
+| `:retention` | `PARRHESIA_RETENTION_*` | see table below | Partition lifecycle and pruning policy |
 | `:features` | `PARRHESIA_FEATURES_*` | see table below | Runtime override group |
 | `:storage.events` | `-` | `Parrhesia.Storage.Adapters.Postgres.Events` | Config-file override only |
 | `:storage.moderation` | `-` | `Parrhesia.Storage.Adapters.Postgres.Moderation` | Config-file override only |
@@ -222,6 +224,16 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:private_networks_only` | `PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY` | `true` |
 | `:allowed_cidrs` | `PARRHESIA_METRICS_ALLOWED_CIDRS` | `[]` |
 | `:auth_token` | `PARRHESIA_METRICS_AUTH_TOKEN` | `nil` |
+
+#### `:retention`
+
+| Atom key | ENV | Default | Notes |
+| --- | --- | --- | --- |
+| `:check_interval_hours` | `PARRHESIA_RETENTION_CHECK_INTERVAL_HOURS` | `24` | Partition maintenance + pruning cadence |
+| `:months_ahead` | `PARRHESIA_RETENTION_MONTHS_AHEAD` | `2` | Pre-create current month plus N future monthly partitions |
+| `:max_db_bytes` | `PARRHESIA_RETENTION_MAX_DB_BYTES` | `:infinity` | Interpreted as GiB threshold; accepts integer or `infinity` |
+| `:max_months_to_keep` | `PARRHESIA_RETENTION_MAX_MONTHS_TO_KEEP` | `:infinity` | Keep at most N months (including current month); accepts integer or `infinity` |
+| `:max_partitions_to_drop_per_run` | `PARRHESIA_RETENTION_MAX_PARTITIONS_TO_DROP_PER_RUN` | `1` | Safety cap for each maintenance run |
 
 #### `:features`
 

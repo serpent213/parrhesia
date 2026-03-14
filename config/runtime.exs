@@ -48,6 +48,22 @@ csv_env = fn name, default ->
   end
 end
 
+infinity_or_int_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      normalized = value |> String.trim() |> String.downcase()
+
+      if normalized == "infinity" do
+        :infinity
+      else
+        String.to_integer(value)
+      end
+  end
+end
+
 outbound_overflow_strategy_env = fn name, default ->
   case System.get_env(name) do
     nil ->
@@ -106,6 +122,7 @@ if config_env() == :prod do
   limits_defaults = Application.get_env(:parrhesia, :limits, [])
   policies_defaults = Application.get_env(:parrhesia, :policies, [])
   metrics_defaults = Application.get_env(:parrhesia, :metrics, [])
+  retention_defaults = Application.get_env(:parrhesia, :retention, [])
   features_defaults = Application.get_env(:parrhesia, :features, [])
   metrics_endpoint_defaults = Application.get_env(:parrhesia, Parrhesia.Web.MetricsEndpoint, [])
 
@@ -341,6 +358,34 @@ if config_env() == :prod do
       )
   ]
 
+  retention = [
+    check_interval_hours:
+      int_env.(
+        "PARRHESIA_RETENTION_CHECK_INTERVAL_HOURS",
+        Keyword.get(retention_defaults, :check_interval_hours, 24)
+      ),
+    months_ahead:
+      int_env.(
+        "PARRHESIA_RETENTION_MONTHS_AHEAD",
+        Keyword.get(retention_defaults, :months_ahead, 2)
+      ),
+    max_db_bytes:
+      infinity_or_int_env.(
+        "PARRHESIA_RETENTION_MAX_DB_BYTES",
+        Keyword.get(retention_defaults, :max_db_bytes, :infinity)
+      ),
+    max_months_to_keep:
+      infinity_or_int_env.(
+        "PARRHESIA_RETENTION_MAX_MONTHS_TO_KEEP",
+        Keyword.get(retention_defaults, :max_months_to_keep, :infinity)
+      ),
+    max_partitions_to_drop_per_run:
+      int_env.(
+        "PARRHESIA_RETENTION_MAX_PARTITIONS_TO_DROP_PER_RUN",
+        Keyword.get(retention_defaults, :max_partitions_to_drop_per_run, 1)
+      )
+  ]
+
   features = [
     verify_event_signatures:
       bool_env.(
@@ -403,6 +448,7 @@ if config_env() == :prod do
     limits: limits,
     policies: policies,
     metrics: metrics,
+    retention: retention,
     features: features
 
   case System.get_env("PARRHESIA_EXTRA_CONFIG") do

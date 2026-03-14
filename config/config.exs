@@ -54,6 +54,13 @@ config :parrhesia,
     allowed_cidrs: [],
     auth_token: nil
   ],
+  retention: [
+    check_interval_hours: 24,
+    months_ahead: 2,
+    max_db_bytes: :infinity,
+    max_months_to_keep: :infinity,
+    max_partitions_to_drop_per_run: 1
+  ],
   features: [
     verify_event_signatures: true,
     nip_45_count: true,
