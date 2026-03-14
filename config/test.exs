@@ -14,7 +14,8 @@ config :parrhesia, Parrhesia.Web.Endpoint,
 
 config :parrhesia,
   enable_expiration_worker: false,
-  moderation_cache_enabled: false
+  moderation_cache_enabled: false,
+  features: [verify_event_signatures: false]
 
 pg_host = System.get_env("PGHOST")
 

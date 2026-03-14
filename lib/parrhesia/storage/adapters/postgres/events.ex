@@ -56,6 +56,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
             pubkey: event.pubkey,
             created_at: event.created_at,
             kind: event.kind,
+            tags: event.tags,
             content: event.content,
             sig: event.sig
           }
@@ -66,13 +67,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
           {:ok, nil}
 
         persisted_event ->
-          tags = load_tags([{persisted_event.created_at, persisted_event.id}])
-
-          {:ok,
-           to_nostr_event(
-             persisted_event,
-             Map.get(tags, {persisted_event.created_at, persisted_event.id}, [])
-           )}
+          {:ok, to_nostr_event(persisted_event)}
       end
     end
   end
@@ -93,15 +88,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
         |> sort_persisted_events()
         |> maybe_apply_query_limit(opts)
 
-      event_keys = Enum.map(persisted_events, fn event -> {event.created_at, event.id} end)
-      tags_by_event = load_tags(event_keys)
-
-      nostr_events =
-        Enum.map(persisted_events, fn event ->
-          to_nostr_event(event, Map.get(tags_by_event, {event.created_at, event.id}, []))
-        end)
-
-      {:ok, nostr_events}
+      {:ok, Enum.map(persisted_events, &to_nostr_event/1)}
     end
   end
 
@@ -609,6 +596,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
       pubkey: normalized_event.pubkey,
       created_at: normalized_event.created_at,
       kind: normalized_event.kind,
+      tags: normalized_event.tags,
       content: normalized_event.content,
       sig: normalized_event.sig,
       d_tag: normalized_event.d_tag,
@@ -628,6 +616,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
           pubkey: event.pubkey,
           created_at: event.created_at,
           kind: event.kind,
+          tags: event.tags,
           content: event.content,
           sig: event.sig
         }
@@ -820,43 +809,20 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     end
   end
 
-  defp load_tags([]), do: %{}
-
-  defp load_tags(event_keys) when is_list(event_keys) do
-    created_at_values = Enum.map(event_keys, fn {created_at, _event_id} -> created_at end)
-    event_id_values = Enum.map(event_keys, fn {_created_at, event_id} -> event_id end)
-
-    query =
-      from(tag in "event_tags",
-        where: tag.event_created_at in ^created_at_values and tag.event_id in ^event_id_values,
-        order_by: [asc: tag.idx],
-        select: %{
-          event_created_at: tag.event_created_at,
-          event_id: tag.event_id,
-          name: tag.name,
-          value: tag.value
-        }
-      )
-
-    query
-    |> Repo.all()
-    |> Enum.group_by(
-      fn tag -> {tag.event_created_at, tag.event_id} end,
-      fn tag -> [tag.name, tag.value] end
-    )
-  end
-
-  defp to_nostr_event(persisted_event, tags) do
+  defp to_nostr_event(persisted_event) do
     %{
       "id" => Base.encode16(persisted_event.id, case: :lower),
       "pubkey" => Base.encode16(persisted_event.pubkey, case: :lower),
       "created_at" => persisted_event.created_at,
       "kind" => persisted_event.kind,
-      "tags" => tags,
+      "tags" => normalize_persisted_tags(persisted_event.tags),
       "content" => persisted_event.content,
       "sig" => Base.encode16(persisted_event.sig, case: :lower)
     }
   end
+
+  defp normalize_persisted_tags(tags) when is_list(tags), do: tags
+  defp normalize_persisted_tags(_tags), do: []
 
   defp decode_hex(value, bytes, reason) when is_binary(value) do
     if byte_size(value) == bytes * 2 do

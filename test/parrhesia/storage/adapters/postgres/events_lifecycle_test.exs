@@ -11,6 +11,24 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsLifecycleTest do
     :ok
   end
 
+  test "event tags round-trip without truncation" do
+    tagged_event =
+      event(%{
+        "kind" => 1,
+        "tags" => [
+          ["e", String.duplicate("a", 64), "wss://relay.example", "reply"],
+          ["-"],
+          ["p", String.duplicate("b", 64), "wss://hint.example"]
+        ],
+        "content" => "tag-roundtrip"
+      })
+
+    assert {:ok, _event} = Events.put_event(%{}, tagged_event)
+    assert {:ok, persisted_tagged_event} = Events.get_event(%{}, tagged_event["id"])
+
+    assert persisted_tagged_event["tags"] == tagged_event["tags"]
+  end
+
   test "delete_by_request tombstones owned target events" do
     target = event(%{"kind" => 1, "content" => "target"})
     assert {:ok, _event} = Events.put_event(%{}, target)

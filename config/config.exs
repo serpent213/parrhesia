@@ -43,6 +43,7 @@ config :parrhesia,
     management_auth_required: true
   ],
   features: [
+    verify_event_signatures: true,
     nip_45_count: true,
     nip_50_search: true,
     nip_77_negentropy: true,

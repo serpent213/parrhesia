@@ -21,6 +21,7 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :invalid_content
           | :invalid_sig
           | :invalid_id_hash
+          | :invalid_signature
           | :invalid_marmot_keypackage_content
           | :missing_marmot_encoding_tag
           | :invalid_marmot_encoding_tag
@@ -54,7 +55,8 @@ defmodule Parrhesia.Protocol.EventValidator do
          :ok <- validate_tags(event["tags"]),
          :ok <- validate_content(event["content"]),
          :ok <- validate_sig(event["sig"]),
-         :ok <- validate_id_hash(event) do
+         :ok <- validate_id_hash(event),
+         :ok <- validate_signature(event) do
       validate_kind_specific(event)
     end
   end
@@ -89,6 +91,7 @@ defmodule Parrhesia.Protocol.EventValidator do
     invalid_content: "invalid: content must be a string",
     invalid_sig: "invalid: sig must be 64-byte lowercase hex",
     invalid_id_hash: "invalid: event id does not match serialized event",
+    invalid_signature: "invalid: event signature is invalid",
     invalid_marmot_keypackage_content: "invalid: kind 443 content must be non-empty base64",
     missing_marmot_encoding_tag: "invalid: kind 443 must include [\"encoding\", \"base64\"]",
     invalid_marmot_encoding_tag: "invalid: kind 443 must include [\"encoding\", \"base64\"]",
@@ -192,6 +195,29 @@ defmodule Parrhesia.Protocol.EventValidator do
       {:error, :invalid_id_hash}
     end
   end
+
+  defp validate_signature(event) do
+    if verify_event_signatures?() do
+      verify_signature(event)
+    else
+      :ok
+    end
+  end
+
+  defp verify_signature(%{"id" => id, "pubkey" => pubkey, "sig" => sig}) do
+    with {:ok, id_bin} <- Base.decode16(id, case: :lower),
+         {:ok, pubkey_bin} <- Base.decode16(pubkey, case: :lower),
+         {:ok, sig_bin} <- Base.decode16(sig, case: :lower),
+         true <- Secp256k1.schnorr_valid?(sig_bin, id_bin, pubkey_bin) do
+      :ok
+    else
+      _other -> {:error, :invalid_signature}
+    end
+  rescue
+    _error -> {:error, :invalid_signature}
+  end
+
+  defp verify_signature(_event), do: {:error, :invalid_signature}
 
   defp valid_tag?(tag) when is_list(tag) do
     tag != [] and Enum.all?(tag, &is_binary/1)
@@ -471,6 +497,12 @@ defmodule Parrhesia.Protocol.EventValidator do
   defp lowercase_hex?(value, bytes) do
     byte_size(value) == bytes * 2 and
       match?({:ok, _decoded}, Base.decode16(value, case: :lower))
+  end
+
+  defp verify_event_signatures? do
+    :parrhesia
+    |> Application.get_env(:features, [])
+    |> Keyword.get(:verify_event_signatures, true)
   end
 
   defp max_event_future_skew_seconds do
