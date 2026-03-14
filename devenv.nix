@@ -75,27 +75,30 @@ in {
       });
     nostr-bench = pkgs.callPackage ./nix/nostr-bench.nix {};
   in
-    with pkgs; [
-      just
-      git
-      # Nix code formatter
-      alejandra
-      # i18n
-      icu
-      # PostgreSQL client utilities
-      postgresql
-      # image processing library
-      vips-mozjpeg
-      # Mermaid diagram generator
-      mermaid-cli
-      # Nostr CLI client
-      nak
-      # Nostr relay benchmark client
-      nostr-bench
-      # Nostr reference servers
-      nostr-rs-relay
-      strfry
-    ];
+    with pkgs;
+      [
+        just
+        git
+        # Nix code formatter
+        alejandra
+        # i18n
+        icu
+        # PostgreSQL client utilities
+        postgresql
+        # image processing library
+        vips-mozjpeg
+        # Mermaid diagram generator
+        mermaid-cli
+        # Nostr CLI client
+        nak
+        # Nostr relay benchmark client
+        nostr-bench
+        # Nostr reference servers
+        nostr-rs-relay
+      ]
+      ++ lib.optionals pkgs.stdenv.hostPlatform.isx86_64 [
+        strfry
+      ];
 
   # https://devenv.sh/tests/
   # enterTest = ''
@@ -146,7 +149,7 @@ in {
 
       DROP database template1;
 
-      CREATE DATABASE template1 WITH OWNER = agent
+      CREATE DATABASE template1
         ENCODING = 'UTF8'
         TABLESPACE = pg_default
         LC_COLLATE = 'de_DE.UTF-8'

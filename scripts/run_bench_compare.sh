@@ -11,8 +11,8 @@ usage:
 
 Runs the same nostr-bench suite against:
   1) Parrhesia (temporary prod relay via run_e2e_suite.sh)
-  2) strfry (ephemeral instance)
-  3) nostr-rs-relay (ephemeral sqlite instance)
+  2) strfry (ephemeral instance)         — optional, skipped if not in PATH
+  3) nostr-rs-relay (ephemeral sqlite instance) — optional, skipped if not in PATH
 
 Environment:
   PARRHESIA_BENCH_RUNS               Number of comparison runs (default: 2)
@@ -50,19 +50,28 @@ if ! command -v nostr-bench >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v strfry >/dev/null 2>&1; then
-  echo "strfry not found in PATH. Enter devenv shell first." >&2
-  exit 1
+# port_listening PORT — cross-platform check (Darwin: lsof, Linux: ss)
+port_listening() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn | grep -q ":${port} "
+  else
+    lsof -iTCP:"${port}" -sTCP:LISTEN -P -n >/dev/null 2>&1
+  fi
+}
+
+HAS_STRFRY=0
+if command -v strfry >/dev/null 2>&1; then
+  HAS_STRFRY=1
+else
+  echo "strfry not found in PATH — skipping strfry benchmarks"
 fi
 
-if ! command -v nostr-rs-relay >/dev/null 2>&1; then
-  echo "nostr-rs-relay not found in PATH. Enter devenv shell first." >&2
-  exit 1
-fi
-
-if ! command -v ss >/dev/null 2>&1; then
-  echo "ss command not found; cannot detect strfry readiness." >&2
-  exit 1
+HAS_NOSTR_RS=0
+if command -v nostr-rs-relay >/dev/null 2>&1; then
+  HAS_NOSTR_RS=1
+else
+  echo "nostr-rs-relay not found in PATH — skipping nostr-rs-relay benchmarks"
 fi
 
 RUNS="${PARRHESIA_BENCH_RUNS:-2}"
@@ -98,8 +107,16 @@ resolve_strfry_version() {
   printf '%s\n' "$cli_version"
 }
 
-STRFRY_VERSION="$(resolve_strfry_version)"
-NOSTR_RS_RELAY_VERSION="$(nostr-rs-relay --version 2>/dev/null | head -n 1 | tr -d '\r')"
+STRFRY_VERSION=""
+if (( HAS_STRFRY )); then
+  STRFRY_VERSION="$(resolve_strfry_version)"
+fi
+
+NOSTR_RS_RELAY_VERSION=""
+if (( HAS_NOSTR_RS )); then
+  NOSTR_RS_RELAY_VERSION="$(nostr-rs-relay --version 2>/dev/null | head -n 1 | tr -d '\r')"
+fi
+
 NOSTR_BENCH_VERSION="$(nostr-bench --version 2>/dev/null | head -n 1 | tr -d '\r')"
 
 export PARRHESIA_BENCH_CONNECT_COUNT="${PARRHESIA_BENCH_CONNECT_COUNT:-200}"
@@ -158,7 +175,7 @@ EOF
   STRFRY_PID=$!
 
   for _ in {1..100}; do
-    if ss -ltn | grep -q ":${port} "; then
+    if port_listening "${port}"; then
       return 0
     fi
     sleep 0.1
@@ -198,7 +215,7 @@ EOF
   NOSTR_RS_PID=$!
 
   for _ in {1..100}; do
-    if ss -ltn | grep -q ":${port} "; then
+    if port_listening "${port}"; then
       return 0
     fi
     sleep 0.1
@@ -220,8 +237,12 @@ stop_nostr_rs_relay() {
 echo "Running ${RUNS} comparison run(s)..."
 echo "Versions:"
 echo "  parrhesia ${PARRHESIA_VERSION}"
-echo "  ${STRFRY_VERSION}"
-echo "  ${NOSTR_RS_RELAY_VERSION}"
+if (( HAS_STRFRY )); then
+  echo "  ${STRFRY_VERSION}"
+fi
+if (( HAS_NOSTR_RS )); then
+  echo "  ${NOSTR_RS_RELAY_VERSION}"
+fi
 echo "  ${NOSTR_BENCH_VERSION}"
 echo
 
@@ -234,42 +255,48 @@ for run in $(seq 1 "$RUNS"); do
     exit 1
   fi
 
-  echo "[run ${run}/${RUNS}] strfry"
-  strfry_log="$WORK_DIR/strfry_${run}.log"
-  strfry_port=$((49000 + run))
+  if (( HAS_STRFRY )); then
+    echo "[run ${run}/${RUNS}] strfry"
+    strfry_log="$WORK_DIR/strfry_${run}.log"
+    strfry_port=$((49000 + run))
 
-  start_strfry "$run" "$strfry_port"
-  if ! STRFRY_BENCH_RELAY_URL="ws://127.0.0.1:${strfry_port}" ./scripts/run_nostr_bench_strfry.sh all >"$strfry_log" 2>&1; then
-    echo "strfry benchmark failed. Log: $strfry_log" >&2
-    tail -n 120 "$strfry_log" >&2 || true
+    start_strfry "$run" "$strfry_port"
+    if ! STRFRY_BENCH_RELAY_URL="ws://127.0.0.1:${strfry_port}" ./scripts/run_nostr_bench_strfry.sh all >"$strfry_log" 2>&1; then
+      echo "strfry benchmark failed. Log: $strfry_log" >&2
+      tail -n 120 "$strfry_log" >&2 || true
+      stop_strfry
+      exit 1
+    fi
     stop_strfry
-    exit 1
   fi
-  stop_strfry
 
-  echo "[run ${run}/${RUNS}] nostr-rs-relay"
-  nostr_rs_log="$WORK_DIR/nostr_rs_relay_${run}.log"
-  nostr_rs_port=$((50000 + run))
+  if (( HAS_NOSTR_RS )); then
+    echo "[run ${run}/${RUNS}] nostr-rs-relay"
+    nostr_rs_log="$WORK_DIR/nostr_rs_relay_${run}.log"
+    nostr_rs_port=$((50000 + run))
 
-  start_nostr_rs_relay "$run" "$nostr_rs_port"
-  if ! NOSTR_RS_BENCH_RELAY_URL="ws://127.0.0.1:${nostr_rs_port}" ./scripts/run_nostr_bench_nostr_rs_relay.sh all >"$nostr_rs_log" 2>&1; then
-    echo "nostr-rs-relay benchmark failed. Log: $nostr_rs_log" >&2
-    tail -n 120 "$nostr_rs_log" >&2 || true
+    start_nostr_rs_relay "$run" "$nostr_rs_port"
+    if ! NOSTR_RS_BENCH_RELAY_URL="ws://127.0.0.1:${nostr_rs_port}" ./scripts/run_nostr_bench_nostr_rs_relay.sh all >"$nostr_rs_log" 2>&1; then
+      echo "nostr-rs-relay benchmark failed. Log: $nostr_rs_log" >&2
+      tail -n 120 "$nostr_rs_log" >&2 || true
+      stop_nostr_rs_relay
+      exit 1
+    fi
     stop_nostr_rs_relay
-    exit 1
   fi
-  stop_nostr_rs_relay
 
   echo
 
 done
 
-node - "$WORK_DIR" "$RUNS" <<'NODE'
+node - "$WORK_DIR" "$RUNS" "$HAS_STRFRY" "$HAS_NOSTR_RS" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
 const workDir = process.argv[2];
 const runs = Number(process.argv[3]);
+const hasStrfry = process.argv[4] === "1";
+const hasNostrRs = process.argv[5] === "1";
 
 function parseLog(filePath) {
   const content = fs.readFileSync(filePath, "utf8");
@@ -337,124 +364,61 @@ function loadRuns(prefix) {
 }
 
 const parrhesiaRuns = loadRuns("parrhesia");
-const strfryRuns = loadRuns("strfry");
-const nostrRsRuns = loadRuns("nostr_rs_relay");
+const strfryRuns = hasStrfry ? loadRuns("strfry") : [];
+const nostrRsRuns = hasNostrRs ? loadRuns("nostr_rs_relay") : [];
 
-const summary = {
-  parrhesia: {
-    connectAvgMs: mean(parrhesiaRuns.map((m) => m.connectAvgMs)),
-    connectMaxMs: mean(parrhesiaRuns.map((m) => m.connectMaxMs)),
-    echoTps: mean(parrhesiaRuns.map((m) => m.echoTps)),
-    echoSizeMiBS: mean(parrhesiaRuns.map((m) => m.echoSizeMiBS)),
-    eventTps: mean(parrhesiaRuns.map((m) => m.eventTps)),
-    eventSizeMiBS: mean(parrhesiaRuns.map((m) => m.eventSizeMiBS)),
-    reqTps: mean(parrhesiaRuns.map((m) => m.reqTps)),
-    reqSizeMiBS: mean(parrhesiaRuns.map((m) => m.reqSizeMiBS)),
-  },
-  strfry: {
-    connectAvgMs: mean(strfryRuns.map((m) => m.connectAvgMs)),
-    connectMaxMs: mean(strfryRuns.map((m) => m.connectMaxMs)),
-    echoTps: mean(strfryRuns.map((m) => m.echoTps)),
-    echoSizeMiBS: mean(strfryRuns.map((m) => m.echoSizeMiBS)),
-    eventTps: mean(strfryRuns.map((m) => m.eventTps)),
-    eventSizeMiBS: mean(strfryRuns.map((m) => m.eventSizeMiBS)),
-    reqTps: mean(strfryRuns.map((m) => m.reqTps)),
-    reqSizeMiBS: mean(strfryRuns.map((m) => m.reqSizeMiBS)),
-  },
-  nostrRsRelay: {
-    connectAvgMs: mean(nostrRsRuns.map((m) => m.connectAvgMs)),
-    connectMaxMs: mean(nostrRsRuns.map((m) => m.connectMaxMs)),
-    echoTps: mean(nostrRsRuns.map((m) => m.echoTps)),
-    echoSizeMiBS: mean(nostrRsRuns.map((m) => m.echoSizeMiBS)),
-    eventTps: mean(nostrRsRuns.map((m) => m.eventTps)),
-    eventSizeMiBS: mean(nostrRsRuns.map((m) => m.eventSizeMiBS)),
-    reqTps: mean(nostrRsRuns.map((m) => m.reqTps)),
-    reqSizeMiBS: mean(nostrRsRuns.map((m) => m.reqSizeMiBS)),
-  },
-};
+const metrics = [
+  "connectAvgMs", "connectMaxMs",
+  "echoTps", "echoSizeMiBS",
+  "eventTps", "eventSizeMiBS",
+  "reqTps", "reqSizeMiBS",
+];
+
+function summarise(allRuns) {
+  const out = {};
+  for (const m of metrics) {
+    out[m] = mean(allRuns.map((r) => r[m]));
+  }
+  return out;
+}
+
+const summary = { parrhesia: summarise(parrhesiaRuns) };
+if (hasStrfry) summary.strfry = summarise(strfryRuns);
+if (hasNostrRs) summary.nostrRsRelay = summarise(nostrRsRuns);
 
 function ratioVsParrhesia(serverKey, metric) {
   const p = summary.parrhesia[metric];
-  const other = summary[serverKey][metric];
+  const other = summary[serverKey]?.[metric];
   if (!Number.isFinite(p) || !Number.isFinite(other) || p === 0) return "n/a";
   return `${(other / p).toFixed(2)}x`;
 }
 
-const rows = [
-  [
-    "connect avg latency (ms) ↓",
-    toFixed(summary.parrhesia.connectAvgMs),
-    toFixed(summary.strfry.connectAvgMs),
-    toFixed(summary.nostrRsRelay.connectAvgMs),
-    ratioVsParrhesia("strfry", "connectAvgMs"),
-    ratioVsParrhesia("nostrRsRelay", "connectAvgMs"),
-  ],
-  [
-    "connect max latency (ms) ↓",
-    toFixed(summary.parrhesia.connectMaxMs),
-    toFixed(summary.strfry.connectMaxMs),
-    toFixed(summary.nostrRsRelay.connectMaxMs),
-    ratioVsParrhesia("strfry", "connectMaxMs"),
-    ratioVsParrhesia("nostrRsRelay", "connectMaxMs"),
-  ],
-  [
-    "echo throughput (TPS) ↑",
-    toFixed(summary.parrhesia.echoTps),
-    toFixed(summary.strfry.echoTps),
-    toFixed(summary.nostrRsRelay.echoTps),
-    ratioVsParrhesia("strfry", "echoTps"),
-    ratioVsParrhesia("nostrRsRelay", "echoTps"),
-  ],
-  [
-    "echo throughput (MiB/s) ↑",
-    toFixed(summary.parrhesia.echoSizeMiBS),
-    toFixed(summary.strfry.echoSizeMiBS),
-    toFixed(summary.nostrRsRelay.echoSizeMiBS),
-    ratioVsParrhesia("strfry", "echoSizeMiBS"),
-    ratioVsParrhesia("nostrRsRelay", "echoSizeMiBS"),
-  ],
-  [
-    "event throughput (TPS) ↑",
-    toFixed(summary.parrhesia.eventTps),
-    toFixed(summary.strfry.eventTps),
-    toFixed(summary.nostrRsRelay.eventTps),
-    ratioVsParrhesia("strfry", "eventTps"),
-    ratioVsParrhesia("nostrRsRelay", "eventTps"),
-  ],
-  [
-    "event throughput (MiB/s) ↑",
-    toFixed(summary.parrhesia.eventSizeMiBS),
-    toFixed(summary.strfry.eventSizeMiBS),
-    toFixed(summary.nostrRsRelay.eventSizeMiBS),
-    ratioVsParrhesia("strfry", "eventSizeMiBS"),
-    ratioVsParrhesia("nostrRsRelay", "eventSizeMiBS"),
-  ],
-  [
-    "req throughput (TPS) ↑",
-    toFixed(summary.parrhesia.reqTps),
-    toFixed(summary.strfry.reqTps),
-    toFixed(summary.nostrRsRelay.reqTps),
-    ratioVsParrhesia("strfry", "reqTps"),
-    ratioVsParrhesia("nostrRsRelay", "reqTps"),
-  ],
-  [
-    "req throughput (MiB/s) ↑",
-    toFixed(summary.parrhesia.reqSizeMiBS),
-    toFixed(summary.strfry.reqSizeMiBS),
-    toFixed(summary.nostrRsRelay.reqSizeMiBS),
-    ratioVsParrhesia("strfry", "reqSizeMiBS"),
-    ratioVsParrhesia("nostrRsRelay", "reqSizeMiBS"),
-  ],
+const metricLabels = [
+  ["connect avg latency (ms) ↓", "connectAvgMs"],
+  ["connect max latency (ms) ↓", "connectMaxMs"],
+  ["echo throughput (TPS) ↑", "echoTps"],
+  ["echo throughput (MiB/s) ↑", "echoSizeMiBS"],
+  ["event throughput (TPS) ↑", "eventTps"],
+  ["event throughput (MiB/s) ↑", "eventSizeMiBS"],
+  ["req throughput (TPS) ↑", "reqTps"],
+  ["req throughput (MiB/s) ↑", "reqSizeMiBS"],
 ];
 
-const headers = [
-  "metric",
-  "parrhesia",
-  "strfry",
-  "nostr-rs-relay",
-  "strfry/parrhesia",
-  "nostr-rs/parrhesia",
-];
+const headers = ["metric", "parrhesia"];
+if (hasStrfry) headers.push("strfry");
+if (hasNostrRs) headers.push("nostr-rs-relay");
+if (hasStrfry) headers.push("strfry/parrhesia");
+if (hasNostrRs) headers.push("nostr-rs/parrhesia");
+
+const rows = metricLabels.map(([label, key]) => {
+  const row = [label, toFixed(summary.parrhesia[key])];
+  if (hasStrfry) row.push(toFixed(summary.strfry[key]));
+  if (hasNostrRs) row.push(toFixed(summary.nostrRsRelay[key]));
+  if (hasStrfry) row.push(ratioVsParrhesia("strfry", key));
+  if (hasNostrRs) row.push(ratioVsParrhesia("nostrRsRelay", key));
+  return row;
+});
+
 const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
 
 function fmtRow(cols) {
@@ -471,18 +435,25 @@ for (const row of rows) {
 }
 
 console.log("\nLegend: ↑ higher is better, ↓ lower is better.");
-console.log("Ratio columns are server/parrhesia (for ↓ metrics, <1.00x means that server is faster).\n");
+if (hasStrfry || hasNostrRs) {
+  console.log("Ratio columns are server/parrhesia (for ↓ metrics, <1.00x means that server is faster).\n");
+} else {
+  console.log("");
+}
 
 console.log("Run details:");
 for (let i = 0; i < runs; i += 1) {
   const p = parrhesiaRuns[i];
-  const s = strfryRuns[i];
-  const n = nostrRsRuns[i];
-  console.log(
-    `  run ${i + 1}: ` +
-      `parrhesia(echo_tps=${toFixed(p.echoTps, 0)}, event_tps=${toFixed(p.eventTps, 0)}, req_tps=${toFixed(p.reqTps, 0)}, connect_avg_ms=${toFixed(p.connectAvgMs, 0)}) | ` +
-      `strfry(echo_tps=${toFixed(s.echoTps, 0)}, event_tps=${toFixed(s.eventTps, 0)}, req_tps=${toFixed(s.reqTps, 0)}, connect_avg_ms=${toFixed(s.connectAvgMs, 0)}) | ` +
-      `nostr-rs-relay(echo_tps=${toFixed(n.echoTps, 0)}, event_tps=${toFixed(n.eventTps, 0)}, req_tps=${toFixed(n.reqTps, 0)}, connect_avg_ms=${toFixed(n.connectAvgMs, 0)})`
-  );
+  let line = `  run ${i + 1}: ` +
+    `parrhesia(echo_tps=${toFixed(p.echoTps, 0)}, event_tps=${toFixed(p.eventTps, 0)}, req_tps=${toFixed(p.reqTps, 0)}, connect_avg_ms=${toFixed(p.connectAvgMs, 0)})`;
+  if (hasStrfry) {
+    const s = strfryRuns[i];
+    line += ` | strfry(echo_tps=${toFixed(s.echoTps, 0)}, event_tps=${toFixed(s.eventTps, 0)}, req_tps=${toFixed(s.reqTps, 0)}, connect_avg_ms=${toFixed(s.connectAvgMs, 0)})`;
+  }
+  if (hasNostrRs) {
+    const n = nostrRsRuns[i];
+    line += ` | nostr-rs-relay(echo_tps=${toFixed(n.echoTps, 0)}, event_tps=${toFixed(n.eventTps, 0)}, req_tps=${toFixed(n.reqTps, 0)}, connect_avg_ms=${toFixed(n.connectAvgMs, 0)})`;
+  }
+  console.log(line);
 }
 NODE

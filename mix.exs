@@ -43,8 +43,6 @@ defmodule Parrhesia.MixProject do
 
       # Test tooling
       {:stream_data, "~> 1.0", only: :test},
-      {:mox, "~> 1.1", only: :test},
-      {:bypass, "~> 2.1", only: :test},
       {:websockex, "~> 0.4", only: :test},
 
       # Project tooling
