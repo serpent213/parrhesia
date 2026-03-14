@@ -384,7 +384,7 @@ Current comparison results from [BENCHMARK.md](./BENCHMARK.md):
 
 Higher is better for `↑` metrics. Lower is better for `↓` metrics.
 
-(Results from a Linux container on a 6-core Intel i5-8400T with NVMe drive)
+(Results from a Linux container on a 6-core Intel i5-8400T with NVMe drive, PostgreSQL 18)
 
 ---
 

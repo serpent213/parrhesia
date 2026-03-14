@@ -106,12 +106,6 @@ in {
         strfry
       ];
 
-  # https://devenv.sh/tests/
-  # enterTest = ''
-  #   echo "Running tests"
-  #   git --version | grep "2.42.0"
-  # '';
-
   # https://devenv.sh/languages/
   languages = {
     elixir = {
@@ -131,7 +125,7 @@ in {
     enable = true;
     package = pkgs.postgresql_18;
 
-    # Some tuning for the benchmark
+    # Some tuning for the benchmark - doesn't seem to do much
     settings = {
       max_connections = 300;
       shared_buffers = "1GB";
@@ -151,6 +145,7 @@ in {
     initialScript = ''
       CREATE ROLE dev WITH LOGIN PASSWORD 'dev' SUPERUSER;
 
+      -- Make sure we get the right collation
       ALTER database template1 is_template=false;
 
       DROP database template1;
@@ -167,12 +162,10 @@ in {
     '';
   };
 
-  # https://devenv.sh/pre-commit-hooks/
-  # pre-commit.hooks.shellcheck.enable = true;
-
   dotenv.enable = true;
   devenv.warnOnNewVersion = false;
 
+  # https://devenv.sh/pre-commit-hooks/
   git-hooks.hooks = {
     alejandra.enable = true;
     check-added-large-files = {

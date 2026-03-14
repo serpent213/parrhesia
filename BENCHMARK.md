@@ -1,6 +1,6 @@
 Running 2 comparison run(s)...
 Versions:
-  parrhesia 0.3.0
+  parrhesia 0.4.0
   strfry 1.0.4 (nixpkgs)
   nostr-rs-relay 0.9.0
   nostr-bench 0.4.0
@@ -16,18 +16,18 @@ Versions:
 === Bench comparison (averages) ===
 metric                      parrhesia  strfry    nostr-rs-relay  strfry/parrhesia  nostr-rs/parrhesia
 --------------------------  ---------  --------  --------------  ----------------  ------------------
-connect avg latency (ms) ↓  13.50      3.00      2.00            0.22x             0.15x             
-connect max latency (ms) ↓  22.50      5.50      3.00            0.24x             0.13x             
-echo throughput (TPS) ↑     80385.00   61673.00  164516.00       0.77x             2.05x             
-echo throughput (MiB/s) ↑   44.00      34.45     90.10           0.78x             2.05x             
-event throughput (TPS) ↑    2000.00    3404.50   788.00          1.70x             0.39x             
-event throughput (MiB/s) ↑  1.30       2.20      0.50            1.69x             0.38x             
-req throughput (TPS) ↑      3664.00    1808.50   877.50          0.49x             0.24x             
-req throughput (MiB/s) ↑    20.75      11.75     2.45            0.57x             0.12x             
+connect avg latency (ms) ↓  10.50      4.00      3.00            0.38x             0.29x             
+connect max latency (ms) ↓  19.50      7.50      4.00            0.38x             0.21x             
+echo throughput (TPS) ↑     78520.00   60353.00  164420.50       0.77x             2.09x             
+echo throughput (MiB/s) ↑   43.00      33.75     90.05           0.78x             2.09x             
+event throughput (TPS) ↑    1919.50    3520.50   781.00          1.83x             0.41x             
+event throughput (MiB/s) ↑  1.25       2.25      0.50            1.80x             0.40x             
+req throughput (TPS) ↑      4608.50    1809.50   875.50          0.39x             0.19x             
+req throughput (MiB/s) ↑    26.20      11.75     2.40            0.45x             0.09x             
 
 Legend: ↑ higher is better, ↓ lower is better.
 Ratio columns are server/parrhesia (for ↓ metrics, <1.00x means that server is faster).
 
 Run details:
-  run 1: parrhesia(echo_tps=81402, event_tps=1979, req_tps=3639, connect_avg_ms=14) | strfry(echo_tps=61745, event_tps=3457, req_tps=1818, connect_avg_ms=3) | nostr-rs-relay(echo_tps=159974, event_tps=784, req_tps=905, connect_avg_ms=2)
-  run 2: parrhesia(echo_tps=79368, event_tps=2021, req_tps=3689, connect_avg_ms=13) | strfry(echo_tps=61601, event_tps=3352, req_tps=1799, connect_avg_ms=3) | nostr-rs-relay(echo_tps=169058, event_tps=792, req_tps=850, connect_avg_ms=2)
+  run 1: parrhesia(echo_tps=78892, event_tps=1955, req_tps=4671, connect_avg_ms=10) | strfry(echo_tps=59132, event_tps=3462, req_tps=1806, connect_avg_ms=4) | nostr-rs-relay(echo_tps=159714, event_tps=785, req_tps=873, connect_avg_ms=3)
+  run 2: parrhesia(echo_tps=78148, event_tps=1884, req_tps=4546, connect_avg_ms=11) | strfry(echo_tps=61574, event_tps=3579, req_tps=1813, connect_avg_ms=4) | nostr-rs-relay(echo_tps=169127, event_tps=777, req_tps=878, connect_avg_ms=3)
