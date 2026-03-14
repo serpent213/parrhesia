@@ -73,6 +73,7 @@ in {
       vips.overrideAttrs (oldAttrs: {
         buildInputs = oldAttrs.buildInputs ++ [mozjpeg];
       });
+    nostr-bench = pkgs.callPackage ./nix/nostr-bench.nix {};
   in
     with pkgs; [
       just
@@ -89,6 +90,10 @@ in {
       mermaid-cli
       # Nostr CLI client
       nak
+      # Nostr relay benchmark client
+      nostr-bench
+      # Nostr reference server
+      strfry
     ];
 
   # https://devenv.sh/tests/

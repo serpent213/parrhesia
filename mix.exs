@@ -21,7 +21,7 @@ defmodule Parrhesia.MixProject do
   end
 
   def cli do
-    [preferred_envs: [precommit: :test]]
+    [preferred_envs: [precommit: :test, bench: :test]]
   end
 
   # Run "mix help deps" to learn about dependencies.
@@ -62,6 +62,7 @@ defmodule Parrhesia.MixProject do
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "test.nak_e2e": ["cmd ./scripts/run_nak_e2e.sh"],
       "test.marmot_e2e": ["cmd ./scripts/run_marmot_e2e.sh"],
+      bench: ["cmd ./scripts/run_bench_compare.sh"],
       # cov: ["cmd mix coveralls.lcov"],
       lint: ["format --check-formatted", "credo"],
       precommit: [
