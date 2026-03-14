@@ -78,7 +78,13 @@ in {
     with pkgs;
       [
         just
+        gcc
         git
+        gnumake
+        autoconf
+        automake
+        libtool
+        pkg-config
         # Nix code formatter
         alejandra
         # i18n

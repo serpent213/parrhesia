@@ -31,6 +31,7 @@ defmodule Parrhesia.MixProject do
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.15"},
       {:websock_adapter, "~> 0.5"},
+      {:lib_secp256k1, "~> 0.7"},
 
       # Runtime: storage adapter (Postgres first)
       {:ecto_sql, "~> 3.12"},
