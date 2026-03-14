@@ -92,7 +92,8 @@ in {
       nak
       # Nostr relay benchmark client
       nostr-bench
-      # Nostr reference server
+      # Nostr reference servers
+      nostr-rs-relay
       strfry
     ];
 
