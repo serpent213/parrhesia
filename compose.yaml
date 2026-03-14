@@ -36,7 +36,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-ecto://parrhesia:parrhesia@db:5432/parrhesia}
       POOL_SIZE: ${POOL_SIZE:-20}
     ports:
-      - "${PARRHESIA_HOST_PORT:-4000}:4000"
+      - "${PARRHESIA_HOST_PORT:-4413}:4413"
 
 volumes:
   postgres-data:

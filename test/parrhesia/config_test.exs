@@ -10,7 +10,7 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:limits, :auth_max_age_seconds]) == 600
     assert Parrhesia.Config.get([:limits, :max_outbound_queue]) == 256
     assert Parrhesia.Config.get([:limits, :max_filter_limit]) == 500
-    assert Parrhesia.Config.get([:relay_url]) == "ws://localhost:4000/relay"
+    assert Parrhesia.Config.get([:relay_url]) == "ws://localhost:4413/relay"
     assert Parrhesia.Config.get([:policies, :auth_required_for_writes]) == false
     assert Parrhesia.Config.get([:policies, :marmot_media_max_imeta_tags_per_event]) == 8
     assert Parrhesia.Config.get([:policies, :marmot_media_reject_mip04_v1]) == true

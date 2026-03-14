@@ -74,7 +74,7 @@ defmodule Parrhesia.Web.ConnectionTest do
   end
 
   test "AUTH rejects relay tag mismatch" do
-    state = connection_state(relay_url: "ws://localhost:4000/relay")
+    state = connection_state(relay_url: "ws://localhost:4413/relay")
 
     auth_event = valid_auth_event(state.auth_challenge, relay_url: "ws://attacker.example/relay")
     payload = JSON.encode!(["AUTH", auth_event])

@@ -48,12 +48,12 @@ mix setup
 mix run --no-halt
 ```
 
-Server listens on `http://localhost:4000` by default.
+Server listens on `http://localhost:4413` by default.
 
 WebSocket clients should connect to:
 
 ```text
-ws://localhost:4000/relay
+ws://localhost:4413/relay
 ```
 
 ### Useful endpoints
@@ -76,7 +76,7 @@ Before a Nostr client can publish its first event successfully, make sure these 
    Set `DATABASE_URL` and create/migrate the database with `Parrhesia.Release.migrate()` or `mix ecto.migrate`.
 
 2. Parrhesia is reachable behind your reverse proxy.
-   Parrhesia itself listens on plain HTTP on port `4000`, and the reverse proxy is expected to terminate TLS and forward WebSocket traffic to `/relay`.
+   Parrhesia itself listens on plain HTTP on port `4413`, and the reverse proxy is expected to terminate TLS and forward WebSocket traffic to `/relay`.
 
 3. `:relay_url` matches the public relay URL clients should use.
    Set `PARRHESIA_RELAY_URL` to the public relay URL exposed by the reverse proxy.
@@ -91,7 +91,7 @@ In `prod`, these environment variables are used:
 
 - `DATABASE_URL` (**required**), e.g. `ecto://USER:PASS@HOST/parrhesia_prod`
 - `POOL_SIZE` (optional, default `32`)
-- `PORT` (optional, default `4000`)
+- `PORT` (optional, default `4413`)
 - `PARRHESIA_*` runtime overrides for relay config, limits, policies, metrics, and features
 - `PARRHESIA_EXTRA_CONFIG` (optional path to an extra runtime config file)
 
@@ -129,7 +129,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
-| `:relay_url` | `PARRHESIA_RELAY_URL` | `ws://localhost:4000/relay` | Advertised relay URL and auth relay tag target |
+| `:relay_url` | `PARRHESIA_RELAY_URL` | `ws://localhost:4413/relay` | Advertised relay URL and auth relay tag target |
 | `:moderation_cache_enabled` | `PARRHESIA_MODERATION_CACHE_ENABLED` | `true` | Toggle moderation cache |
 | `:enable_expiration_worker` | `PARRHESIA_ENABLE_EXPIRATION_WORKER` | `true` | Toggle background expiration worker |
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
@@ -155,7 +155,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
-| `:port` | `PORT` | `4000` | Main HTTP/WebSocket listener |
+| `:port` | `PORT` | `4413` | Main HTTP/WebSocket listener |
 
 #### `Parrhesia.Web.MetricsEndpoint`
 
@@ -299,7 +299,7 @@ Start the relay:
 
 ```bash
 docker run --rm \
-  -p 4000:4000 \
+  -p 4413:4413 \
   -e DATABASE_URL="ecto://USER:PASS@HOST/parrhesia_prod" \
   -e POOL_SIZE=20 \
   parrhesia:latest
@@ -333,13 +333,13 @@ docker compose up -d parrhesia
 The relay will be available on:
 
 ```text
-ws://localhost:4000/relay
+ws://localhost:4413/relay
 ```
 
 Notes:
 
 - `compose.yaml` keeps PostgreSQL in a separate container; the Parrhesia image only runs the app release.
-- The container listens on port `4000`; use `PARRHESIA_HOST_PORT` if you want a different published host port.
+- The container listens on port `4413`; use `PARRHESIA_HOST_PORT` if you want a different published host port.
 - Migrations are run explicitly through the one-shot `migrate` service instead of on every app boot.
 - Common runtime overrides can go straight into `.env`; see [`.env.example`](./.env.example) for examples.
 - For more specialized overrides, mount a file and set `PARRHESIA_EXTRA_CONFIG=/path/in/container/runtime.exs`.

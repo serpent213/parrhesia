@@ -375,7 +375,7 @@ if config_env() == :prod do
     queue_target: queue_target,
     queue_interval: queue_interval
 
-  config :parrhesia, Parrhesia.Web.Endpoint, port: int_env.("PORT", 4000)
+  config :parrhesia, Parrhesia.Web.Endpoint, port: int_env.("PORT", 4413)
 
   config :parrhesia, Parrhesia.Web.MetricsEndpoint,
     enabled:

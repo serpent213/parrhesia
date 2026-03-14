@@ -47,7 +47,7 @@
               Entrypoint = ["${parrhesia}/bin/parrhesia"];
               Cmd = ["foreground"];
               ExposedPorts = {
-                "4000/tcp" = {};
+                "4413/tcp" = {};
               };
               WorkingDir = "/";
               User = "65534:65534";
@@ -56,7 +56,7 @@
                 "LANG=C.UTF-8"
                 "LC_ALL=C.UTF-8"
                 "MIX_ENV=prod"
-                "PORT=4000"
+                "PORT=4413"
                 "RELEASE_DISTRIBUTION=none"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];

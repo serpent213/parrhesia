@@ -4,7 +4,7 @@ config :postgrex, :json_library, JSON
 
 config :parrhesia,
   moderation_cache_enabled: true,
-  relay_url: "ws://localhost:4000/relay",
+  relay_url: "ws://localhost:4413/relay",
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,
@@ -68,7 +68,7 @@ config :parrhesia,
     admin: Parrhesia.Storage.Adapters.Postgres.Admin
   ]
 
-config :parrhesia, Parrhesia.Web.Endpoint, port: 4000
+config :parrhesia, Parrhesia.Web.Endpoint, port: 4413
 
 config :parrhesia, Parrhesia.Web.MetricsEndpoint,
   enabled: false,
