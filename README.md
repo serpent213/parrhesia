@@ -6,6 +6,7 @@ It exposes:
 - a WebSocket relay endpoint at `/relay`
 - NIP-11 relay info on `GET /relay` with `Accept: application/nostr+json`
 - operational HTTP endpoints (`/health`, `/ready`, `/metrics`)
+  - `/metrics` is restricted by default to private/loopback source IPs
 - a NIP-86-style management API at `POST /management` (NIP-98 auth)
 
 ## Supported NIPs
@@ -56,7 +57,7 @@ ws://localhost:4000/relay
 
 - `GET /health` -> `ok`
 - `GET /ready` -> readiness status
-- `GET /metrics` -> Prometheus metrics
+- `GET /metrics` -> Prometheus metrics (private/loopback source IPs by default)
 - `GET /relay` + `Accept: application/nostr+json` -> NIP-11 document
 - `POST /management` -> management API (requires NIP-98 auth)
 
@@ -81,7 +82,20 @@ config :parrhesia, Parrhesia.Web.Endpoint,
   ip: {0, 0, 0, 0},
   port: 4000
 
+# Optional dedicated metrics listener (keep this internal)
+config :parrhesia, Parrhesia.Web.MetricsEndpoint,
+  enabled: true,
+  ip: {127, 0, 0, 1},
+  port: 9568
+
 config :parrhesia,
+  metrics: [
+    enabled_on_main_endpoint: false,
+    public: false,
+    private_networks_only: true,
+    allowed_cidrs: [],
+    auth_token: nil
+  ],
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,

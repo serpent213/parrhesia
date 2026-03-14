@@ -47,6 +47,13 @@ config :parrhesia,
     marmot_push_max_server_recipients: 1,
     management_auth_required: true
   ],
+  metrics: [
+    enabled_on_main_endpoint: true,
+    public: false,
+    private_networks_only: true,
+    allowed_cidrs: [],
+    auth_token: nil
+  ],
   features: [
     verify_event_signatures: true,
     nip_45_count: true,
@@ -62,6 +69,11 @@ config :parrhesia,
   ]
 
 config :parrhesia, Parrhesia.Web.Endpoint, port: 4000
+
+config :parrhesia, Parrhesia.Web.MetricsEndpoint,
+  enabled: false,
+  ip: {127, 0, 0, 1},
+  port: 9568
 
 config :parrhesia, ecto_repos: [Parrhesia.Repo]
 

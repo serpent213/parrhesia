@@ -3,8 +3,8 @@ defmodule Parrhesia.Web.Router do
 
   use Plug.Router
 
-  alias Parrhesia.Telemetry
   alias Parrhesia.Web.Management
+  alias Parrhesia.Web.Metrics
   alias Parrhesia.Web.Readiness
   alias Parrhesia.Web.RelayInfo
 
@@ -30,11 +30,11 @@ defmodule Parrhesia.Web.Router do
   end
 
   get "/metrics" do
-    body = TelemetryMetricsPrometheus.Core.scrape(Telemetry.prometheus_reporter())
-
-    conn
-    |> put_resp_content_type("text/plain")
-    |> send_resp(200, body)
+    if Metrics.enabled_on_main_endpoint?() do
+      Metrics.handle(conn)
+    else
+      send_resp(conn, 404, "not found")
+    end
   end
 
   post "/management" do

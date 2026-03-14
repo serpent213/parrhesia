@@ -43,11 +43,66 @@ defmodule Parrhesia.Web.RouterTest do
     assert 11 in body["supported_nips"]
   end
 
-  test "GET /metrics returns prometheus payload" do
+  test "GET /metrics returns prometheus payload for private-network clients" do
     conn = conn(:get, "/metrics") |> Router.call([])
 
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+  end
+
+  test "GET /metrics denies public-network clients by default" do
+    conn = conn(:get, "/metrics")
+    conn = %{conn | remote_ip: {8, 8, 8, 8}}
+    conn = Router.call(conn, [])
+
+    assert conn.status == 403
+    assert conn.resp_body == "forbidden"
+  end
+
+  test "GET /metrics can be disabled on the main endpoint" do
+    previous_metrics = Application.get_env(:parrhesia, :metrics, [])
+
+    Application.put_env(
+      :parrhesia,
+      :metrics,
+      Keyword.put(previous_metrics, :enabled_on_main_endpoint, false)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :metrics, previous_metrics)
+    end)
+
+    conn = conn(:get, "/metrics") |> Router.call([])
+
+    assert conn.status == 404
+    assert conn.resp_body == "not found"
+  end
+
+  test "GET /metrics accepts bearer auth when configured" do
+    previous_metrics = Application.get_env(:parrhesia, :metrics, [])
+
+    Application.put_env(
+      :parrhesia,
+      :metrics,
+      previous_metrics
+      |> Keyword.put(:private_networks_only, false)
+      |> Keyword.put(:auth_token, "secret-token")
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :metrics, previous_metrics)
+    end)
+
+    denied_conn = conn(:get, "/metrics") |> Router.call([])
+
+    assert denied_conn.status == 403
+
+    allowed_conn =
+      conn(:get, "/metrics")
+      |> put_req_header("authorization", "Bearer secret-token")
+      |> Router.call([])
+
+    assert allowed_conn.status == 200
   end
 
   test "POST /management requires authorization" do
