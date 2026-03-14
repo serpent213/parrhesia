@@ -1,33 +1,373 @@
 import Config
 
+string_env = fn name, default ->
+  case System.get_env(name) do
+    nil -> default
+    "" -> default
+    value -> value
+  end
+end
+
+int_env = fn name, default ->
+  case System.get_env(name) do
+    nil -> default
+    value -> String.to_integer(value)
+  end
+end
+
+bool_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      case String.downcase(value) do
+        "1" -> true
+        "true" -> true
+        "yes" -> true
+        "on" -> true
+        "0" -> false
+        "false" -> false
+        "no" -> false
+        "off" -> false
+        _other -> raise "environment variable #{name} must be a boolean value"
+      end
+  end
+end
+
+csv_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+  end
+end
+
+outbound_overflow_strategy_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    "close" ->
+      :close
+
+    "drop_oldest" ->
+      :drop_oldest
+
+    "drop_newest" ->
+      :drop_newest
+
+    _other ->
+      raise "environment variable #{name} must be one of: close, drop_oldest, drop_newest"
+  end
+end
+
+ipv4_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      case String.split(value, ".", parts: 4) do
+        [a, b, c, d] ->
+          octets = Enum.map([a, b, c, d], &String.to_integer/1)
+
+          if Enum.all?(octets, &(&1 >= 0 and &1 <= 255)) do
+            List.to_tuple(octets)
+          else
+            raise "environment variable #{name} must be a valid IPv4 address"
+          end
+
+        _other ->
+          raise "environment variable #{name} must be a valid IPv4 address"
+      end
+  end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
       raise "environment variable DATABASE_URL is missing. Example: ecto://USER:PASS@HOST/DATABASE"
 
   repo_defaults = Application.get_env(:parrhesia, Parrhesia.Repo, [])
+  relay_url_default = Application.get_env(:parrhesia, :relay_url)
+
+  moderation_cache_enabled_default =
+    Application.get_env(:parrhesia, :moderation_cache_enabled, true)
+
+  enable_expiration_worker_default =
+    Application.get_env(:parrhesia, :enable_expiration_worker, true)
+
+  limits_defaults = Application.get_env(:parrhesia, :limits, [])
+  policies_defaults = Application.get_env(:parrhesia, :policies, [])
+  metrics_defaults = Application.get_env(:parrhesia, :metrics, [])
+  features_defaults = Application.get_env(:parrhesia, :features, [])
+  metrics_endpoint_defaults = Application.get_env(:parrhesia, Parrhesia.Web.MetricsEndpoint, [])
 
   default_pool_size = Keyword.get(repo_defaults, :pool_size, 32)
   default_queue_target = Keyword.get(repo_defaults, :queue_target, 1_000)
   default_queue_interval = Keyword.get(repo_defaults, :queue_interval, 5_000)
 
-  pool_size =
-    case System.get_env("POOL_SIZE") do
-      nil -> default_pool_size
-      value -> String.to_integer(value)
-    end
+  pool_size = int_env.("POOL_SIZE", default_pool_size)
+  queue_target = int_env.("DB_QUEUE_TARGET_MS", default_queue_target)
+  queue_interval = int_env.("DB_QUEUE_INTERVAL_MS", default_queue_interval)
 
-  queue_target =
-    case System.get_env("DB_QUEUE_TARGET_MS") do
-      nil -> default_queue_target
-      value -> String.to_integer(value)
-    end
+  limits = [
+    max_frame_bytes:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_FRAME_BYTES",
+        Keyword.get(limits_defaults, :max_frame_bytes, 1_048_576)
+      ),
+    max_event_bytes:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_EVENT_BYTES",
+        Keyword.get(limits_defaults, :max_event_bytes, 262_144)
+      ),
+    max_filters_per_req:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_FILTERS_PER_REQ",
+        Keyword.get(limits_defaults, :max_filters_per_req, 16)
+      ),
+    max_filter_limit:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_FILTER_LIMIT",
+        Keyword.get(limits_defaults, :max_filter_limit, 500)
+      ),
+    max_subscriptions_per_connection:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_SUBSCRIPTIONS_PER_CONNECTION",
+        Keyword.get(limits_defaults, :max_subscriptions_per_connection, 32)
+      ),
+    max_event_future_skew_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_EVENT_FUTURE_SKEW_SECONDS",
+        Keyword.get(limits_defaults, :max_event_future_skew_seconds, 900)
+      ),
+    max_event_ingest_per_window:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_EVENT_INGEST_PER_WINDOW",
+        Keyword.get(limits_defaults, :max_event_ingest_per_window, 120)
+      ),
+    event_ingest_window_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_EVENT_INGEST_WINDOW_SECONDS",
+        Keyword.get(limits_defaults, :event_ingest_window_seconds, 1)
+      ),
+    auth_max_age_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_AUTH_MAX_AGE_SECONDS",
+        Keyword.get(limits_defaults, :auth_max_age_seconds, 600)
+      ),
+    max_outbound_queue:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_OUTBOUND_QUEUE",
+        Keyword.get(limits_defaults, :max_outbound_queue, 256)
+      ),
+    outbound_drain_batch_size:
+      int_env.(
+        "PARRHESIA_LIMITS_OUTBOUND_DRAIN_BATCH_SIZE",
+        Keyword.get(limits_defaults, :outbound_drain_batch_size, 64)
+      ),
+    outbound_overflow_strategy:
+      outbound_overflow_strategy_env.(
+        "PARRHESIA_LIMITS_OUTBOUND_OVERFLOW_STRATEGY",
+        Keyword.get(limits_defaults, :outbound_overflow_strategy, :close)
+      ),
+    max_negentropy_payload_bytes:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_NEGENTROPY_PAYLOAD_BYTES",
+        Keyword.get(limits_defaults, :max_negentropy_payload_bytes, 4096)
+      ),
+    max_negentropy_sessions_per_connection:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_NEGENTROPY_SESSIONS_PER_CONNECTION",
+        Keyword.get(limits_defaults, :max_negentropy_sessions_per_connection, 8)
+      ),
+    max_negentropy_total_sessions:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_NEGENTROPY_TOTAL_SESSIONS",
+        Keyword.get(limits_defaults, :max_negentropy_total_sessions, 10_000)
+      ),
+    negentropy_session_idle_timeout_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_NEGENTROPY_SESSION_IDLE_TIMEOUT_SECONDS",
+        Keyword.get(limits_defaults, :negentropy_session_idle_timeout_seconds, 60)
+      ),
+    negentropy_session_sweep_interval_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_NEGENTROPY_SESSION_SWEEP_INTERVAL_SECONDS",
+        Keyword.get(limits_defaults, :negentropy_session_sweep_interval_seconds, 10)
+      )
+  ]
 
-  queue_interval =
-    case System.get_env("DB_QUEUE_INTERVAL_MS") do
-      nil -> default_queue_interval
-      value -> String.to_integer(value)
-    end
+  policies = [
+    auth_required_for_writes:
+      bool_env.(
+        "PARRHESIA_POLICIES_AUTH_REQUIRED_FOR_WRITES",
+        Keyword.get(policies_defaults, :auth_required_for_writes, false)
+      ),
+    auth_required_for_reads:
+      bool_env.(
+        "PARRHESIA_POLICIES_AUTH_REQUIRED_FOR_READS",
+        Keyword.get(policies_defaults, :auth_required_for_reads, false)
+      ),
+    min_pow_difficulty:
+      int_env.(
+        "PARRHESIA_POLICIES_MIN_POW_DIFFICULTY",
+        Keyword.get(policies_defaults, :min_pow_difficulty, 0)
+      ),
+    accept_ephemeral_events:
+      bool_env.(
+        "PARRHESIA_POLICIES_ACCEPT_EPHEMERAL_EVENTS",
+        Keyword.get(policies_defaults, :accept_ephemeral_events, true)
+      ),
+    mls_group_event_ttl_seconds:
+      int_env.(
+        "PARRHESIA_POLICIES_MLS_GROUP_EVENT_TTL_SECONDS",
+        Keyword.get(policies_defaults, :mls_group_event_ttl_seconds, 300)
+      ),
+    marmot_require_h_for_group_queries:
+      bool_env.(
+        "PARRHESIA_POLICIES_MARMOT_REQUIRE_H_FOR_GROUP_QUERIES",
+        Keyword.get(policies_defaults, :marmot_require_h_for_group_queries, true)
+      ),
+    marmot_group_max_h_values_per_filter:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_GROUP_MAX_H_VALUES_PER_FILTER",
+        Keyword.get(policies_defaults, :marmot_group_max_h_values_per_filter, 32)
+      ),
+    marmot_group_max_query_window_seconds:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_GROUP_MAX_QUERY_WINDOW_SECONDS",
+        Keyword.get(policies_defaults, :marmot_group_max_query_window_seconds, 2_592_000)
+      ),
+    marmot_media_max_imeta_tags_per_event:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_MEDIA_MAX_IMETA_TAGS_PER_EVENT",
+        Keyword.get(policies_defaults, :marmot_media_max_imeta_tags_per_event, 8)
+      ),
+    marmot_media_max_field_value_bytes:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_MEDIA_MAX_FIELD_VALUE_BYTES",
+        Keyword.get(policies_defaults, :marmot_media_max_field_value_bytes, 1024)
+      ),
+    marmot_media_max_url_bytes:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_MEDIA_MAX_URL_BYTES",
+        Keyword.get(policies_defaults, :marmot_media_max_url_bytes, 2048)
+      ),
+    marmot_media_allowed_mime_prefixes:
+      csv_env.(
+        "PARRHESIA_POLICIES_MARMOT_MEDIA_ALLOWED_MIME_PREFIXES",
+        Keyword.get(policies_defaults, :marmot_media_allowed_mime_prefixes, [])
+      ),
+    marmot_media_reject_mip04_v1:
+      bool_env.(
+        "PARRHESIA_POLICIES_MARMOT_MEDIA_REJECT_MIP04_V1",
+        Keyword.get(policies_defaults, :marmot_media_reject_mip04_v1, true)
+      ),
+    marmot_push_server_pubkeys:
+      csv_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_SERVER_PUBKEYS",
+        Keyword.get(policies_defaults, :marmot_push_server_pubkeys, [])
+      ),
+    marmot_push_max_relay_tags:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_MAX_RELAY_TAGS",
+        Keyword.get(policies_defaults, :marmot_push_max_relay_tags, 16)
+      ),
+    marmot_push_max_payload_bytes:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_MAX_PAYLOAD_BYTES",
+        Keyword.get(policies_defaults, :marmot_push_max_payload_bytes, 65_536)
+      ),
+    marmot_push_max_trigger_age_seconds:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_MAX_TRIGGER_AGE_SECONDS",
+        Keyword.get(policies_defaults, :marmot_push_max_trigger_age_seconds, 120)
+      ),
+    marmot_push_require_expiration:
+      bool_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_REQUIRE_EXPIRATION",
+        Keyword.get(policies_defaults, :marmot_push_require_expiration, true)
+      ),
+    marmot_push_max_expiration_window_seconds:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_MAX_EXPIRATION_WINDOW_SECONDS",
+        Keyword.get(policies_defaults, :marmot_push_max_expiration_window_seconds, 120)
+      ),
+    marmot_push_max_server_recipients:
+      int_env.(
+        "PARRHESIA_POLICIES_MARMOT_PUSH_MAX_SERVER_RECIPIENTS",
+        Keyword.get(policies_defaults, :marmot_push_max_server_recipients, 1)
+      ),
+    management_auth_required:
+      bool_env.(
+        "PARRHESIA_POLICIES_MANAGEMENT_AUTH_REQUIRED",
+        Keyword.get(policies_defaults, :management_auth_required, true)
+      )
+  ]
+
+  metrics = [
+    enabled_on_main_endpoint:
+      bool_env.(
+        "PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT",
+        Keyword.get(metrics_defaults, :enabled_on_main_endpoint, true)
+      ),
+    public:
+      bool_env.(
+        "PARRHESIA_METRICS_PUBLIC",
+        Keyword.get(metrics_defaults, :public, false)
+      ),
+    private_networks_only:
+      bool_env.(
+        "PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY",
+        Keyword.get(metrics_defaults, :private_networks_only, true)
+      ),
+    allowed_cidrs:
+      csv_env.(
+        "PARRHESIA_METRICS_ALLOWED_CIDRS",
+        Keyword.get(metrics_defaults, :allowed_cidrs, [])
+      ),
+    auth_token:
+      string_env.(
+        "PARRHESIA_METRICS_AUTH_TOKEN",
+        Keyword.get(metrics_defaults, :auth_token)
+      )
+  ]
+
+  features = [
+    verify_event_signatures:
+      bool_env.(
+        "PARRHESIA_FEATURES_VERIFY_EVENT_SIGNATURES",
+        Keyword.get(features_defaults, :verify_event_signatures, true)
+      ),
+    nip_45_count:
+      bool_env.(
+        "PARRHESIA_FEATURES_NIP_45_COUNT",
+        Keyword.get(features_defaults, :nip_45_count, true)
+      ),
+    nip_50_search:
+      bool_env.(
+        "PARRHESIA_FEATURES_NIP_50_SEARCH",
+        Keyword.get(features_defaults, :nip_50_search, true)
+      ),
+    nip_77_negentropy:
+      bool_env.(
+        "PARRHESIA_FEATURES_NIP_77_NEGENTROPY",
+        Keyword.get(features_defaults, :nip_77_negentropy, true)
+      ),
+    marmot_push_notifications:
+      bool_env.(
+        "PARRHESIA_FEATURES_MARMOT_PUSH_NOTIFICATIONS",
+        Keyword.get(features_defaults, :marmot_push_notifications, false)
+      )
+  ]
 
   config :parrhesia, Parrhesia.Repo,
     url: database_url,
@@ -35,6 +375,39 @@ if config_env() == :prod do
     queue_target: queue_target,
     queue_interval: queue_interval
 
-  config :parrhesia, Parrhesia.Web.Endpoint,
-    port: String.to_integer(System.get_env("PORT") || "4000")
+  config :parrhesia, Parrhesia.Web.Endpoint, port: int_env.("PORT", 4000)
+
+  config :parrhesia, Parrhesia.Web.MetricsEndpoint,
+    enabled:
+      bool_env.(
+        "PARRHESIA_METRICS_ENDPOINT_ENABLED",
+        Keyword.get(metrics_endpoint_defaults, :enabled, false)
+      ),
+    ip:
+      ipv4_env.(
+        "PARRHESIA_METRICS_ENDPOINT_IP",
+        Keyword.get(metrics_endpoint_defaults, :ip, {127, 0, 0, 1})
+      ),
+    port:
+      int_env.(
+        "PARRHESIA_METRICS_ENDPOINT_PORT",
+        Keyword.get(metrics_endpoint_defaults, :port, 9568)
+      )
+
+  config :parrhesia,
+    relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
+    moderation_cache_enabled:
+      bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),
+    enable_expiration_worker:
+      bool_env.("PARRHESIA_ENABLE_EXPIRATION_WORKER", enable_expiration_worker_default),
+    limits: limits,
+    policies: policies,
+    metrics: metrics,
+    features: features
+
+  case System.get_env("PARRHESIA_EXTRA_CONFIG") do
+    nil -> :ok
+    "" -> :ok
+    path -> import_config path
+  end
 end

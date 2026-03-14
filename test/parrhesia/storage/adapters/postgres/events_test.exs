@@ -1,5 +1,5 @@
 defmodule Parrhesia.Storage.Adapters.Postgres.EventsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Storage.Adapters.Postgres.Events

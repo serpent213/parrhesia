@@ -86,7 +86,24 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-if ss -ltn "( sport = :${TEST_HTTP_PORT} )" | tail -n +2 | grep -q .; then
+port_in_use() {
+  local port="$1"
+
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :${port} )" | tail -n +2 | grep -q .
+    return
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+
+  echo "Neither ss nor lsof is available for checking whether port ${port} is already in use." >&2
+  exit 1
+}
+
+if port_in_use "$TEST_HTTP_PORT"; then
   echo "Port ${TEST_HTTP_PORT} is already in use. Set ${PORT_ENV_VAR} to a free port." >&2
   exit 1
 fi
