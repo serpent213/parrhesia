@@ -64,7 +64,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.QueryPlanRegressionTest do
       )
 
     plan = Enum.map_join(explain.rows, "\n", &hd/1)
-    assert plan =~ "event_tags_h_value_created_at_idx"
+    assert plan =~ "Index Scan using event_tags_"
+    refute plan =~ "Filter: ((name)::text = 'h'::text)"
   end
 
   test "#i-heavy query plan uses dedicated event_tags i index" do
@@ -111,7 +112,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.QueryPlanRegressionTest do
       )
 
     plan = Enum.map_join(explain.rows, "\n", &hd/1)
-    assert plan =~ "event_tags_i_value_created_at_idx"
+    assert plan =~ "Index Scan using event_tags_"
+    refute plan =~ "Filter: ((name)::text = 'i'::text)"
   end
 
   defp persist_event(overrides) do

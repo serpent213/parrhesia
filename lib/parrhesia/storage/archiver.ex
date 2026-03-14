@@ -9,6 +9,8 @@ defmodule Parrhesia.Storage.Archiver do
 
   @identifier_pattern ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/
   @monthly_partition_pattern ~r/^events_(\d{4})_(\d{2})$/
+  @events_partition_prefix "events"
+  @event_tags_partition_prefix "event_tags"
   @default_months_ahead 2
 
   @type monthly_partition :: %{
@@ -74,7 +76,7 @@ defmodule Parrhesia.Storage.Archiver do
     Enum.reduce_while(offsets, :ok, fn offset, :ok ->
       target_month = shift_month(reference_month, offset)
 
-      case create_monthly_partition(target_month) do
+      case create_monthly_partitions(target_month) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -95,18 +97,16 @@ defmodule Parrhesia.Storage.Archiver do
 
   @doc """
   Drops an event partition table by name.
+
+  For monthly `events_YYYY_MM` partitions, the matching `event_tags_YYYY_MM`
+  partition is dropped first to keep partition lifecycle aligned.
   """
   @spec drop_partition(String.t()) :: :ok | {:error, term()}
   def drop_partition(partition_name) when is_binary(partition_name) do
-    if partition_name in ["events", "events_default"] do
+    if protected_partition?(partition_name) do
       {:error, :protected_partition}
     else
-      quoted_partition_name = quote_identifier!(partition_name)
-
-      case Repo.query("DROP TABLE IF EXISTS #{quoted_partition_name}") do
-        {:ok, _result} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      drop_partition_tables(partition_name)
     end
   end
 
@@ -122,23 +122,56 @@ defmodule Parrhesia.Storage.Archiver do
   end
 
   @doc """
-  Returns the monthly partition name for a date.
+  Returns the monthly `events` partition name for a date.
   """
   @spec month_partition_name(Date.t()) :: String.t()
   def month_partition_name(%Date{} = date) do
-    month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
-    "events_#{date.year}_#{month}"
+    monthly_partition_name(@events_partition_prefix, date)
   end
 
-  defp create_monthly_partition(%Date{} = month_date) do
-    partition_name = month_partition_name(month_date)
+  @doc """
+  Returns the monthly `event_tags` partition name for a date.
+  """
+  @spec event_tags_month_partition_name(Date.t()) :: String.t()
+  def event_tags_month_partition_name(%Date{} = date) do
+    monthly_partition_name(@event_tags_partition_prefix, date)
+  end
+
+  defp monthly_partition_name(prefix, %Date{} = date) do
+    month_suffix = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
+    "#{prefix}_#{date.year}_#{month_suffix}"
+  end
+
+  defp create_monthly_partitions(%Date{} = month_date) do
     {start_unix, end_unix} = month_bounds_unix(month_date.year, month_date.month)
+
+    case create_monthly_partition(
+           month_partition_name(month_date),
+           @events_partition_prefix,
+           start_unix,
+           end_unix
+         ) do
+      :ok ->
+        create_monthly_partition(
+          event_tags_month_partition_name(month_date),
+          @event_tags_partition_prefix,
+          start_unix,
+          end_unix
+        )
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp create_monthly_partition(partition_name, parent_table_name, start_unix, end_unix) do
     quoted_partition_name = quote_identifier!(partition_name)
+    quoted_parent_table_name = quote_identifier!(parent_table_name)
 
     sql =
       """
       CREATE TABLE IF NOT EXISTS #{quoted_partition_name}
-      PARTITION OF "events"
+      PARTITION OF #{quoted_parent_table_name}
       FOR VALUES FROM (#{start_unix}) TO (#{end_unix})
       """
 
@@ -146,6 +179,76 @@ defmodule Parrhesia.Storage.Archiver do
       {:ok, _result} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp drop_partition_tables(partition_name) do
+    case parse_monthly_partition(partition_name) do
+      nil -> drop_table(partition_name)
+      monthly_partition -> drop_monthly_partition(partition_name, monthly_partition)
+    end
+  end
+
+  defp drop_monthly_partition(partition_name, %{year: year, month: month}) do
+    month_date = Date.new!(year, month, 1)
+    tags_partition_name = monthly_partition_name(@event_tags_partition_prefix, month_date)
+
+    with :ok <- maybe_detach_events_partition(partition_name),
+         :ok <- drop_table(tags_partition_name) do
+      drop_table(partition_name)
+    end
+  end
+
+  defp maybe_detach_events_partition(partition_name) do
+    if attached_partition?(partition_name, @events_partition_prefix) do
+      quoted_parent_table_name = quote_identifier!(@events_partition_prefix)
+      quoted_partition_name = quote_identifier!(partition_name)
+
+      case Repo.query(
+             "ALTER TABLE #{quoted_parent_table_name} DETACH PARTITION #{quoted_partition_name}"
+           ) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp attached_partition?(partition_name, parent_table_name) do
+    query =
+      """
+      SELECT 1
+      FROM pg_inherits AS inheritance
+      JOIN pg_class AS child ON child.oid = inheritance.inhrelid
+      JOIN pg_namespace AS child_ns ON child_ns.oid = child.relnamespace
+      JOIN pg_class AS parent ON parent.oid = inheritance.inhparent
+      JOIN pg_namespace AS parent_ns ON parent_ns.oid = parent.relnamespace
+      WHERE child_ns.nspname = 'public'
+        AND parent_ns.nspname = 'public'
+        AND child.relname = $1
+        AND parent.relname = $2
+      LIMIT 1
+      """
+
+    case Repo.query(query, [partition_name, parent_table_name]) do
+      {:ok, %{rows: [[1]]}} -> true
+      {:ok, %{rows: []}} -> false
+      {:ok, _result} -> false
+      {:error, _reason} -> false
+    end
+  end
+
+  defp drop_table(table_name) do
+    quoted_table_name = quote_identifier!(table_name)
+
+    case Repo.query("DROP TABLE IF EXISTS #{quoted_table_name}") do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp protected_partition?(partition_name) do
+    partition_name in ["events", "events_default", "event_tags", "event_tags_default"]
   end
 
   defp parse_monthly_partition(partition_name) do

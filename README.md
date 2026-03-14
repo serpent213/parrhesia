@@ -230,7 +230,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
 | `:check_interval_hours` | `PARRHESIA_RETENTION_CHECK_INTERVAL_HOURS` | `24` | Partition maintenance + pruning cadence |
-| `:months_ahead` | `PARRHESIA_RETENTION_MONTHS_AHEAD` | `2` | Pre-create current month plus N future monthly partitions |
+| `:months_ahead` | `PARRHESIA_RETENTION_MONTHS_AHEAD` | `2` | Pre-create current month plus N future monthly partitions for `events` and `event_tags` |
 | `:max_db_bytes` | `PARRHESIA_RETENTION_MAX_DB_BYTES` | `:infinity` | Interpreted as GiB threshold; accepts integer or `infinity` |
 | `:max_months_to_keep` | `PARRHESIA_RETENTION_MAX_MONTHS_TO_KEEP` | `:infinity` | Keep at most N months (including current month); accepts integer or `infinity` |
 | `:max_partitions_to_drop_per_run` | `PARRHESIA_RETENTION_MAX_PARTITIONS_TO_DROP_PER_RUN` | `1` | Safety cap for each maintenance run |

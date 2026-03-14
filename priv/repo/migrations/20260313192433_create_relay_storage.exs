@@ -30,7 +30,10 @@ defmodule Parrhesia.Repo.Migrations.CreateRelayStorage do
     create(index(:events, [:expires_at], where: "expires_at IS NOT NULL"))
     create(index(:events, [:deleted_at], where: "deleted_at IS NOT NULL"))
 
-    create table(:event_tags, primary_key: false) do
+    create table(:event_tags,
+             primary_key: false,
+             options: "PARTITION BY RANGE (event_created_at)"
+           ) do
       add(:event_created_at, :bigint, null: false)
       add(:event_id, :binary, null: false)
       add(:name, :string, null: false)
@@ -38,6 +41,8 @@ defmodule Parrhesia.Repo.Migrations.CreateRelayStorage do
       add(:idx, :integer, null: false)
       timestamps(updated_at: false, type: :utc_datetime_usec)
     end
+
+    execute("CREATE TABLE event_tags_default PARTITION OF event_tags DEFAULT")
 
     execute("""
     ALTER TABLE event_tags
@@ -149,6 +154,8 @@ defmodule Parrhesia.Repo.Migrations.CreateRelayStorage do
     drop(table(:banned_pubkeys))
     drop(table(:addressable_event_state))
     drop(table(:replaceable_event_state))
+
+    execute("DROP TABLE event_tags_default")
     drop(table(:event_tags))
 
     execute("DROP TABLE events_default")
