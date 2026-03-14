@@ -18,6 +18,15 @@ defmodule Parrhesia.ApplicationTest do
            end)
 
     assert is_pid(Process.whereis(Parrhesia.Auth.Challenges))
-    assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))
+
+    if negentropy_enabled?() do
+      assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))
+    end
+  end
+
+  defp negentropy_enabled? do
+    :parrhesia
+    |> Application.get_env(:features, [])
+    |> Keyword.get(:nip_77_negentropy, true)
   end
 end

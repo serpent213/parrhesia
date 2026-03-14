@@ -1155,17 +1155,31 @@ defmodule Parrhesia.Web.Connection do
 
   defp negentropy_sessions(opts) when is_list(opts) do
     opts
-    |> Keyword.get(:negentropy_sessions, Sessions)
+    |> Keyword.get(:negentropy_sessions, configured_negentropy_sessions())
     |> normalize_server_ref()
   end
 
   defp negentropy_sessions(opts) when is_map(opts) do
     opts
-    |> Map.get(:negentropy_sessions, Sessions)
+    |> Map.get(:negentropy_sessions, configured_negentropy_sessions())
     |> normalize_server_ref()
   end
 
-  defp negentropy_sessions(_opts), do: Sessions
+  defp negentropy_sessions(_opts), do: configured_negentropy_sessions()
+
+  defp configured_negentropy_sessions do
+    if negentropy_enabled?() do
+      Sessions
+    else
+      nil
+    end
+  end
+
+  defp negentropy_enabled? do
+    :parrhesia
+    |> Application.get_env(:features, [])
+    |> Keyword.get(:nip_77_negentropy, true)
+  end
 
   defp normalize_server_ref(server_ref) when is_pid(server_ref) or is_atom(server_ref),
     do: server_ref

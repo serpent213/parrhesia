@@ -17,26 +17,16 @@ defmodule Parrhesia.Web.RelayInfo do
   end
 
   defp supported_nips do
-    [
-      1,
-      9,
-      11,
-      13,
-      17,
-      40,
-      42,
-      43,
-      44,
-      45,
-      50,
-      59,
-      62,
-      66,
-      70,
-      77,
-      86,
-      98
-    ]
+    base = [1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 66, 70]
+
+    with_negentropy =
+      if negentropy_enabled?() do
+        base ++ [77]
+      else
+        base
+      end
+
+    with_negentropy ++ [86, 98]
   end
 
   defp limitations do
@@ -47,5 +37,11 @@ defmodule Parrhesia.Web.RelayInfo do
       "max_filters" => Parrhesia.Config.get([:limits, :max_filters_per_req], 16),
       "auth_required" => Parrhesia.Config.get([:policies, :auth_required_for_reads], false)
     }
+  end
+
+  defp negentropy_enabled? do
+    :parrhesia
+    |> Application.get_env(:features, [])
+    |> Keyword.get(:nip_77_negentropy, true)
   end
 end

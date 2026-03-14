@@ -17,7 +17,12 @@ config :parrhesia,
     auth_max_age_seconds: 600,
     max_outbound_queue: 256,
     outbound_drain_batch_size: 64,
-    outbound_overflow_strategy: :close
+    outbound_overflow_strategy: :close,
+    max_negentropy_payload_bytes: 4096,
+    max_negentropy_sessions_per_connection: 8,
+    max_negentropy_total_sessions: 10_000,
+    negentropy_session_idle_timeout_seconds: 60,
+    negentropy_session_sweep_interval_seconds: 10
   ],
   policies: [
     auth_required_for_writes: false,

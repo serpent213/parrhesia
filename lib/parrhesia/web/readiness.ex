@@ -5,8 +5,22 @@ defmodule Parrhesia.Web.Readiness do
   def ready? do
     process_ready?(Parrhesia.Subscriptions.Index) and
       process_ready?(Parrhesia.Auth.Challenges) and
-      process_ready?(Parrhesia.Negentropy.Sessions) and
+      negentropy_ready?() and
       process_ready?(Parrhesia.Repo)
+  end
+
+  defp negentropy_ready? do
+    if negentropy_enabled?() do
+      process_ready?(Parrhesia.Negentropy.Sessions)
+    else
+      true
+    end
+  end
+
+  defp negentropy_enabled? do
+    :parrhesia
+    |> Application.get_env(:features, [])
+    |> Keyword.get(:nip_77_negentropy, true)
   end
 
   defp process_ready?(name) do
