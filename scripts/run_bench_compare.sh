@@ -10,7 +10,7 @@ usage:
   ./scripts/run_bench_compare.sh
 
 Runs the same nostr-bench suite against:
-  1) Parrhesia (temporary test relay via run_e2e_suite.sh)
+  1) Parrhesia (temporary prod relay via run_e2e_suite.sh)
   2) strfry (ephemeral instance)
   3) nostr-rs-relay (ephemeral sqlite instance)
 

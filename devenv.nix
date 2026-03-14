@@ -121,6 +121,23 @@ in {
   services.postgres = {
     enable = true;
     package = pkgs.postgresql_18;
+
+    # Some tuning for the benchmark
+    settings = {
+      max_connections = 300;
+      shared_buffers = "1GB";
+      effective_cache_size = "3GB";
+      work_mem = "16MB";
+      maintenance_work_mem = "256MB";
+      wal_compression = "on";
+      checkpoint_timeout = "15min";
+      checkpoint_completion_target = 0.9;
+      min_wal_size = "1GB";
+      max_wal_size = "4GB";
+      random_page_cost = 1.1;
+      effective_io_concurrency = 200;
+    };
+
     initialDatabases = [{name = "parrhesia_dev";} {name = "parrhesia_test";}];
     initialScript = ''
       CREATE ROLE dev WITH LOGIN PASSWORD 'dev' SUPERUSER;

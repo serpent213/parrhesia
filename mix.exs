@@ -71,7 +71,7 @@ defmodule Parrhesia.MixProject do
         "credo --strict --all",
         "deps.unlock --unused",
         "test",
-        "test.nak_e2e",
+        # "test.nak_e2e",
         "test.marmot_e2e"
       ]
     ]

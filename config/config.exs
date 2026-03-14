@@ -1,5 +1,7 @@
 import Config
 
+config :postgrex, :json_library, JSON
+
 config :parrhesia,
   limits: [
     max_frame_bytes: 1_048_576,
