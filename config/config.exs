@@ -3,6 +3,7 @@ import Config
 config :postgrex, :json_library, JSON
 
 config :parrhesia,
+  moderation_cache_enabled: true,
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,

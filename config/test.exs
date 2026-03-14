@@ -12,7 +12,9 @@ config :parrhesia, Parrhesia.Web.Endpoint,
   port: test_endpoint_port,
   ip: {127, 0, 0, 1}
 
-config :parrhesia, enable_expiration_worker: false
+config :parrhesia,
+  enable_expiration_worker: false,
+  moderation_cache_enabled: false
 
 pg_host = System.get_env("PGHOST")
 

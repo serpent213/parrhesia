@@ -21,6 +21,7 @@ defmodule Parrhesia.Web.Connection do
   @default_outbound_drain_batch_size 64
   @default_outbound_overflow_strategy :close
   @drain_outbound_queue :drain_outbound_queue
+  @post_ack_ingest :post_ack_ingest
   @outbound_queue_pressure_threshold 0.75
 
   @marmot_kinds MapSet.new([
@@ -155,6 +156,12 @@ defmodule Parrhesia.Web.Connection do
     handle_fanout_events(state, fanout_events)
   end
 
+  def handle_info({@post_ack_ingest, event}, %__MODULE__{} = state) when is_map(event) do
+    fanout_event(event)
+    maybe_publish_multi_node(event)
+    {:ok, state}
+  end
+
   def handle_info(@drain_outbound_queue, %__MODULE__{} = state) do
     {frames, next_state} = drain_outbound_frames(state)
 
@@ -190,8 +197,7 @@ defmodule Parrhesia.Web.Connection do
         telemetry_metadata_for_event(event)
       )
 
-      fanout_event(event)
-      maybe_publish_multi_node(event)
+      send(self(), {@post_ack_ingest, event})
 
       response = Protocol.encode_relay({:ok, event_id, true, message})
       {:push, {:text, response}, state}
