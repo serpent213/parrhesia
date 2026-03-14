@@ -5,7 +5,7 @@ defmodule Parrhesia.MixProject do
     [
       app: :parrhesia,
       version: "0.4.0",
-      elixir: "~> 1.19",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases()

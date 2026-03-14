@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  MIX_ENV: test
+  MIX_OS_DEPS_COMPILE_PARTITION_COUNT: 8
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Test (OTP 27.2 / Elixir 1.18.2)
+            otp: "27.2"
+            elixir: "1.18.2"
+            main: false
+          - name: Test (OTP 28.4 / Elixir 1.19.4 + Marmot E2E)
+            otp: "28.4"
+            elixir: "1.19.4"
+            main: true
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: app_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Elixir + OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Cache deps/ directory — keyed on mix.lock
+      - name: Cache Mix deps
+        uses: actions/cache@v4
+        id: deps-cache
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-deps-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-deps-
+
+      # Cache _build/ — keyed on mix.lock + OTP/Elixir versions
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-mix-build-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-build-${{ matrix.otp }}-${{ matrix.elixir }}-
+
+      - name: Install Mix dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        if: ${{ matrix.main }}
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        if: ${{ matrix.main }}
+        run: mix format --check-formatted
+
+      - name: Credo
+        if: ${{ matrix.main }}
+        run: mix credo --strict --all
+
+      - name: Check for unused locked deps
+        if: ${{ matrix.main }}
+        run: |
+          mix deps.unlock --unused
+          git diff --exit-code -- mix.lock
+
+      - name: Run tests
+        run: mix test --color
+
+      - name: Run Marmot E2E tests
+        run: mix test.marmot_e2e
