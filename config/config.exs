@@ -4,6 +4,7 @@ config :postgrex, :json_library, JSON
 
 config :parrhesia,
   moderation_cache_enabled: true,
+  relay_url: "ws://localhost:4000/relay",
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,
@@ -11,6 +12,9 @@ config :parrhesia,
     max_filter_limit: 500,
     max_subscriptions_per_connection: 32,
     max_event_future_skew_seconds: 900,
+    max_event_ingest_per_window: 120,
+    event_ingest_window_seconds: 1,
+    auth_max_age_seconds: 600,
     max_outbound_queue: 256,
     outbound_drain_batch_size: 64,
     outbound_overflow_strategy: :close

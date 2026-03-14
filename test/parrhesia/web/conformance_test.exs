@@ -37,7 +37,7 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     event = valid_event()
 
-    assert {:push, {:text, frame}, ^state} =
+    assert {:push, {:text, frame}, _next_state} =
              Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
 
     assert JSON.decode!(frame) == ["OK", event["id"], true, "ok: event stored"]
@@ -54,7 +54,7 @@ defmodule Parrhesia.Web.ConformanceTest do
         "content" => "encrypted-welcome-payload"
       })
 
-    assert {:push, {:text, ok_frame}, ^state} =
+    assert {:push, {:text, ok_frame}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
                state
@@ -64,7 +64,7 @@ defmodule Parrhesia.Web.ConformanceTest do
 
     req_payload = JSON.encode!(["REQ", "sub-welcome", %{"kinds" => [1059], "#p" => [recipient]}])
 
-    assert {:push, restricted_frames, ^state} =
+    assert {:push, restricted_frames, _next_state} =
              Connection.handle_in({req_payload, [opcode: :text]}, state)
 
     decoded_restricted =
@@ -106,7 +106,7 @@ defmodule Parrhesia.Web.ConformanceTest do
         "content" => Base.encode64("commit-envelope")
       })
 
-    assert {:push, {:text, commit_ok_frame}, ^state} =
+    assert {:push, {:text, commit_ok_frame}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", commit_event]), [opcode: :text]},
                state
@@ -124,7 +124,7 @@ defmodule Parrhesia.Web.ConformanceTest do
         "content" => "encrypted-welcome-payload"
       })
 
-    assert {:push, {:text, welcome_ok_frame}, ^state} =
+    assert {:push, {:text, welcome_ok_frame}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", wrapped_welcome]), [opcode: :text]},
                state
@@ -187,7 +187,7 @@ defmodule Parrhesia.Web.ConformanceTest do
         "content" => "encrypted-push"
       })
 
-    assert {:push, {:text, relay_ok_frame}, ^state} =
+    assert {:push, {:text, relay_ok_frame}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", relay_list_event]), [opcode: :text]},
                state
@@ -200,7 +200,7 @@ defmodule Parrhesia.Web.ConformanceTest do
              "ok: event stored"
            ]
 
-    assert {:push, {:text, trigger_ok_frame}, ^state} =
+    assert {:push, {:text, trigger_ok_frame}, _next_state} =
              Connection.handle_in(
                {JSON.encode!(["EVENT", push_trigger]), [opcode: :text]},
                state
@@ -232,11 +232,13 @@ defmodule Parrhesia.Web.ConformanceTest do
   end
 
   defp valid_auth_event(challenge, pubkey) do
+    relay_url = Parrhesia.Config.get([:relay_url])
+
     event = %{
       "pubkey" => pubkey,
       "created_at" => System.system_time(:second),
       "kind" => 22_242,
-      "tags" => [["challenge", challenge]],
+      "tags" => [["challenge", challenge], ["relay", relay_url]],
       "content" => "",
       "sig" => String.duplicate("8", 128)
     }

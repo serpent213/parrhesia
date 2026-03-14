@@ -350,7 +350,7 @@ async function requestGiftWrapsWithAuth({ relayUrl, relayHttpUrl, signer, recipi
       created_at: unixNow(),
       tags: [
         ["challenge", challenge],
-        ["relay", relayHttpUrl],
+        ["relay", relayUrl],
       ],
       content: "",
     });

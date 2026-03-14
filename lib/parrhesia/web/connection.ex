@@ -20,6 +20,11 @@ defmodule Parrhesia.Web.Connection do
   @default_max_outbound_queue 256
   @default_outbound_drain_batch_size 64
   @default_outbound_overflow_strategy :close
+  @default_max_frame_bytes 1_048_576
+  @default_max_event_bytes 262_144
+  @default_event_ingest_rate_limit 120
+  @default_event_ingest_window_seconds 1
+  @default_auth_max_age_seconds 600
   @drain_outbound_queue :drain_outbound_queue
   @post_ack_ingest :post_ack_ingest
   @outbound_queue_pressure_threshold 0.75
@@ -43,13 +48,21 @@ defmodule Parrhesia.Web.Connection do
             subscription_index: Index,
             auth_challenges: Challenges,
             auth_challenge: nil,
+            relay_url: nil,
             negentropy_sessions: Sessions,
             outbound_queue: :queue.new(),
             outbound_queue_size: 0,
             max_outbound_queue: @default_max_outbound_queue,
             outbound_overflow_strategy: @default_outbound_overflow_strategy,
             outbound_drain_batch_size: @default_outbound_drain_batch_size,
-            drain_scheduled?: false
+            drain_scheduled?: false,
+            max_frame_bytes: @default_max_frame_bytes,
+            max_event_bytes: @default_max_event_bytes,
+            max_event_ingest_per_window: @default_event_ingest_rate_limit,
+            event_ingest_window_seconds: @default_event_ingest_window_seconds,
+            event_ingest_window_started_at_ms: 0,
+            event_ingest_count: 0,
+            auth_max_age_seconds: @default_auth_max_age_seconds
 
   @type overflow_strategy :: :close | :drop_oldest | :drop_newest
 
@@ -65,13 +78,21 @@ defmodule Parrhesia.Web.Connection do
           subscription_index: GenServer.server() | nil,
           auth_challenges: GenServer.server() | nil,
           auth_challenge: String.t() | nil,
+          relay_url: String.t() | nil,
           negentropy_sessions: GenServer.server() | nil,
           outbound_queue: :queue.queue({String.t(), map()}),
           outbound_queue_size: non_neg_integer(),
           max_outbound_queue: pos_integer(),
           outbound_overflow_strategy: overflow_strategy(),
           outbound_drain_batch_size: pos_integer(),
-          drain_scheduled?: boolean()
+          drain_scheduled?: boolean(),
+          max_frame_bytes: pos_integer(),
+          max_event_bytes: pos_integer(),
+          max_event_ingest_per_window: pos_integer(),
+          event_ingest_window_seconds: pos_integer(),
+          event_ingest_window_started_at_ms: integer(),
+          event_ingest_count: non_neg_integer(),
+          auth_max_age_seconds: pos_integer()
         }
 
   @impl true
@@ -83,10 +104,17 @@ defmodule Parrhesia.Web.Connection do
       subscription_index: subscription_index(opts),
       auth_challenges: auth_challenges,
       auth_challenge: maybe_issue_auth_challenge(auth_challenges),
+      relay_url: relay_url(opts),
       negentropy_sessions: negentropy_sessions(opts),
       max_outbound_queue: max_outbound_queue(opts),
       outbound_overflow_strategy: outbound_overflow_strategy(opts),
-      outbound_drain_batch_size: outbound_drain_batch_size(opts)
+      outbound_drain_batch_size: outbound_drain_batch_size(opts),
+      max_frame_bytes: max_frame_bytes(opts),
+      max_event_bytes: max_event_bytes(opts),
+      max_event_ingest_per_window: max_event_ingest_per_window(opts),
+      event_ingest_window_seconds: event_ingest_window_seconds(opts),
+      event_ingest_window_started_at_ms: System.monotonic_time(:millisecond),
+      auth_max_age_seconds: auth_max_age_seconds(opts)
     }
 
     {:ok, state}
@@ -94,13 +122,23 @@ defmodule Parrhesia.Web.Connection do
 
   @impl true
   def handle_in({payload, [opcode: :text]}, %__MODULE__{} = state) do
-    case Protocol.decode_client(payload) do
-      {:ok, decoded_message} ->
-        handle_decoded_message(decoded_message, state)
+    if byte_size(payload) > state.max_frame_bytes do
+      response =
+        Protocol.encode_relay({
+          :notice,
+          "invalid: websocket frame exceeds max frame size"
+        })
 
-      {:error, reason} ->
-        response = Protocol.encode_relay({:notice, Protocol.decode_error_notice(reason)})
-        {:push, {:text, response}, state}
+      {:push, {:text, response}, state}
+    else
+      case Protocol.decode_client(payload) do
+        {:ok, decoded_message} ->
+          handle_decoded_message(decoded_message, state)
+
+        {:error, reason} ->
+          response = Protocol.encode_relay({:notice, Protocol.decode_error_notice(reason)})
+          {:push, {:text, response}, state}
+      end
     end
   end
 
@@ -187,30 +225,39 @@ defmodule Parrhesia.Web.Connection do
     started_at = System.monotonic_time()
     event_id = Map.get(event, "id", "")
 
-    with :ok <- Protocol.validate_event(event),
-         :ok <- EventPolicy.authorize_write(event, state.authenticated_pubkeys),
-         :ok <- maybe_process_group_event(event),
-         {:ok, _result, message} <- persist_event(event) do
-      Telemetry.emit(
-        [:parrhesia, :ingest, :stop],
-        %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_event(event)
-      )
+    case maybe_allow_event_ingest(state) do
+      {:ok, next_state} ->
+        with :ok <- validate_event_payload_size(event, next_state.max_event_bytes),
+             :ok <- Protocol.validate_event(event),
+             :ok <- EventPolicy.authorize_write(event, next_state.authenticated_pubkeys),
+             :ok <- maybe_process_group_event(event),
+             {:ok, _result, message} <- persist_event(event) do
+          Telemetry.emit(
+            [:parrhesia, :ingest, :stop],
+            %{duration: System.monotonic_time() - started_at},
+            telemetry_metadata_for_event(event)
+          )
 
-      send(self(), {@post_ack_ingest, event})
+          send(self(), {@post_ack_ingest, event})
 
-      response = Protocol.encode_relay({:ok, event_id, true, message})
-      {:push, {:text, response}, state}
-    else
+          response = Protocol.encode_relay({:ok, event_id, true, message})
+          {:push, {:text, response}, next_state}
+        else
+          {:error, reason} ->
+            message = error_message_for_ingest_failure(reason)
+            response = Protocol.encode_relay({:ok, event_id, false, message})
+
+            if reason in [:auth_required, :protected_event_requires_auth] do
+              with_auth_challenge_frame(next_state, {:push, {:text, response}, next_state})
+            else
+              {:push, {:text, response}, next_state}
+            end
+        end
+
       {:error, reason} ->
         message = error_message_for_ingest_failure(reason)
         response = Protocol.encode_relay({:ok, event_id, false, message})
-
-        if reason in [:auth_required, :protected_event_requires_auth] do
-          with_auth_challenge_frame(state, {:push, {:text, response}, state})
-        else
-          {:push, {:text, response}, state}
-        end
+        {:push, {:text, response}, state}
     end
   end
 
@@ -359,7 +406,7 @@ defmodule Parrhesia.Web.Connection do
     event_id = Map.get(auth_event, "id", "")
 
     with :ok <- Protocol.validate_event(auth_event),
-         :ok <- validate_auth_event(auth_event),
+         :ok <- validate_auth_event(state, auth_event),
          :ok <- validate_auth_challenge(state, auth_event) do
       pubkey = Map.get(auth_event, "pubkey")
 
@@ -418,18 +465,26 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp persist_event(event) do
-    case Map.get(event, "kind") do
-      5 ->
+    kind = Map.get(event, "kind")
+
+    cond do
+      kind == 5 ->
         with {:ok, deleted_count} <- Storage.events().delete_by_request(%{}, event) do
           {:ok, deleted_count, "ok: deletion request processed"}
         end
 
-      62 ->
+      kind == 62 ->
         with {:ok, deleted_count} <- Storage.events().vanish(%{}, event) do
           {:ok, deleted_count, "ok: vanish request processed"}
         end
 
-      _other ->
+      ephemeral_kind?(kind) and accept_ephemeral_events?() ->
+        {:ok, :ephemeral, "ok: ephemeral event accepted"}
+
+      ephemeral_kind?(kind) ->
+        {:error, :ephemeral_events_disabled}
+
+      true ->
         case Storage.events().put_event(%{}, event) do
           {:ok, persisted_event} -> {:ok, persisted_event, "ok: event stored"}
           {:error, :duplicate_event} -> {:error, :duplicate_event}
@@ -440,6 +495,15 @@ defmodule Parrhesia.Web.Connection do
 
   defp error_message_for_ingest_failure(:duplicate_event),
     do: "duplicate: event already stored"
+
+  defp error_message_for_ingest_failure(:event_rate_limited),
+    do: "rate-limited: too many EVENT messages"
+
+  defp error_message_for_ingest_failure(:event_too_large),
+    do: "invalid: event exceeds max event size"
+
+  defp error_message_for_ingest_failure(:ephemeral_events_disabled),
+    do: "blocked: ephemeral events are disabled"
 
   defp error_message_for_ingest_failure(reason)
        when reason in [
@@ -570,7 +634,7 @@ defmodule Parrhesia.Web.Connection do
     with_auth_challenge_frame(state, {:push, {:text, response}, state})
   end
 
-  defp validate_auth_event(%{"kind" => 22_242} = auth_event) do
+  defp validate_auth_event(%__MODULE__{} = state, %{"kind" => 22_242} = auth_event) do
     tags = Map.get(auth_event, "tags", [])
 
     challenge_tag? =
@@ -579,10 +643,14 @@ defmodule Parrhesia.Web.Connection do
         _tag -> false
       end)
 
-    if challenge_tag?, do: :ok, else: {:error, :missing_challenge_tag}
+    with :ok <- maybe_validate(challenge_tag?, :missing_challenge_tag),
+         :ok <- validate_auth_relay_tag(state, tags),
+         :ok <- validate_auth_created_at_freshness(auth_event, state.auth_max_age_seconds) do
+      :ok
+    end
   end
 
-  defp validate_auth_event(_auth_event), do: {:error, :invalid_auth_kind}
+  defp validate_auth_event(_state, _auth_event), do: {:error, :invalid_auth_kind}
 
   defp validate_auth_challenge(%__MODULE__{auth_challenge: nil}, _auth_event),
     do: {:error, :missing_challenge}
@@ -599,8 +667,45 @@ defmodule Parrhesia.Web.Connection do
     if challenge_tag_matches?, do: :ok, else: {:error, :challenge_mismatch}
   end
 
+  defp validate_auth_relay_tag(%__MODULE__{relay_url: relay_url}, tags)
+       when is_binary(relay_url) do
+    relay_tag_matches? =
+      Enum.any?(tags, fn
+        ["relay", ^relay_url | _rest] -> true
+        _tag -> false
+      end)
+
+    if relay_tag_matches?, do: :ok, else: {:error, :invalid_relay_tag}
+  end
+
+  defp validate_auth_relay_tag(%__MODULE__{relay_url: nil}, _tags),
+    do: {:error, :missing_relay_configuration}
+
+  defp validate_auth_created_at_freshness(auth_event, max_age_seconds)
+       when is_integer(max_age_seconds) and max_age_seconds > 0 do
+    created_at = Map.get(auth_event, "created_at", -1)
+    now = System.system_time(:second)
+
+    if created_at >= now - max_age_seconds do
+      :ok
+    else
+      {:error, :auth_event_too_old}
+    end
+  end
+
+  defp validate_auth_created_at_freshness(_auth_event, _max_age_seconds), do: :ok
+
+  defp maybe_validate(true, _reason), do: :ok
+  defp maybe_validate(false, reason), do: {:error, reason}
+
   defp auth_error_message(:invalid_auth_kind), do: "invalid: AUTH event kind must be 22242"
   defp auth_error_message(:missing_challenge_tag), do: "invalid: AUTH event missing challenge tag"
+  defp auth_error_message(:invalid_relay_tag), do: "invalid: AUTH relay tag mismatch"
+
+  defp auth_error_message(:missing_relay_configuration),
+    do: "invalid: relay URL is not configured"
+
+  defp auth_error_message(:auth_event_too_old), do: "invalid: AUTH event is too old"
   defp auth_error_message(:challenge_mismatch), do: "invalid: AUTH challenge mismatch"
   defp auth_error_message(:missing_challenge), do: "invalid: AUTH challenge unavailable"
   defp auth_error_message(reason) when is_binary(reason), do: reason
@@ -1136,5 +1241,201 @@ defmodule Parrhesia.Web.Connection do
     :parrhesia
     |> Application.get_env(:limits, [])
     |> Keyword.get(:outbound_overflow_strategy, @default_outbound_overflow_strategy)
+  end
+
+  defp relay_url(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:relay_url)
+    |> normalize_relay_url()
+    |> maybe_default_relay_url()
+  end
+
+  defp relay_url(opts) when is_map(opts) do
+    opts
+    |> Map.get(:relay_url)
+    |> normalize_relay_url()
+    |> maybe_default_relay_url()
+  end
+
+  defp relay_url(_opts), do: configured_relay_url()
+
+  defp normalize_relay_url(relay_url) when is_binary(relay_url) and relay_url != "", do: relay_url
+  defp normalize_relay_url(_relay_url), do: nil
+
+  defp maybe_default_relay_url(nil), do: configured_relay_url()
+  defp maybe_default_relay_url(relay_url), do: relay_url
+
+  defp configured_relay_url do
+    :parrhesia
+    |> Application.get_env(:relay_url)
+    |> normalize_relay_url()
+  end
+
+  defp max_frame_bytes(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:max_frame_bytes)
+    |> normalize_max_frame_bytes()
+  end
+
+  defp max_frame_bytes(opts) when is_map(opts) do
+    opts
+    |> Map.get(:max_frame_bytes)
+    |> normalize_max_frame_bytes()
+  end
+
+  defp max_frame_bytes(_opts), do: configured_max_frame_bytes()
+
+  defp normalize_max_frame_bytes(value) when is_integer(value) and value > 0, do: value
+  defp normalize_max_frame_bytes(_value), do: configured_max_frame_bytes()
+
+  defp configured_max_frame_bytes do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:max_frame_bytes, @default_max_frame_bytes)
+  end
+
+  defp max_event_bytes(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:max_event_bytes)
+    |> normalize_max_event_bytes()
+  end
+
+  defp max_event_bytes(opts) when is_map(opts) do
+    opts
+    |> Map.get(:max_event_bytes)
+    |> normalize_max_event_bytes()
+  end
+
+  defp max_event_bytes(_opts), do: configured_max_event_bytes()
+
+  defp normalize_max_event_bytes(value) when is_integer(value) and value > 0, do: value
+  defp normalize_max_event_bytes(_value), do: configured_max_event_bytes()
+
+  defp configured_max_event_bytes do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:max_event_bytes, @default_max_event_bytes)
+  end
+
+  defp max_event_ingest_per_window(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:max_event_ingest_per_window)
+    |> normalize_max_event_ingest_per_window()
+  end
+
+  defp max_event_ingest_per_window(opts) when is_map(opts) do
+    opts
+    |> Map.get(:max_event_ingest_per_window)
+    |> normalize_max_event_ingest_per_window()
+  end
+
+  defp max_event_ingest_per_window(_opts), do: configured_max_event_ingest_per_window()
+
+  defp normalize_max_event_ingest_per_window(value) when is_integer(value) and value > 0,
+    do: value
+
+  defp normalize_max_event_ingest_per_window(_value),
+    do: configured_max_event_ingest_per_window()
+
+  defp configured_max_event_ingest_per_window do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:max_event_ingest_per_window, @default_event_ingest_rate_limit)
+  end
+
+  defp event_ingest_window_seconds(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:event_ingest_window_seconds)
+    |> normalize_event_ingest_window_seconds()
+  end
+
+  defp event_ingest_window_seconds(opts) when is_map(opts) do
+    opts
+    |> Map.get(:event_ingest_window_seconds)
+    |> normalize_event_ingest_window_seconds()
+  end
+
+  defp event_ingest_window_seconds(_opts), do: configured_event_ingest_window_seconds()
+
+  defp normalize_event_ingest_window_seconds(value) when is_integer(value) and value > 0,
+    do: value
+
+  defp normalize_event_ingest_window_seconds(_value), do: configured_event_ingest_window_seconds()
+
+  defp configured_event_ingest_window_seconds do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:event_ingest_window_seconds, @default_event_ingest_window_seconds)
+  end
+
+  defp auth_max_age_seconds(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:auth_max_age_seconds)
+    |> normalize_auth_max_age_seconds()
+  end
+
+  defp auth_max_age_seconds(opts) when is_map(opts) do
+    opts
+    |> Map.get(:auth_max_age_seconds)
+    |> normalize_auth_max_age_seconds()
+  end
+
+  defp auth_max_age_seconds(_opts), do: configured_auth_max_age_seconds()
+
+  defp normalize_auth_max_age_seconds(value) when is_integer(value) and value > 0, do: value
+  defp normalize_auth_max_age_seconds(_value), do: configured_auth_max_age_seconds()
+
+  defp configured_auth_max_age_seconds do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:auth_max_age_seconds, @default_auth_max_age_seconds)
+  end
+
+  defp maybe_allow_event_ingest(
+         %__MODULE__{
+           event_ingest_window_started_at_ms: window_started_at_ms,
+           event_ingest_window_seconds: window_seconds,
+           event_ingest_count: count,
+           max_event_ingest_per_window: max_event_ingest_per_window
+         } = state
+       ) do
+    now_ms = System.monotonic_time(:millisecond)
+    window_ms = window_seconds * 1000
+
+    cond do
+      now_ms - window_started_at_ms >= window_ms ->
+        {:ok,
+         %__MODULE__{
+           state
+           | event_ingest_window_started_at_ms: now_ms,
+             event_ingest_count: 1
+         }}
+
+      count < max_event_ingest_per_window ->
+        {:ok, %__MODULE__{state | event_ingest_count: count + 1}}
+
+      true ->
+        {:error, :event_rate_limited}
+    end
+  end
+
+  defp validate_event_payload_size(event, max_event_bytes)
+       when is_map(event) and is_integer(max_event_bytes) and max_event_bytes > 0 do
+    if byte_size(JSON.encode!(event)) <= max_event_bytes do
+      :ok
+    else
+      {:error, :event_too_large}
+    end
+  end
+
+  defp validate_event_payload_size(_event, _max_event_bytes), do: :ok
+
+  defp ephemeral_kind?(kind) when is_integer(kind), do: kind >= 20_000 and kind < 30_000
+  defp ephemeral_kind?(_kind), do: false
+
+  defp accept_ephemeral_events? do
+    :parrhesia
+    |> Application.get_env(:policies, [])
+    |> Keyword.get(:accept_ephemeral_events, true)
   end
 end

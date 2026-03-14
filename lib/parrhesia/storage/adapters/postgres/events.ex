@@ -624,10 +624,18 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   defp maybe_filter_search(query, nil), do: query
 
   defp maybe_filter_search(query, search) when is_binary(search) and search != "" do
-    where(query, [event], ilike(event.content, ^"%#{search}%"))
+    escaped_search = escape_like_pattern(search)
+    where(query, [event], ilike(event.content, ^"%#{escaped_search}%"))
   end
 
   defp maybe_filter_search(query, _search), do: query
+
+  defp escape_like_pattern(search) do
+    search
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
 
   defp filter_by_tags(query, filter) do
     filter

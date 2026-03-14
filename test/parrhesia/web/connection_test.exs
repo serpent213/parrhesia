@@ -34,7 +34,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["COUNT", "sub-count", %{"kinds" => [1]}])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert ["COUNT", "sub-count", payload] = JSON.decode!(response)
@@ -62,7 +62,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     auth_event = valid_auth_event("wrong-challenge")
     payload = JSON.encode!(["AUTH", auth_event])
 
-    assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
+    assert {:push, frames, _next_state} = Connection.handle_in({payload, [opcode: :text]}, state)
 
     decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
@@ -71,6 +71,38 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert Enum.any?(decoded, fn frame ->
              match?(["OK", _, false, _], frame)
            end)
+  end
+
+  test "AUTH rejects relay tag mismatch" do
+    state = connection_state(relay_url: "ws://localhost:4000/relay")
+
+    auth_event = valid_auth_event(state.auth_challenge, relay_url: "ws://attacker.example/relay")
+    payload = JSON.encode!(["AUTH", auth_event])
+
+    assert {:push, frames, _next_state} = Connection.handle_in({payload, [opcode: :text]}, state)
+
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
+
+    assert ["OK", _, false, "invalid: AUTH relay tag mismatch"] =
+             Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
+  end
+
+  test "AUTH rejects stale events" do
+    state = connection_state(auth_max_age_seconds: 600)
+
+    stale_auth_event =
+      valid_auth_event(state.auth_challenge,
+        created_at: System.system_time(:second) - 601
+      )
+
+    payload = JSON.encode!(["AUTH", stale_auth_event])
+
+    assert {:push, frames, _next_state} = Connection.handle_in({payload, [opcode: :text]}, state)
+
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
+
+    assert ["OK", _, false, "invalid: AUTH event is too old"] =
+             Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
   end
 
   test "protected event is rejected unless authenticated" do
@@ -83,7 +115,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, frames, ^state} = Connection.handle_in({payload, [opcode: :text]}, state)
+    assert {:push, frames, _next_state} = Connection.handle_in({payload, [opcode: :text]}, state)
 
     decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
@@ -98,7 +130,8 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     req_payload = JSON.encode!(["REQ", "sub-445", %{"kinds" => [445]}])
 
-    assert {:push, frames, ^state} = Connection.handle_in({req_payload, [opcode: :text]}, state)
+    assert {:push, frames, _next_state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, state)
 
     decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
 
@@ -112,10 +145,90 @@ defmodule Parrhesia.Web.ConnectionTest do
     event = valid_event()
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == ["OK", event["id"], true, "ok: event stored"]
+  end
+
+  test "ephemeral events are accepted without persistence" do
+    previous_policies = Application.get_env(:parrhesia, :policies, [])
+
+    Application.put_env(
+      :parrhesia,
+      :policies,
+      Keyword.put(previous_policies, :accept_ephemeral_events, true)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :policies, previous_policies)
+    end)
+
+    state = connection_state()
+
+    event = valid_event() |> Map.put("kind", 20_001) |> recalculate_event_id()
+    payload = JSON.encode!(["EVENT", event])
+
+    assert {:push, {:text, response}, _next_state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == ["OK", event["id"], true, "ok: ephemeral event accepted"]
+    assert {:ok, nil} = Parrhesia.Storage.events().get_event(%{}, event["id"])
+  end
+
+  test "EVENT ingest enforces per-connection rate limits" do
+    state = connection_state(max_event_ingest_per_window: 1, event_ingest_window_seconds: 60)
+
+    first_event = valid_event(%{"content" => "first"})
+    second_event = valid_event(%{"content" => "second"})
+
+    assert {:push, {:text, first_response}, next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", first_event]), [opcode: :text]}, state)
+
+    assert JSON.decode!(first_response) == ["OK", first_event["id"], true, "ok: event stored"]
+
+    assert {:push, {:text, second_response}, ^next_state} =
+             Connection.handle_in(
+               {JSON.encode!(["EVENT", second_event]), [opcode: :text]},
+               next_state
+             )
+
+    assert JSON.decode!(second_response) == [
+             "OK",
+             second_event["id"],
+             false,
+             "rate-limited: too many EVENT messages"
+           ]
+  end
+
+  test "EVENT ingest enforces max event bytes" do
+    state = connection_state(max_event_bytes: 128)
+
+    large_event =
+      valid_event(%{"content" => String.duplicate("x", 256)})
+      |> recalculate_event_id()
+
+    assert {:push, {:text, response}, _next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", large_event]), [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "OK",
+             large_event["id"],
+             false,
+             "invalid: event exceeds max event size"
+           ]
+  end
+
+  test "text frame size is rejected before JSON decoding" do
+    state = connection_state(max_frame_bytes: 16)
+
+    assert {:push, {:text, response}, _next_state} =
+             Connection.handle_in({String.duplicate("x", 17), [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "NOTICE",
+             "invalid: websocket frame exceeds max frame size"
+           ]
   end
 
   test "invalid EVENT replies with OK false invalid prefix" do
@@ -124,7 +237,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     event = valid_event() |> Map.put("sig", "nope")
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == [
@@ -147,7 +260,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == [
@@ -170,7 +283,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == [
@@ -204,7 +317,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == [
@@ -255,7 +368,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, response}, ^state} =
+    assert {:push, {:text, response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(response) == [
@@ -306,12 +419,12 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     payload = JSON.encode!(["EVENT", event])
 
-    assert {:push, {:text, first_response}, ^state} =
+    assert {:push, {:text, first_response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(first_response) == ["OK", event["id"], true, "ok: event stored"]
 
-    assert {:push, {:text, second_response}, ^state} =
+    assert {:push, {:text, second_response}, _next_state} =
              Connection.handle_in({payload, [opcode: :text]}, state)
 
     assert JSON.decode!(second_response) == [
@@ -327,7 +440,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     open_payload = JSON.encode!(["NEG-OPEN", "neg-1", %{"cursor" => 0}])
 
-    assert {:push, {:text, open_response}, ^state} =
+    assert {:push, {:text, open_response}, _next_state} =
              Connection.handle_in({open_payload, [opcode: :text]}, state)
 
     assert ["NEG-MSG", "neg-1", %{"status" => "open", "cursor" => 0}] =
@@ -335,7 +448,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     close_payload = JSON.encode!(["NEG-CLOSE", "neg-1"])
 
-    assert {:push, {:text, close_response}, ^state} =
+    assert {:push, {:text, close_response}, _next_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, state)
 
     assert JSON.decode!(close_response) == ["NEG-MSG", "neg-1", %{"status" => "closed"}]
@@ -470,14 +583,15 @@ defmodule Parrhesia.Web.ConnectionTest do
     }
   end
 
-  defp valid_auth_event(challenge) do
-    now = System.system_time(:second)
+  defp valid_auth_event(challenge, opts \\ []) do
+    now = Keyword.get(opts, :created_at, System.system_time(:second))
+    relay_url = Keyword.get(opts, :relay_url, Parrhesia.Config.get([:relay_url]))
 
     base = %{
       "pubkey" => String.duplicate("9", 64),
       "created_at" => now,
       "kind" => 22_242,
-      "tags" => [["challenge", challenge]],
+      "tags" => [["challenge", challenge], ["relay", relay_url]],
       "content" => "",
       "sig" => String.duplicate("8", 128)
     }
@@ -510,7 +624,7 @@ defmodule Parrhesia.Web.ConnectionTest do
     end
   end
 
-  defp valid_event do
+  defp valid_event(overrides \\ %{}) do
     base_event = %{
       "pubkey" => String.duplicate("1", 64),
       "created_at" => System.system_time(:second),
@@ -520,6 +634,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       "sig" => String.duplicate("3", 128)
     }
 
-    Map.put(base_event, "id", EventValidator.compute_id(base_event))
+    base_event
+    |> Map.merge(overrides)
+    |> recalculate_event_id()
+  end
+
+  defp recalculate_event_id(event) do
+    Map.put(event, "id", EventValidator.compute_id(event))
   end
 end

@@ -248,6 +248,26 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
   end
 
+  test "search treats % and _ as literals" do
+    matching =
+      persist_event(%{
+        "kind" => 1,
+        "content" => "literal 100%_match value"
+      })
+
+    _other =
+      persist_event(%{
+        "kind" => 1,
+        "content" => "literal 100Xmatch value"
+      })
+
+    filters = [%{"kinds" => [1], "search" => "100%_match"}]
+
+    assert {:ok, [result]} = Events.query(%{}, filters, [])
+    assert result["id"] == matching["id"]
+    assert {:ok, 1} = Events.count(%{}, filters, [])
+  end
+
   test "query/3 combines search and media metadata tag filters" do
     media_hash = String.duplicate("a", 64)
 
