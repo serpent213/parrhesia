@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to GHCR?"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  FLAKE_OUTPUT: packages.x86_64-linux.dockerImage
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  test:
+    name: Release Gate
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: app_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Elixir + OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.4"
+          elixir-version: "1.19.4"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Cache Mix deps
+        uses: actions/cache@v4
+        id: deps-cache
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-deps-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-deps-
+
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-mix-build-28.4-1.19.4-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-build-28.4-1.19.4-
+
+      - name: Install Mix dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Credo
+        run: mix credo --strict --all
+
+      - name: Run tests
+        run: mix test --color
+
+      - name: Run Marmot E2E
+        run: mix test.marmot_e2e
+
+      - name: Check for unused locked deps
+        run: |
+          mix deps.unlock --unused
+          git diff --exit-code -- mix.lock
+
+  build-and-push:
+    name: Build and publish image
+    runs-on: ubuntu-24.04
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            substituters = https://cache.nixos.org
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build Docker image with Nix
+        id: build
+        run: |
+          nix build .#${{ env.FLAKE_OUTPUT }} --out-link ./docker-image-result
+          echo "archive_path=$(readlink -f ./docker-image-result)" >> "$GITHUB_OUTPUT"
+
+      - name: Push image to GHCR
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          SHOULD_PUSH: ${{ github.event.inputs.push != 'false' }}
+          ARCHIVE_PATH: ${{ steps.build.outputs.archive_path }}
+        run: |
+          if [ "$SHOULD_PUSH" != "true" ]; then
+            echo "Skipping push"
+            exit 0
+          fi
+
+          IMAGE_ARCHIVE="docker-archive:${ARCHIVE_PATH}"
+
+          while IFS= read -r TAG; do
+            if [ -n "$TAG" ]; then
+              echo "Pushing $TAG"
+              nix run nixpkgs#skopeo -- copy \
+                --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+                "$IMAGE_ARCHIVE" \
+                "docker://$TAG"
+            fi
+          done <<< "$TAGS"
