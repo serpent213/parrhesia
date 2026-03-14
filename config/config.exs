@@ -75,6 +75,8 @@ config :parrhesia, Parrhesia.Web.MetricsEndpoint,
   ip: {127, 0, 0, 1},
   port: 9568
 
+config :parrhesia, Parrhesia.Repo, types: Parrhesia.PostgresTypes
+
 config :parrhesia, ecto_repos: [Parrhesia.Repo]
 
 import_config "#{config_env()}.exs"
