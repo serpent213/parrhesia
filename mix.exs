@@ -44,7 +44,7 @@ defmodule Parrhesia.MixProject do
 
       # Test tooling
       {:stream_data, "~> 1.0", only: :test},
-      {:websockex, "~> 0.4", only: :test},
+      {:websockex, "~> 0.4"},
 
       # Project tooling
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

@@ -5,6 +5,8 @@ defmodule Parrhesia.API.Sync.Manager do
 
   alias Parrhesia.API.Sync
   alias Parrhesia.Protocol.Filter
+  alias Parrhesia.Sync.Transport.WebSockexClient
+  alias Parrhesia.Sync.Worker
 
   require Logger
 
@@ -19,61 +21,63 @@ defmodule Parrhesia.API.Sync.Manager do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def put_server(name, server) do
-    GenServer.call(name, {:put_server, server})
-  end
+  def put_server(name, server), do: GenServer.call(name, {:put_server, server})
+  def remove_server(name, server_id), do: GenServer.call(name, {:remove_server, server_id})
+  def get_server(name, server_id), do: GenServer.call(name, {:get_server, server_id})
+  def list_servers(name), do: GenServer.call(name, :list_servers)
+  def start_server(name, server_id), do: GenServer.call(name, {:start_server, server_id})
+  def stop_server(name, server_id), do: GenServer.call(name, {:stop_server, server_id})
+  def sync_now(name, server_id), do: GenServer.call(name, {:sync_now, server_id})
+  def server_stats(name, server_id), do: GenServer.call(name, {:server_stats, server_id})
+  def sync_stats(name), do: GenServer.call(name, :sync_stats)
+  def sync_health(name), do: GenServer.call(name, :sync_health)
 
-  def remove_server(name, server_id) do
-    GenServer.call(name, {:remove_server, server_id})
-  end
-
-  def get_server(name, server_id) do
-    GenServer.call(name, {:get_server, server_id})
-  end
-
-  def list_servers(name) do
-    GenServer.call(name, :list_servers)
-  end
-
-  def start_server(name, server_id) do
-    GenServer.call(name, {:start_server, server_id})
-  end
-
-  def stop_server(name, server_id) do
-    GenServer.call(name, {:stop_server, server_id})
-  end
-
-  def sync_now(name, server_id) do
-    GenServer.call(name, {:sync_now, server_id})
-  end
-
-  def server_stats(name, server_id) do
-    GenServer.call(name, {:server_stats, server_id})
-  end
-
-  def sync_stats(name) do
-    GenServer.call(name, :sync_stats)
-  end
-
-  def sync_health(name) do
-    GenServer.call(name, :sync_health)
+  def runtime_event(name, server_id, kind, attrs \\ %{}) do
+    GenServer.cast(name, {:runtime_event, server_id, kind, attrs})
   end
 
   @impl true
   def init(opts) do
     path = Keyword.get(opts, :path, config_path() || Sync.default_path())
-    {:ok, load_state(path)}
+
+    state =
+      load_state(path)
+      |> Map.merge(%{
+        start_workers?: Keyword.get(opts, :start_workers?, config_value(:start_workers?, true)),
+        worker_supervisor: Keyword.get(opts, :worker_supervisor, Parrhesia.Sync.WorkerSupervisor),
+        worker_registry: Keyword.get(opts, :worker_registry, Parrhesia.Sync.WorkerRegistry),
+        transport_module: Keyword.get(opts, :transport_module, WebSockexClient),
+        relay_info_opts: Keyword.get(opts, :relay_info_opts, []),
+        transport_opts: Keyword.get(opts, :transport_opts, [])
+      })
+
+    {:ok, state, {:continue, :bootstrap}}
+  end
+
+  @impl true
+  def handle_continue(:bootstrap, state) do
+    next_state =
+      if state.start_workers? do
+        state.servers
+        |> Map.keys()
+        |> Enum.reduce(state, fn server_id, acc -> maybe_start_worker(acc, server_id) end)
+      else
+        state
+      end
+
+    {:noreply, next_state}
   end
 
   @impl true
   def handle_call({:put_server, server}, _from, state) do
     case normalize_server(server) do
       {:ok, normalized_server} ->
-        updated_state = put_server_state(state, normalized_server)
+        updated_state =
+          state
+          |> put_server_state(normalized_server)
+          |> persist_and_reconcile!(normalized_server.id)
 
-        with :ok <- persist_state(updated_state) do
-          {:reply, {:ok, merged_server(updated_state, normalized_server.id)}, updated_state}
-        end
+        {:reply, {:ok, merged_server(updated_state, normalized_server.id)}, updated_state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -82,14 +86,14 @@ defmodule Parrhesia.API.Sync.Manager do
 
   def handle_call({:remove_server, server_id}, _from, state) do
     if Map.has_key?(state.servers, server_id) do
-      updated_state = %{
+      next_state =
         state
-        | servers: Map.delete(state.servers, server_id),
-          runtime: Map.delete(state.runtime, server_id)
-      }
+        |> stop_worker_if_running(server_id)
+        |> Map.update!(:servers, &Map.delete(&1, server_id))
+        |> Map.update!(:runtime, &Map.delete(&1, server_id))
 
-      with :ok <- persist_state(updated_state) do
-        {:reply, :ok, updated_state}
+      with :ok <- persist_state(next_state) do
+        {:reply, :ok, next_state}
       end
     else
       {:reply, {:error, :not_found}, state}
@@ -114,32 +118,69 @@ defmodule Parrhesia.API.Sync.Manager do
   end
 
   def handle_call({:start_server, server_id}, _from, state) do
-    with {:ok, updated_state} <- update_runtime(state, server_id, &mark_running/1),
-         :ok <- persist_state(updated_state) do
-      {:reply, :ok, updated_state}
-    else
-      :error -> {:reply, {:error, :not_found}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case Map.fetch(state.runtime, server_id) do
+      {:ok, runtime} ->
+        next_state =
+          state
+          |> put_runtime(server_id, %{runtime | state: :running, last_error: nil})
+          |> persist_and_reconcile!(server_id)
+
+        {:reply, :ok, next_state}
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 
   def handle_call({:stop_server, server_id}, _from, state) do
-    with {:ok, updated_state} <- update_runtime(state, server_id, &mark_stopped/1),
-         :ok <- persist_state(updated_state) do
-      {:reply, :ok, updated_state}
-    else
-      :error -> {:reply, {:error, :not_found}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case Map.fetch(state.runtime, server_id) do
+      {:ok, runtime} ->
+        next_runtime =
+          runtime
+          |> Map.put(:state, :stopped)
+          |> Map.put(:connected?, false)
+          |> Map.put(:last_disconnected_at, now())
+
+        next_state =
+          state
+          |> stop_worker_if_running(server_id)
+          |> put_runtime(server_id, next_runtime)
+
+        with :ok <- persist_state(next_state) do
+          {:reply, :ok, next_state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 
   def handle_call({:sync_now, server_id}, _from, state) do
-    with {:ok, updated_state} <- update_runtime(state, server_id, &record_sync_now/1),
-         :ok <- persist_state(updated_state) do
-      {:reply, :ok, updated_state}
-    else
-      :error -> {:reply, {:error, :not_found}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case {Map.has_key?(state.runtime, server_id), state.start_workers?,
+          lookup_worker(state, server_id)} do
+      {false, _start_workers?, _worker_pid} ->
+        {:reply, {:error, :not_found}, state}
+
+      {true, true, worker_pid} when is_pid(worker_pid) ->
+        Worker.sync_now(worker_pid)
+        {:reply, :ok, state}
+
+      {true, true, nil} ->
+        next_state =
+          state
+          |> put_in([:runtime, server_id, :state], :running)
+          |> persist_and_reconcile!(server_id)
+
+        {:reply, :ok, next_state}
+
+      {true, false, _worker_pid} ->
+        next_state =
+          apply_runtime_event(state, server_id, :sync_started, %{})
+          |> apply_runtime_event(server_id, :sync_completed, %{})
+
+        with :ok <- persist_state(next_state) do
+          {:reply, :ok, next_state}
+        end
     end
   end
 
@@ -150,19 +191,39 @@ defmodule Parrhesia.API.Sync.Manager do
     end
   end
 
-  def handle_call(:sync_stats, _from, state) do
-    {:reply, {:ok, aggregate_stats(state)}, state}
+  def handle_call(:sync_stats, _from, state), do: {:reply, {:ok, aggregate_stats(state)}, state}
+  def handle_call(:sync_health, _from, state), do: {:reply, {:ok, health_summary(state)}, state}
+
+  @impl true
+  def handle_cast({:runtime_event, server_id, kind, attrs}, state) do
+    next_state =
+      state
+      |> apply_runtime_event(server_id, kind, attrs)
+      |> persist_state_if_known_server(server_id)
+
+    {:noreply, next_state}
   end
 
-  def handle_call(:sync_health, _from, state) do
-    {:reply, {:ok, health_summary(state)}, state}
+  defp persist_state_if_known_server(state, server_id) do
+    if Map.has_key?(state.runtime, server_id) do
+      case persist_state(state) do
+        :ok ->
+          state
+
+        {:error, reason} ->
+          Logger.warning("failed to persist sync runtime for #{server_id}: #{inspect(reason)}")
+          state
+      end
+    else
+      state
+    end
   end
 
   defp put_server_state(state, server) do
     runtime =
       case Map.get(state.runtime, server.id) do
         nil -> default_runtime(server)
-        existing_runtime -> maybe_align_runtime_with_server(existing_runtime, server)
+        existing_runtime -> existing_runtime
       end
 
     %{
@@ -172,70 +233,103 @@ defmodule Parrhesia.API.Sync.Manager do
     }
   end
 
-  defp maybe_align_runtime_with_server(runtime, %{enabled?: false}) do
-    runtime
-    |> Map.put(:state, :stopped)
-    |> Map.put(:connected?, false)
-    |> Map.put(:last_disconnected_at, now())
+  defp put_runtime(state, server_id, runtime) do
+    %{state | runtime: Map.put(state.runtime, server_id, runtime)}
   end
 
-  defp maybe_align_runtime_with_server(runtime, _server), do: runtime
-
-  defp default_runtime(server) do
-    %{
-      server_id: server.id,
-      state: if(server.enabled?, do: :running, else: :stopped),
-      connected?: false,
-      last_connected_at: nil,
-      last_disconnected_at: nil,
-      last_sync_started_at: nil,
-      last_sync_completed_at: nil,
-      last_event_received_at: nil,
-      last_eose_at: nil,
-      reconnect_attempts: 0,
-      last_error: nil,
-      events_received: 0,
-      events_accepted: 0,
-      events_duplicate: 0,
-      events_rejected: 0,
-      query_runs: 0,
-      subscription_restarts: 0,
-      reconnects: 0,
-      last_remote_eose_at: nil
-    }
+  defp persist_and_reconcile!(state, server_id) do
+    :ok = persist_state(state)
+    reconcile_worker(state, server_id)
   end
 
-  defp mark_running(runtime) do
-    runtime
-    |> Map.put(:state, :running)
-    |> Map.put(:last_error, nil)
-  end
+  defp reconcile_worker(state, server_id) do
+    cond do
+      not state.start_workers? ->
+        state
 
-  defp mark_stopped(runtime) do
-    runtime
-    |> Map.put(:state, :stopped)
-    |> Map.put(:connected?, false)
-    |> Map.put(:last_disconnected_at, now())
-  end
+      desired_running?(state, server_id) ->
+        state
+        |> stop_worker_if_running(server_id)
+        |> maybe_start_worker(server_id)
 
-  defp record_sync_now(runtime) do
-    sync_timestamp = now()
-
-    runtime
-    |> Map.update!(:query_runs, &(&1 + 1))
-    |> Map.put(:last_sync_started_at, sync_timestamp)
-    |> Map.put(:last_sync_completed_at, sync_timestamp)
-  end
-
-  defp update_runtime(state, server_id, fun) do
-    case Map.fetch(state.runtime, server_id) do
-      {:ok, runtime} ->
-        updated_runtime = fun.(runtime)
-        {:ok, %{state | runtime: Map.put(state.runtime, server_id, updated_runtime)}}
-
-      :error ->
-        :error
+      true ->
+        stop_worker_if_running(state, server_id)
     end
+  end
+
+  defp maybe_start_worker(state, server_id) do
+    cond do
+      not state.start_workers? ->
+        state
+
+      not desired_running?(state, server_id) ->
+        state
+
+      lookup_worker(state, server_id) != nil ->
+        state
+
+      true ->
+        server = Map.fetch!(state.servers, server_id)
+        runtime = Map.fetch!(state.runtime, server_id)
+
+        child_spec = %{
+          id: {:sync_worker, server_id},
+          start:
+            {Worker, :start_link,
+             [
+               [
+                 name: via_tuple(server_id, state.worker_registry),
+                 server: server,
+                 runtime: runtime,
+                 manager: self(),
+                 transport_module: state.transport_module,
+                 relay_info_opts: state.relay_info_opts,
+                 transport_opts: state.transport_opts
+               ]
+             ]},
+          restart: :transient
+        }
+
+        case DynamicSupervisor.start_child(state.worker_supervisor, child_spec) do
+          {:ok, _pid} ->
+            state
+
+          {:error, {:already_started, _pid}} ->
+            state
+
+          {:error, reason} ->
+            Logger.warning("failed to start sync worker #{server_id}: #{inspect(reason)}")
+            state
+        end
+    end
+  end
+
+  defp stop_worker_if_running(state, server_id) do
+    if worker_pid = lookup_worker(state, server_id) do
+      _ = Worker.stop(worker_pid)
+    end
+
+    state
+  end
+
+  defp desired_running?(state, server_id) do
+    case Map.fetch(state.runtime, server_id) do
+      {:ok, runtime} -> runtime.state == :running
+      :error -> false
+    end
+  end
+
+  defp lookup_worker(state, server_id) do
+    case Registry.lookup(state.worker_registry, server_id) do
+      [{pid, _value}] -> pid
+      [] -> nil
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp via_tuple(server_id, registry) do
+    {:via, Registry, {registry, server_id}}
   end
 
   defp merged_server(state, server_id) do
@@ -259,7 +353,9 @@ defmodule Parrhesia.API.Sync.Manager do
       "last_sync_started_at" => runtime.last_sync_started_at,
       "last_sync_completed_at" => runtime.last_sync_completed_at,
       "last_remote_eose_at" => runtime.last_remote_eose_at,
-      "last_error" => runtime.last_error
+      "last_error" => runtime.last_error,
+      "cursor_created_at" => runtime.cursor_created_at,
+      "cursor_event_id" => runtime.cursor_event_id
     }
   end
 
@@ -300,6 +396,129 @@ defmodule Parrhesia.API.Sync.Manager do
       "servers_failing" => failing_servers
     }
   end
+
+  defp apply_runtime_event(state, server_id, kind, attrs) do
+    case Map.fetch(state.runtime, server_id) do
+      {:ok, runtime} ->
+        updated_runtime = update_runtime_for_event(runtime, kind, attrs)
+        put_runtime(state, server_id, updated_runtime)
+
+      :error ->
+        state
+    end
+  end
+
+  defp update_runtime_for_event(runtime, :connected, _attrs) do
+    runtime
+    |> Map.put(:state, :running)
+    |> Map.put(:connected?, true)
+    |> Map.put(:last_connected_at, now())
+    |> Map.put(:last_error, nil)
+  end
+
+  defp update_runtime_for_event(runtime, :disconnected, attrs) do
+    reason = format_reason(Map.get(attrs, :reason))
+
+    runtime
+    |> Map.put(:connected?, false)
+    |> Map.put(:last_disconnected_at, now())
+    |> Map.update!(:reconnects, &(&1 + 1))
+    |> Map.put(:last_error, reason)
+  end
+
+  defp update_runtime_for_event(runtime, :error, attrs) do
+    Map.put(runtime, :last_error, format_reason(Map.get(attrs, :reason)))
+  end
+
+  defp update_runtime_for_event(runtime, :sync_started, _attrs) do
+    runtime
+    |> Map.put(:last_sync_started_at, now())
+    |> Map.update!(:query_runs, &(&1 + 1))
+  end
+
+  defp update_runtime_for_event(runtime, :sync_completed, _attrs) do
+    timestamp = now()
+
+    runtime
+    |> Map.put(:last_sync_completed_at, timestamp)
+    |> Map.put(:last_eose_at, timestamp)
+    |> Map.put(:last_remote_eose_at, timestamp)
+  end
+
+  defp update_runtime_for_event(runtime, :subscription_restart, _attrs) do
+    Map.update!(runtime, :subscription_restarts, &(&1 + 1))
+  end
+
+  defp update_runtime_for_event(runtime, :cursor_advanced, attrs) do
+    runtime
+    |> Map.put(:cursor_created_at, Map.get(attrs, :created_at))
+    |> Map.put(:cursor_event_id, Map.get(attrs, :event_id))
+  end
+
+  defp update_runtime_for_event(runtime, :event_result, attrs) do
+    event = Map.get(attrs, :event, %{})
+    result = Map.get(attrs, :result)
+
+    runtime
+    |> Map.update!(:events_received, &(&1 + 1))
+    |> Map.put(:last_event_received_at, now())
+    |> increment_result_counter(result)
+    |> maybe_put_last_error(attrs)
+    |> maybe_advance_runtime_cursor(event, result)
+  end
+
+  defp update_runtime_for_event(runtime, _kind, _attrs), do: runtime
+
+  defp increment_result_counter(runtime, :accepted),
+    do: Map.update!(runtime, :events_accepted, &(&1 + 1))
+
+  defp increment_result_counter(runtime, :duplicate),
+    do: Map.update!(runtime, :events_duplicate, &(&1 + 1))
+
+  defp increment_result_counter(runtime, :rejected),
+    do: Map.update!(runtime, :events_rejected, &(&1 + 1))
+
+  defp increment_result_counter(runtime, _result), do: runtime
+
+  defp maybe_put_last_error(runtime, %{reason: nil}), do: runtime
+
+  defp maybe_put_last_error(runtime, attrs),
+    do: Map.put(runtime, :last_error, format_reason(attrs[:reason]))
+
+  defp maybe_advance_runtime_cursor(runtime, event, result)
+       when result in [:accepted, :duplicate] do
+    created_at = Map.get(event, "created_at")
+    event_id = Map.get(event, "id")
+
+    cond do
+      not is_integer(created_at) or not is_binary(event_id) ->
+        runtime
+
+      is_nil(runtime.cursor_created_at) ->
+        runtime
+        |> Map.put(:cursor_created_at, created_at)
+        |> Map.put(:cursor_event_id, event_id)
+
+      created_at > runtime.cursor_created_at ->
+        runtime
+        |> Map.put(:cursor_created_at, created_at)
+        |> Map.put(:cursor_event_id, event_id)
+
+      created_at == runtime.cursor_created_at and event_id > runtime.cursor_event_id ->
+        runtime
+        |> Map.put(:cursor_created_at, created_at)
+        |> Map.put(:cursor_event_id, event_id)
+
+      true ->
+        runtime
+    end
+  end
+
+  defp maybe_advance_runtime_cursor(runtime, _event, _result), do: runtime
+
+  defp format_reason(nil), do: nil
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 
   defp load_state(path) do
     case File.read(path) do
@@ -361,29 +580,29 @@ defmodule Parrhesia.API.Sync.Manager do
   defp normalize_runtime(nil, server), do: default_runtime(server)
 
   defp normalize_runtime(runtime, server) when is_map(runtime) do
-    state =
-      runtime
-      |> Map.put(:server_id, server.id)
-      |> Map.put(:state, normalize_runtime_state(fetch_value(runtime, :state)))
-      |> Map.put(:connected?, fetch_boolean(runtime, :connected?) || false)
-      |> Map.put(:last_connected_at, fetch_string_or_nil(runtime, :last_connected_at))
-      |> Map.put(:last_disconnected_at, fetch_string_or_nil(runtime, :last_disconnected_at))
-      |> Map.put(:last_sync_started_at, fetch_string_or_nil(runtime, :last_sync_started_at))
-      |> Map.put(:last_sync_completed_at, fetch_string_or_nil(runtime, :last_sync_completed_at))
-      |> Map.put(:last_event_received_at, fetch_string_or_nil(runtime, :last_event_received_at))
-      |> Map.put(:last_eose_at, fetch_string_or_nil(runtime, :last_eose_at))
-      |> Map.put(:last_remote_eose_at, fetch_string_or_nil(runtime, :last_remote_eose_at))
-      |> Map.put(:last_error, fetch_string_or_nil(runtime, :last_error))
-      |> Map.put(:reconnect_attempts, fetch_non_neg_integer(runtime, :reconnect_attempts))
-      |> Map.put(:events_received, fetch_non_neg_integer(runtime, :events_received))
-      |> Map.put(:events_accepted, fetch_non_neg_integer(runtime, :events_accepted))
-      |> Map.put(:events_duplicate, fetch_non_neg_integer(runtime, :events_duplicate))
-      |> Map.put(:events_rejected, fetch_non_neg_integer(runtime, :events_rejected))
-      |> Map.put(:query_runs, fetch_non_neg_integer(runtime, :query_runs))
-      |> Map.put(:subscription_restarts, fetch_non_neg_integer(runtime, :subscription_restarts))
-      |> Map.put(:reconnects, fetch_non_neg_integer(runtime, :reconnects))
-
-    maybe_align_runtime_with_server(state, server)
+    %{
+      server_id: server.id,
+      state: normalize_runtime_state(fetch_value(runtime, :state)),
+      connected?: fetch_boolean(runtime, :connected?) || false,
+      last_connected_at: fetch_string_or_nil(runtime, :last_connected_at),
+      last_disconnected_at: fetch_string_or_nil(runtime, :last_disconnected_at),
+      last_sync_started_at: fetch_string_or_nil(runtime, :last_sync_started_at),
+      last_sync_completed_at: fetch_string_or_nil(runtime, :last_sync_completed_at),
+      last_event_received_at: fetch_string_or_nil(runtime, :last_event_received_at),
+      last_eose_at: fetch_string_or_nil(runtime, :last_eose_at),
+      reconnect_attempts: fetch_non_neg_integer(runtime, :reconnect_attempts),
+      last_error: fetch_string_or_nil(runtime, :last_error),
+      events_received: fetch_non_neg_integer(runtime, :events_received),
+      events_accepted: fetch_non_neg_integer(runtime, :events_accepted),
+      events_duplicate: fetch_non_neg_integer(runtime, :events_duplicate),
+      events_rejected: fetch_non_neg_integer(runtime, :events_rejected),
+      query_runs: fetch_non_neg_integer(runtime, :query_runs),
+      subscription_restarts: fetch_non_neg_integer(runtime, :subscription_restarts),
+      reconnects: fetch_non_neg_integer(runtime, :reconnects),
+      last_remote_eose_at: fetch_string_or_nil(runtime, :last_remote_eose_at),
+      cursor_created_at: fetch_optional_integer(runtime, :cursor_created_at),
+      cursor_event_id: fetch_string_or_nil(runtime, :cursor_event_id)
+    }
   end
 
   defp normalize_runtime(_runtime, server), do: default_runtime(server)
@@ -404,7 +623,7 @@ defmodule Parrhesia.API.Sync.Manager do
 
   defp encode_state(state) do
     %{
-      "version" => 1,
+      "version" => 2,
       "servers" =>
         Map.new(state.servers, fn {server_id, server} -> {server_id, encode_server(server)} end),
       "runtime" =>
@@ -457,7 +676,9 @@ defmodule Parrhesia.API.Sync.Manager do
       "query_runs" => runtime.query_runs,
       "subscription_restarts" => runtime.subscription_restarts,
       "reconnects" => runtime.reconnects,
-      "last_remote_eose_at" => runtime.last_remote_eose_at
+      "last_remote_eose_at" => runtime.last_remote_eose_at,
+      "cursor_created_at" => runtime.cursor_created_at,
+      "cursor_event_id" => runtime.cursor_event_id
     }
   end
 
@@ -465,9 +686,35 @@ defmodule Parrhesia.API.Sync.Manager do
     %{path: path, servers: %{}, runtime: %{}}
   end
 
+  defp default_runtime(server) do
+    %{
+      server_id: server.id,
+      state: if(server.enabled?, do: :running, else: :stopped),
+      connected?: false,
+      last_connected_at: nil,
+      last_disconnected_at: nil,
+      last_sync_started_at: nil,
+      last_sync_completed_at: nil,
+      last_event_received_at: nil,
+      last_eose_at: nil,
+      reconnect_attempts: 0,
+      last_error: nil,
+      events_received: 0,
+      events_accepted: 0,
+      events_duplicate: 0,
+      events_rejected: 0,
+      query_runs: 0,
+      subscription_restarts: 0,
+      reconnects: 0,
+      last_remote_eose_at: nil,
+      cursor_created_at: nil,
+      cursor_event_id: nil
+    }
+  end
+
   defp normalize_server(server) when is_map(server) do
     with {:ok, id} <- normalize_non_empty_string(fetch_value(server, :id), :invalid_server_id),
-         {:ok, {url, host}} <- normalize_url(fetch_value(server, :url)),
+         {:ok, {url, host, scheme}} <- normalize_url(fetch_value(server, :url)),
          {:ok, enabled?} <- normalize_boolean(fetch_value(server, :enabled?), true),
          {:ok, auth_pubkey} <- normalize_pubkey(fetch_value(server, :auth_pubkey)),
          {:ok, filters} <- normalize_filters(fetch_value(server, :filters)),
@@ -475,7 +722,7 @@ defmodule Parrhesia.API.Sync.Manager do
          {:ok, overlap_window_seconds} <-
            normalize_overlap_window(fetch_value(server, :overlap_window_seconds)),
          {:ok, auth} <- normalize_auth(fetch_value(server, :auth)),
-         {:ok, tls} <- normalize_tls(fetch_value(server, :tls), host),
+         {:ok, tls} <- normalize_tls(fetch_value(server, :tls), host, scheme),
          {:ok, metadata} <- normalize_metadata(fetch_value(server, :metadata)) do
       {:ok,
        %{
@@ -499,7 +746,7 @@ defmodule Parrhesia.API.Sync.Manager do
     uri = URI.parse(url)
 
     if uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" do
-      {:ok, {URI.to_string(uri), uri.host}}
+      {:ok, {URI.to_string(uri), uri.host, uri.scheme}}
     else
       {:error, :invalid_url}
     end
@@ -556,27 +803,37 @@ defmodule Parrhesia.API.Sync.Manager do
   defp normalize_auth_type("nip42"), do: {:ok, :nip42}
   defp normalize_auth_type(_type), do: {:error, :invalid_auth_type}
 
-  defp normalize_tls(tls, host) when is_map(tls) do
+  defp normalize_tls(tls, host, scheme) when is_map(tls) do
     with {:ok, mode} <- normalize_tls_mode(fetch_value(tls, :mode)),
+         :ok <- validate_tls_mode_against_scheme(mode, scheme),
          {:ok, hostname} <- normalize_hostname(fetch_value(tls, :hostname) || host),
-         {:ok, pins} <- normalize_tls_pins(fetch_value(tls, :pins)) do
+         {:ok, pins} <- normalize_tls_pins(mode, fetch_value(tls, :pins)) do
       {:ok, %{mode: mode, hostname: hostname, pins: pins}}
     end
   end
 
-  defp normalize_tls(_tls, _host), do: {:error, :invalid_tls}
+  defp normalize_tls(_tls, _host, _scheme), do: {:error, :invalid_tls}
 
   defp normalize_tls_mode(nil), do: {:ok, @default_tls_mode}
   defp normalize_tls_mode(:required), do: {:ok, :required}
   defp normalize_tls_mode("required"), do: {:ok, :required}
+  defp normalize_tls_mode(:disabled), do: {:ok, :disabled}
+  defp normalize_tls_mode("disabled"), do: {:ok, :disabled}
   defp normalize_tls_mode(_mode), do: {:error, :invalid_tls_mode}
+
+  defp validate_tls_mode_against_scheme(:required, "wss"), do: :ok
+  defp validate_tls_mode_against_scheme(:required, _scheme), do: {:error, :invalid_url}
+  defp validate_tls_mode_against_scheme(:disabled, _scheme), do: :ok
 
   defp normalize_hostname(hostname) when is_binary(hostname) and hostname != "",
     do: {:ok, hostname}
 
   defp normalize_hostname(_hostname), do: {:error, :invalid_tls_hostname}
 
-  defp normalize_tls_pins(pins) when is_list(pins) and pins != [] do
+  defp normalize_tls_pins(:disabled, nil), do: {:ok, []}
+  defp normalize_tls_pins(:disabled, pins) when is_list(pins), do: {:ok, []}
+
+  defp normalize_tls_pins(:required, pins) when is_list(pins) and pins != [] do
     Enum.reduce_while(pins, {:ok, []}, fn pin, {:ok, acc} ->
       case normalize_tls_pin(pin) do
         {:ok, normalized_pin} -> {:cont, {:ok, [normalized_pin | acc]}}
@@ -589,7 +846,7 @@ defmodule Parrhesia.API.Sync.Manager do
     end
   end
 
-  defp normalize_tls_pins(_pins), do: {:error, :invalid_tls_pins}
+  defp normalize_tls_pins(:required, _pins), do: {:error, :invalid_tls_pins}
 
   defp normalize_tls_pin(pin) when is_map(pin) do
     with {:ok, type} <- normalize_tls_pin_type(fetch_value(pin, :type)),
@@ -639,6 +896,13 @@ defmodule Parrhesia.API.Sync.Manager do
     end
   end
 
+  defp fetch_optional_integer(map, key) do
+    case fetch_value(map, key) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> nil
+    end
+  end
+
   defp fetch_boolean(map, key) do
     case fetch_value(map, key) do
       value when is_boolean(value) -> value
@@ -658,9 +922,13 @@ defmodule Parrhesia.API.Sync.Manager do
   end
 
   defp config_path do
+    config_value(:path)
+  end
+
+  defp config_value(key, default \\ nil) do
     :parrhesia
     |> Application.get_env(:sync, [])
-    |> Keyword.get(:path)
+    |> Keyword.get(key, default)
   end
 
   defp now do

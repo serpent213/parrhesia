@@ -20,7 +20,8 @@ config :parrhesia,
     private_key: nil
   ],
   sync: [
-    path: Path.join(System.tmp_dir!(), "parrhesia_test_sync.json")
+    path: Path.join(System.tmp_dir!(), "parrhesia_test_sync.json"),
+    start_workers?: false
   ],
   features: [verify_event_signatures: false]
 

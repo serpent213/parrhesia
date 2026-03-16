@@ -456,7 +456,12 @@ if config_env() == :prod do
       private_key: string_env.("PARRHESIA_IDENTITY_PRIVATE_KEY", nil)
     ],
     sync: [
-      path: string_env.("PARRHESIA_SYNC_PATH", nil)
+      path: string_env.("PARRHESIA_SYNC_PATH", nil),
+      start_workers?:
+        bool_env.(
+          "PARRHESIA_SYNC_START_WORKERS",
+          Keyword.get(Application.get_env(:parrhesia, :sync, []), :start_workers?, true)
+        )
     ],
     moderation_cache_enabled:
       bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),

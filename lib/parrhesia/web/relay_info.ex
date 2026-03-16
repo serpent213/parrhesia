@@ -3,12 +3,14 @@ defmodule Parrhesia.Web.RelayInfo do
   NIP-11 relay information document.
   """
 
+  alias Parrhesia.API.Identity
+
   @spec document() :: map()
   def document do
     %{
       "name" => "Parrhesia",
       "description" => "Nostr/Marmot relay",
-      "pubkey" => nil,
+      "pubkey" => relay_pubkey(),
       "supported_nips" => supported_nips(),
       "software" => "https://git.teralink.net/self/parrhesia",
       "version" => Application.spec(:parrhesia, :vsn) |> to_string(),
@@ -43,5 +45,12 @@ defmodule Parrhesia.Web.RelayInfo do
     :parrhesia
     |> Application.get_env(:features, [])
     |> Keyword.get(:nip_77_negentropy, true)
+  end
+
+  defp relay_pubkey do
+    case Identity.get() do
+      {:ok, %{pubkey: pubkey}} -> pubkey
+      {:error, _reason} -> nil
+    end
   end
 end

@@ -10,7 +10,8 @@ config :parrhesia,
     private_key: nil
   ],
   sync: [
-    path: nil
+    path: nil,
+    start_workers?: true
   ],
   limits: [
     max_frame_bytes: 1_048_576,

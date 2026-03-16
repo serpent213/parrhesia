@@ -128,7 +128,7 @@ defmodule Parrhesia.API.SyncTest do
   defp start_sync_manager do
     path = unique_sync_path()
     manager = {:global, {:sync_manager, System.unique_integer([:positive, :monotonic])}}
-    pid = start_supervised!({Manager, name: manager, path: path})
+    pid = start_supervised!({Manager, name: manager, path: path, start_workers?: false})
 
     {manager, path, pid}
   end
