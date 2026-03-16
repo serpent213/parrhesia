@@ -107,6 +107,91 @@ defmodule Parrhesia.Web.RouterTest do
     assert allowed_conn.status == 200
   end
 
+  test "GET /relay accepts proxy-asserted TLS identity from trusted proxies" do
+    test_listener =
+      listener(%{
+        transport: %{
+          scheme: :http,
+          tls: %{
+            mode: :proxy_terminated,
+            proxy_headers: %{enabled: true, required: true}
+          }
+        },
+        proxy: %{trusted_cidrs: ["10.0.0.0/8"], honor_x_forwarded_for: true}
+      })
+
+    conn =
+      conn(:get, "/relay")
+      |> put_req_header("accept", "application/nostr+json")
+      |> put_req_header("x-parrhesia-client-cert-verified", "true")
+      |> put_req_header("x-parrhesia-client-spki-sha256", "proxy-spki-pin")
+      |> Plug.Test.put_peer_data(%{
+        address: {10, 1, 2, 3},
+        port: 443,
+        ssl_cert: nil
+      })
+      |> route_conn(test_listener)
+
+    assert conn.status == 200
+  end
+
+  test "GET /relay rejects missing proxy-asserted TLS identity when required" do
+    test_listener =
+      listener(%{
+        transport: %{
+          scheme: :http,
+          tls: %{
+            mode: :proxy_terminated,
+            proxy_headers: %{enabled: true, required: true}
+          }
+        },
+        proxy: %{trusted_cidrs: ["10.0.0.0/8"], honor_x_forwarded_for: true}
+      })
+
+    conn =
+      conn(:get, "/relay")
+      |> put_req_header("accept", "application/nostr+json")
+      |> Plug.Test.put_peer_data(%{
+        address: {10, 1, 2, 3},
+        port: 443,
+        ssl_cert: nil
+      })
+      |> route_conn(test_listener)
+
+    assert conn.status == 403
+    assert conn.resp_body == "forbidden"
+  end
+
+  test "GET /relay rejects proxy-asserted TLS identity when the pin mismatches" do
+    test_listener =
+      listener(%{
+        transport: %{
+          scheme: :http,
+          tls: %{
+            mode: :proxy_terminated,
+            client_pins: [%{type: :spki_sha256, value: "expected-spki-pin"}],
+            proxy_headers: %{enabled: true, required: true}
+          }
+        },
+        proxy: %{trusted_cidrs: ["10.0.0.0/8"], honor_x_forwarded_for: true}
+      })
+
+    conn =
+      conn(:get, "/relay")
+      |> put_req_header("accept", "application/nostr+json")
+      |> put_req_header("x-parrhesia-client-cert-verified", "true")
+      |> put_req_header("x-parrhesia-client-spki-sha256", "wrong-spki-pin")
+      |> Plug.Test.put_peer_data(%{
+        address: {10, 1, 2, 3},
+        port: 443,
+        ssl_cert: nil
+      })
+      |> route_conn(test_listener)
+
+    assert conn.status == 403
+    assert conn.resp_body == "forbidden"
+  end
+
   test "POST /management requires authorization" do
     conn =
       conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))

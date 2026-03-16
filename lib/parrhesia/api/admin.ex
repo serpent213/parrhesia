@@ -7,9 +7,11 @@ defmodule Parrhesia.API.Admin do
   alias Parrhesia.API.Identity
   alias Parrhesia.API.Sync
   alias Parrhesia.Storage
+  alias Parrhesia.Web.Endpoint
 
   @supported_acl_methods ~w(acl_grant acl_revoke acl_list)
   @supported_identity_methods ~w(identity_ensure identity_get identity_import identity_rotate)
+  @supported_listener_methods ~w(listener_reload)
   @supported_sync_methods ~w(
     sync_get_server
     sync_health
@@ -96,7 +98,8 @@ defmodule Parrhesia.API.Admin do
       end
 
     (storage_supported ++
-       @supported_acl_methods ++ @supported_identity_methods ++ @supported_sync_methods)
+       @supported_acl_methods ++
+       @supported_identity_methods ++ @supported_listener_methods ++ @supported_sync_methods)
     |> Enum.uniq()
     |> Enum.sort()
   end
@@ -109,6 +112,22 @@ defmodule Parrhesia.API.Admin do
 
   defp identity_import(params) do
     Identity.import(params)
+  end
+
+  defp listener_reload(params) do
+    case normalize_listener_id(fetch_value(params, :id)) do
+      :all ->
+        Endpoint.reload_all()
+        |> ok_result()
+
+      {:ok, listener_id} ->
+        listener_id
+        |> Endpoint.reload_listener()
+        |> ok_result()
+
+      :error ->
+        {:error, :not_found}
+    end
   end
 
   defp sync_put_server(params, opts), do: Sync.put_server(params, opts)
@@ -173,6 +192,7 @@ defmodule Parrhesia.API.Admin do
   defp execute_builtin("identity_ensure", params, _opts), do: identity_ensure(params)
   defp execute_builtin("identity_import", params, _opts), do: identity_import(params)
   defp execute_builtin("identity_rotate", params, _opts), do: identity_rotate(params)
+  defp execute_builtin("listener_reload", params, _opts), do: listener_reload(params)
   defp execute_builtin("sync_put_server", params, opts), do: sync_put_server(params, opts)
   defp execute_builtin("sync_remove_server", params, opts), do: sync_remove_server(params, opts)
   defp execute_builtin("sync_get_server", params, opts), do: sync_get_server(params, opts)
@@ -202,6 +222,35 @@ defmodule Parrhesia.API.Admin do
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp ok_result(:ok), do: {:ok, %{"ok" => true}}
+  defp ok_result({:error, _reason} = error), do: error
+  defp ok_result(other), do: other
+
+  defp normalize_listener_id(nil), do: :all
+
+  defp normalize_listener_id(listener_id) when is_atom(listener_id) do
+    {:ok, listener_id}
+  end
+
+  defp normalize_listener_id(listener_id) when is_binary(listener_id) do
+    case Supervisor.which_children(Endpoint) do
+      children when is_list(children) ->
+        Enum.find_value(children, :error, &match_listener_child(&1, listener_id))
+
+      _other ->
+        :error
+    end
+  end
+
+  defp normalize_listener_id(_listener_id), do: :error
+
+  defp match_listener_child({{:listener, id}, _pid, _type, _modules}, listener_id) do
+    normalized_id = Atom.to_string(id)
+    if normalized_id == listener_id, do: {:ok, id}, else: false
+  end
+
+  defp match_listener_child(_child, _listener_id), do: false
 
   defp fetch_required_string(map, key) do
     case fetch_value(map, key) do

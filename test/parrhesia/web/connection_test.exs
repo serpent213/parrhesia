@@ -123,6 +123,18 @@ defmodule Parrhesia.Web.ConnectionTest do
              Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
   end
 
+  test "connection state keeps transport identity metadata" do
+    transport_identity = %{
+      source: :socket,
+      verified?: true,
+      spki_sha256: "client-spki-pin"
+    }
+
+    state = connection_state(transport_identity: transport_identity)
+
+    assert state.transport_identity == transport_identity
+  end
+
   test "listener can require NIP-42 for reads and writes" do
     listener =
       listener(%{

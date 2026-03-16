@@ -39,7 +39,7 @@ defmodule Parrhesia.Web.Router do
 
     if Listener.feature_enabled?(listener, :metrics) do
       case authorize_listener_request(conn, listener) do
-        :ok -> Metrics.handle(conn)
+        {:ok, conn} -> Metrics.handle(conn)
         {:error, :forbidden} -> send_resp(conn, 403, "forbidden")
       end
     else
@@ -52,7 +52,7 @@ defmodule Parrhesia.Web.Router do
 
     if Listener.feature_enabled?(listener, :admin) do
       case authorize_listener_request(conn, listener) do
-        :ok -> Management.handle(conn, listener: listener)
+        {:ok, conn} -> Management.handle(conn, listener: listener)
         {:error, :forbidden} -> send_resp(conn, 403, "forbidden")
       end
     else
@@ -65,7 +65,7 @@ defmodule Parrhesia.Web.Router do
 
     if Listener.feature_enabled?(listener, :nostr) do
       case authorize_listener_request(conn, listener) do
-        :ok ->
+        {:ok, conn} ->
           if accepts_nip11?(conn) do
             body = JSON.encode!(RelayInfo.document(listener))
 
@@ -79,7 +79,8 @@ defmodule Parrhesia.Web.Router do
               %{
                 listener: listener,
                 relay_url: Listener.relay_url(listener, conn),
-                remote_ip: remote_ip(conn)
+                remote_ip: remote_ip(conn),
+                transport_identity: transport_identity(conn)
               },
               timeout: 60_000,
               max_frame_size: max_frame_bytes()
@@ -118,10 +119,12 @@ defmodule Parrhesia.Web.Router do
 
   defp authorize_listener_request(conn, listener) do
     with :ok <- authorize_remote_ip(conn),
-         true <- Listener.remote_ip_allowed?(listener, conn.remote_ip) do
-      :ok
+         true <- Listener.remote_ip_allowed?(listener, conn.remote_ip),
+         {:ok, transport_identity} <- Listener.authorize_transport_request(listener, conn) do
+      {:ok, maybe_put_transport_identity(conn, transport_identity)}
     else
       {:error, :ip_blocked} -> {:error, :forbidden}
+      {:error, _reason} -> {:error, :forbidden}
       false -> {:error, :forbidden}
     end
   end
@@ -136,5 +139,15 @@ defmodule Parrhesia.Web.Router do
       {_, _, _, _, _, _, _, _} = remote_ip -> :inet.ntoa(remote_ip) |> to_string()
       _other -> nil
     end
+  end
+
+  defp maybe_put_transport_identity(conn, nil), do: conn
+
+  defp maybe_put_transport_identity(conn, transport_identity) do
+    Plug.Conn.put_private(conn, :parrhesia_transport_identity, transport_identity)
+  end
+
+  defp transport_identity(conn) do
+    Map.get(conn.private, :parrhesia_transport_identity)
   end
 end

@@ -4,6 +4,7 @@ defmodule Parrhesia.Web.Listener do
   import Bitwise
 
   alias Parrhesia.Protocol.Filter
+  alias Parrhesia.Web.TLS
 
   @private_cidrs [
     "127.0.0.0/8",
@@ -81,9 +82,36 @@ defmodule Parrhesia.Web.Listener do
     listener.proxy.trusted_cidrs
   end
 
+  @spec trusted_proxy_request?(t(), Plug.Conn.t()) :: boolean()
+  def trusted_proxy_request?(listener, conn) do
+    TLS.trusted_proxy_request?(conn, trusted_proxies(listener))
+  end
+
   @spec remote_ip_allowed?(t(), tuple() | String.t() | nil) :: boolean()
   def remote_ip_allowed?(listener, remote_ip) do
     access_allowed?(listener.network, remote_ip)
+  end
+
+  @spec authorize_transport_request(t(), Plug.Conn.t()) ::
+          {:ok, map() | nil} | {:error, atom()}
+  def authorize_transport_request(listener, conn) do
+    TLS.authorize_request(listener.transport.tls, conn, trusted_proxy_request?(listener, conn))
+  end
+
+  @spec request_scheme(t(), Plug.Conn.t()) :: :http | :https
+  def request_scheme(listener, conn) do
+    TLS.request_scheme(listener.transport.tls, conn, trusted_proxy_request?(listener, conn))
+  end
+
+  @spec request_host(t(), Plug.Conn.t()) :: String.t()
+  def request_host(listener, conn) do
+    TLS.request_host(conn, trusted_proxy_request?(listener, conn))
+  end
+
+  @spec request_port(t(), Plug.Conn.t()) :: non_neg_integer()
+  def request_port(listener, conn) do
+    scheme = request_scheme(listener, conn)
+    TLS.request_port(listener.transport.tls, conn, trusted_proxy_request?(listener, conn), scheme)
   end
 
   @spec metrics_allowed?(t(), Plug.Conn.t()) :: boolean()
@@ -97,17 +125,19 @@ defmodule Parrhesia.Web.Listener do
 
   @spec relay_url(t(), Plug.Conn.t()) :: String.t()
   def relay_url(listener, conn) do
-    scheme = listener.transport.scheme
+    scheme = request_scheme(listener, conn)
+    host = request_host(listener, conn)
+    port = request_port(listener, conn)
     ws_scheme = if scheme == :https, do: "wss", else: "ws"
 
     port_segment =
-      if default_http_port?(scheme, conn.port) do
+      if default_http_port?(scheme, port) do
         ""
       else
-        ":#{conn.port}"
+        ":#{port}"
       end
 
-    "#{ws_scheme}://#{conn.host}#{port_segment}#{conn.request_path}"
+    "#{ws_scheme}://#{host}#{port_segment}#{conn.request_path}"
   end
 
   @spec relay_auth_required?(t()) :: boolean()
@@ -131,12 +161,18 @@ defmodule Parrhesia.Web.Listener do
 
   @spec bandit_options(t()) :: keyword()
   def bandit_options(listener) do
+    scheme =
+      case listener.transport.tls.mode do
+        mode when mode in [:server, :mutual] -> :https
+        _other -> listener.transport.scheme
+      end
+
     [
       ip: listener.bind.ip,
       port: listener.bind.port,
-      scheme: listener.transport.scheme,
+      scheme: scheme,
       plug: {Parrhesia.Web.ListenerPlug, listener: listener}
-    ] ++ listener.bandit_options
+    ] ++ TLS.bandit_options(listener.transport.tls) ++ listener.bandit_options
   end
 
   defp normalize_listeners(listeners) when is_list(listeners) do
@@ -202,13 +238,15 @@ defmodule Parrhesia.Web.Listener do
   end
 
   defp normalize_transport(transport) when is_map(transport) do
+    scheme = normalize_scheme(fetch_value(transport, :scheme), :http)
+
     %{
-      scheme: normalize_scheme(fetch_value(transport, :scheme), :http),
-      tls: normalize_map(fetch_value(transport, :tls))
+      scheme: scheme,
+      tls: TLS.normalize_config(fetch_value(transport, :tls), scheme)
     }
   end
 
-  defp normalize_transport(_transport), do: %{scheme: :http, tls: %{}}
+  defp normalize_transport(_transport), do: %{scheme: :http, tls: TLS.default_config()}
 
   defp normalize_proxy(proxy) when is_map(proxy) do
     %{
@@ -478,7 +516,7 @@ defmodule Parrhesia.Web.Listener do
       id: :public,
       enabled: true,
       bind: %{ip: {0, 0, 0, 0}, port: 4413},
-      transport: %{scheme: :http, tls: %{}},
+      transport: %{scheme: :http, tls: TLS.default_config()},
       proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
       network: %{public?: false, private_networks_only?: false, allow_cidrs: [], allow_all?: true},
       features: %{
@@ -523,9 +561,6 @@ defmodule Parrhesia.Web.Listener do
       nil -> nil
     end
   end
-
-  defp normalize_map(value) when is_map(value), do: value
-  defp normalize_map(_value), do: %{}
 
   defp normalize_boolean(value, _default) when is_boolean(value), do: value
   defp normalize_boolean(nil, default), do: default

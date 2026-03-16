@@ -9,6 +9,7 @@ defmodule Parrhesia.API.RequestContext do
             remote_ip: nil,
             subscription_id: nil,
             peer_id: nil,
+            transport_identity: nil,
             metadata: %{}
 
   @type t :: %__MODULE__{
@@ -18,6 +19,7 @@ defmodule Parrhesia.API.RequestContext do
           remote_ip: String.t() | nil,
           subscription_id: String.t() | nil,
           peer_id: String.t() | nil,
+          transport_identity: map() | nil,
           metadata: map()
         }
 

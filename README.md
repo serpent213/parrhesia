@@ -19,6 +19,13 @@ It exposes:
 - operational HTTP endpoints such as `/health`, `/ready`, and `/metrics` on listeners that enable them
 - a NIP-86-style management API at `POST /management` on listeners that enable the `admin` feature
 
+Listeners can run in plain HTTP, HTTPS, mutual TLS, or proxy-terminated TLS modes. The current TLS implementation supports:
+
+- server TLS on listener sockets
+- optional client certificate admission with listener-side client pin checks
+- proxy-asserted client TLS identity on trusted proxy hops
+- admin-triggered certificate reload by restarting an individual listener from disk
+
 ## Supported NIPs
 
 Current `supported_nips` list:
@@ -173,6 +180,8 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:public.features.metrics.*` | `PARRHESIA_METRICS_*` | see below | Convenience runtime overrides for metrics on the public listener |
 | `:metrics.bind.port` | `PARRHESIA_METRICS_ENDPOINT_PORT` | `9568` | Optional dedicated metrics listener port |
 | `:metrics.enabled` | `PARRHESIA_METRICS_ENDPOINT_ENABLED` | `false` | Enables the optional dedicated metrics listener |
+
+Listener `transport.tls` supports `:disabled`, `:server`, `:mutual`, and `:proxy_terminated`. For TLS-enabled listeners, the main config-file fields are `certfile`, `keyfile`, optional `cacertfile`, optional `cipher_suite`, optional `client_pins`, and `proxy_headers` for proxy-terminated identity.
 
 #### `:limits`
 

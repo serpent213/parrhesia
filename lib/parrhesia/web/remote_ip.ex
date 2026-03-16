@@ -10,7 +10,7 @@ defmodule Parrhesia.Web.RemoteIp do
 
   @spec call(Plug.Conn.t(), term()) :: Plug.Conn.t()
   def call(conn, _opts) do
-    if trusted_proxy?(conn) do
+    if trusted_proxy?(conn) and honor_x_forwarded_for?(conn) do
       case forwarded_ip(conn) do
         nil -> conn
         forwarded_ip -> %{conn | remote_ip: forwarded_ip}
@@ -68,6 +68,11 @@ defmodule Parrhesia.Web.RemoteIp do
       trusted_proxies ->
         trusted_proxies
     end
+  end
+
+  defp honor_x_forwarded_for?(conn) do
+    listener = Listener.from_conn(conn)
+    listener.proxy.honor_x_forwarded_for
   end
 
   defp parse_x_forwarded_for(value) when is_binary(value) do

@@ -7,6 +7,7 @@ defmodule Parrhesia.Web.Management do
 
   alias Parrhesia.API.Admin
   alias Parrhesia.API.Auth
+  alias Parrhesia.Web.Listener
 
   @spec handle(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
   def handle(conn, opts \\ []) do
@@ -94,14 +95,15 @@ defmodule Parrhesia.Web.Management do
   end
 
   defp full_request_url(conn) do
-    scheme = Atom.to_string(conn.scheme)
-    host = conn.host
-    port = conn.port
+    listener = Listener.from_conn(conn)
+    scheme = Listener.request_scheme(listener, conn)
+    host = Listener.request_host(listener, conn)
+    port = Listener.request_port(listener, conn)
 
     port_suffix =
       cond do
-        conn.scheme == :http and port == 80 -> ""
-        conn.scheme == :https and port == 443 -> ""
+        scheme == :http and port == 80 -> ""
+        scheme == :https and port == 443 -> ""
         true -> ":#{port}"
       end
 

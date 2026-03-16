@@ -17,7 +17,7 @@ defmodule Parrhesia.Sync.Transport.WebSockexClient do
     transport_opts =
       server.tls
       |> TLS.websocket_options()
-      |> Keyword.merge(Keyword.get(opts, :websocket_opts, []))
+      |> merge_websocket_opts(Keyword.get(opts, :websocket_opts, []))
       |> Keyword.put(:handle_initial_conn_failure, true)
 
     WebSockex.start(server.url, __MODULE__, state, transport_opts)
@@ -71,4 +71,23 @@ defmodule Parrhesia.Sync.Transport.WebSockexClient do
     send(state.owner, {:sync_transport, self(), :disconnected, status})
     {:ok, state}
   end
+
+  defp merge_websocket_opts(base_opts, override_opts) do
+    override_ssl_options = Keyword.get(override_opts, :ssl_options)
+
+    merged_ssl_options =
+      case {Keyword.get(base_opts, :ssl_options), override_ssl_options} do
+        {nil, nil} -> nil
+        {base_ssl, nil} -> base_ssl
+        {nil, override_ssl} -> override_ssl
+        {base_ssl, override_ssl} -> Keyword.merge(base_ssl, override_ssl)
+      end
+
+    base_opts
+    |> Keyword.merge(Keyword.delete(override_opts, :ssl_options))
+    |> maybe_put_ssl_options(merged_ssl_options)
+  end
+
+  defp maybe_put_ssl_options(opts, nil), do: opts
+  defp maybe_put_ssl_options(opts, ssl_options), do: Keyword.put(opts, :ssl_options, ssl_options)
 end

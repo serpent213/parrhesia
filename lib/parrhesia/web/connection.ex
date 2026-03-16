@@ -45,6 +45,7 @@ defmodule Parrhesia.Web.Connection do
   defstruct subscriptions: %{},
             authenticated_pubkeys: MapSet.new(),
             listener: nil,
+            transport_identity: nil,
             max_subscriptions_per_connection: @default_max_subscriptions_per_connection,
             subscription_index: Index,
             auth_challenges: Challenges,
@@ -77,6 +78,7 @@ defmodule Parrhesia.Web.Connection do
           subscriptions: %{String.t() => subscription()},
           authenticated_pubkeys: MapSet.t(String.t()),
           listener: map() | nil,
+          transport_identity: map() | nil,
           max_subscriptions_per_connection: pos_integer(),
           subscription_index: GenServer.server() | nil,
           auth_challenges: GenServer.server() | nil,
@@ -105,6 +107,7 @@ defmodule Parrhesia.Web.Connection do
 
     state = %__MODULE__{
       listener: Listener.from_opts(opts),
+      transport_identity: transport_identity(opts),
       max_subscriptions_per_connection: max_subscriptions_per_connection(opts),
       subscription_index: subscription_index(opts),
       auth_challenges: auth_challenges,
@@ -1475,9 +1478,17 @@ defmodule Parrhesia.Web.Connection do
       caller: :websocket,
       remote_ip: state.remote_ip,
       subscription_id: subscription_id,
-      metadata: %{listener_id: state.listener.id}
+      transport_identity: state.transport_identity,
+      metadata: %{
+        listener_id: state.listener.id,
+        transport_identity: state.transport_identity
+      }
     }
   end
+
+  defp transport_identity(opts) when is_list(opts), do: Keyword.get(opts, :transport_identity)
+  defp transport_identity(opts) when is_map(opts), do: Map.get(opts, :transport_identity)
+  defp transport_identity(_opts), do: nil
 
   defp authorize_authenticated_pubkey(%{"pubkey" => pubkey}) when is_binary(pubkey) do
     ConnectionPolicy.authorize_authenticated_pubkey(pubkey)

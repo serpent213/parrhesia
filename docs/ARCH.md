@@ -103,8 +103,10 @@ Failure model:
 Ingress model:
 
 - Ingress is defined through `config :parrhesia, :listeners, ...`.
-- Each listener has its own bind/transport settings, proxy trust, network allowlist, enabled features (`nostr`, `admin`, `metrics`), auth requirements, and baseline read/write ACL.
+- Each listener has its own bind/transport settings, TLS mode, proxy trust, network allowlist, enabled features (`nostr`, `admin`, `metrics`), auth requirements, and baseline read/write ACL.
 - Listeners can therefore expose different security postures, for example a public relay listener and a VPN-only sync-capable listener.
+- TLS-capable listeners support direct server TLS, mutual TLS with optional client pin checks, and proxy-terminated TLS identity on explicitly trusted proxy hops.
+- Certificate reload is currently implemented as admin-triggered listener restart from disk rather than background file watching.
 
 ## 5) Core runtime components
 

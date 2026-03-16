@@ -1,18 +1,6 @@
 defmodule Parrhesia.Sync.TLS do
   @moduledoc false
 
-  require Record
-
-  Record.defrecordp(
-    :otp_certificate,
-    Record.extract(:OTPCertificate, from_lib: "public_key/include/OTP-PUB-KEY.hrl")
-  )
-
-  Record.defrecordp(
-    :otp_tbs_certificate,
-    Record.extract(:OTPTBSCertificate, from_lib: "public_key/include/OTP-PUB-KEY.hrl")
-  )
-
   @type tls_config :: %{
           mode: :required | :disabled,
           hostname: String.t(),
@@ -44,10 +32,19 @@ defmodule Parrhesia.Sync.TLS do
       server_name_indication: String.to_charlist(hostname),
       customize_hostname_check: [
         match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-      ],
-      verify_fun:
-        {&verify_certificate/3, %{pins: MapSet.new(Enum.map(pins, & &1.value)), matched?: false}}
+      ]
     ]
+    |> maybe_put_verify_fun(pins)
+  end
+
+  defp maybe_put_verify_fun(options, []), do: options
+
+  defp maybe_put_verify_fun(options, pins) do
+    Keyword.put(
+      options,
+      :verify_fun,
+      {&verify_certificate/3, %{pins: MapSet.new(Enum.map(pins, & &1.value)), matched?: false}}
+    )
   end
 
   defp verify_certificate(_cert, :valid_peer, %{matched?: true} = state), do: {:valid, state}
@@ -56,7 +53,21 @@ defmodule Parrhesia.Sync.TLS do
   defp verify_certificate(_cert, {:bad_cert, reason}, _state), do: {:fail, reason}
 
   defp verify_certificate(cert, _event, state) when is_binary(cert) do
-    matched? = MapSet.member?(state.pins, spki_pin(cert))
+    matched? = MapSet.member?(state.pins, spki_pin_from_verify(cert))
+    {:valid, %{state | matched?: state.matched? or matched?}}
+  rescue
+    _error -> {:fail, :invalid_certificate}
+  end
+
+  defp verify_certificate({:OTPCertificate, _tbs, _sig_alg, _sig} = cert, _event, state) do
+    matched? = MapSet.member?(state.pins, spki_pin_from_verify(cert))
+    {:valid, %{state | matched?: state.matched? or matched?}}
+  rescue
+    _error -> {:fail, :invalid_certificate}
+  end
+
+  defp verify_certificate({:Certificate, _tbs, _sig_alg, _sig} = cert, _event, state) do
+    matched? = MapSet.member?(state.pins, spki_pin_from_verify(cert))
     {:valid, %{state | matched?: state.matched? or matched?}}
   rescue
     _error -> {:fail, :invalid_certificate}
@@ -65,17 +76,30 @@ defmodule Parrhesia.Sync.TLS do
   defp verify_certificate(_cert, _event, state), do: {:valid, state}
 
   defp spki_pin(cert_der) do
-    cert = :public_key.pkix_decode_cert(cert_der, :otp)
+    cert = :public_key.pkix_decode_cert(cert_der, :plain)
+    spki = cert |> elem(1) |> elem(7)
 
-    spki =
-      cert
-      |> otp_certificate(:tbsCertificate)
-      |> otp_tbs_certificate(:subjectPublicKeyInfo)
-
-    spki
-    |> :public_key.der_encode(:SubjectPublicKeyInfo)
+    :public_key.der_encode(:SubjectPublicKeyInfo, spki)
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode64()
+  end
+
+  defp spki_pin_from_verify(cert) when is_binary(cert), do: spki_pin(cert)
+
+  defp spki_pin_from_verify({:OTPCertificate, _tbs, _sig_alg, _sig} = cert) do
+    cert
+    |> then(&:public_key.pkix_encode(:OTPCertificate, &1, :otp))
+    |> spki_pin()
+  end
+
+  defp spki_pin_from_verify({:Certificate, _tbs, _sig_alg, _sig} = cert) do
+    cert
+    |> then(&:public_key.der_encode(:Certificate, &1))
+    |> spki_pin()
+  end
+
+  defp spki_pin_from_verify(_cert) do
+    raise(ArgumentError, "invalid certificate")
   end
 
   defp system_cacerts do
