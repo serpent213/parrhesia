@@ -359,8 +359,8 @@ Initial mode should be `:req_stream`:
 
 Future optimization:
 
-- `:negentropy` may be added when real NIP-77 reconciliation exists.
-- It is not required for the first implementation.
+- `:negentropy` may be added as an optimization mode on top of the simpler `:req_stream` baseline.
+- Parrhesia now has a reusable NIP-77 engine, but a sync worker does not need to depend on it for the first implementation.
 
 ---
 
@@ -372,7 +372,7 @@ Future optimization:
 - `REQ` -> `Parrhesia.API.Stream.subscribe/4`
 - `COUNT` -> `Parrhesia.API.Events.count/2`
 - `AUTH` stays connection-specific, but validation helpers may move to `API.Auth`
-- `NEG-*` remains transport-specific until Parrhesia has a real reusable NIP-77 engine
+- `NEG-*` maps to the reusable NIP-77 engine and remains exposed through the websocket transport boundary
 
 ### HTTP management
 

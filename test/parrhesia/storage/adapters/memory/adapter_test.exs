@@ -8,11 +8,22 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
 
   test "memory adapter supports basic behavior contract operations" do
     event_id = String.duplicate("a", 64)
-    event = %{"id" => event_id, "pubkey" => "pk", "kind" => 1, "tags" => [], "content" => "hello"}
+
+    event = %{
+      "id" => event_id,
+      "pubkey" => "pk",
+      "created_at" => 1_700_000_000,
+      "kind" => 1,
+      "tags" => [],
+      "content" => "hello"
+    }
 
     assert {:ok, _event} = Events.put_event(%{}, event)
     assert {:ok, [result]} = Events.query(%{}, [%{"ids" => [event_id]}], [])
     assert result["id"] == event_id
+
+    assert {:ok, [%{created_at: 1_700_000_000, id: <<_::size(256)>>}]} =
+             Events.query_event_refs(%{}, [%{"ids" => [event_id]}], [])
 
     assert :ok = Moderation.ban_pubkey(%{}, "pk")
     assert {:ok, true} = Moderation.pubkey_banned?(%{}, "pk")

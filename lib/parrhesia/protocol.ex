@@ -14,8 +14,8 @@ defmodule Parrhesia.Protocol do
           | {:close, String.t()}
           | {:auth, event()}
           | {:count, String.t(), [filter()], map()}
-          | {:neg_open, String.t(), map()}
-          | {:neg_msg, String.t(), map()}
+          | {:neg_open, String.t(), filter(), binary()}
+          | {:neg_msg, String.t(), binary()}
           | {:neg_close, String.t()}
 
   @type relay_message ::
@@ -26,7 +26,8 @@ defmodule Parrhesia.Protocol do
           | {:event, String.t(), event()}
           | {:auth, String.t()}
           | {:count, String.t(), map()}
-          | {:neg_msg, String.t(), map()}
+          | {:neg_msg, String.t(), String.t()}
+          | {:neg_err, String.t(), String.t()}
 
   @type decode_error ::
           :invalid_json
@@ -122,21 +123,25 @@ defmodule Parrhesia.Protocol do
 
   defp decode_message(["AUTH", _invalid]), do: {:error, :invalid_auth}
 
-  defp decode_message(["NEG-OPEN", subscription_id, payload])
-       when is_binary(subscription_id) and is_map(payload) do
-    if valid_subscription_id?(subscription_id) do
-      {:ok, {:neg_open, subscription_id, payload}}
+  defp decode_message(["NEG-OPEN", subscription_id, filter, initial_message])
+       when is_binary(subscription_id) and is_map(filter) and is_binary(initial_message) do
+    with true <- valid_subscription_id?(subscription_id),
+         {:ok, decoded_message} <- decode_negentropy_hex(initial_message) do
+      {:ok, {:neg_open, subscription_id, filter, decoded_message}}
     else
-      {:error, :invalid_subscription_id}
+      false -> {:error, :invalid_subscription_id}
+      {:error, _reason} -> {:error, :invalid_negentropy}
     end
   end
 
   defp decode_message(["NEG-MSG", subscription_id, payload])
-       when is_binary(subscription_id) and is_map(payload) do
-    if valid_subscription_id?(subscription_id) do
-      {:ok, {:neg_msg, subscription_id, payload}}
+       when is_binary(subscription_id) and is_binary(payload) do
+    with true <- valid_subscription_id?(subscription_id),
+         {:ok, decoded_payload} <- decode_negentropy_hex(payload) do
+      {:ok, {:neg_msg, subscription_id, decoded_payload}}
     else
-      {:error, :invalid_subscription_id}
+      false -> {:error, :invalid_subscription_id}
+      {:error, _reason} -> {:error, :invalid_negentropy}
     end
   end
 
@@ -215,7 +220,19 @@ defmodule Parrhesia.Protocol do
   defp relay_frame({:neg_msg, subscription_id, payload}),
     do: ["NEG-MSG", subscription_id, payload]
 
+  defp relay_frame({:neg_err, subscription_id, reason}),
+    do: ["NEG-ERR", subscription_id, reason]
+
   defp valid_subscription_id?(subscription_id) do
     subscription_id != "" and String.length(subscription_id) <= 64
   end
+
+  defp decode_negentropy_hex(payload) when is_binary(payload) and payload != "" do
+    case Base.decode16(payload, case: :mixed) do
+      {:ok, decoded} when decoded != <<>> -> {:ok, decoded}
+      _other -> {:error, :invalid_negentropy}
+    end
+  end
+
+  defp decode_negentropy_hex(_payload), do: {:error, :invalid_negentropy}
 end

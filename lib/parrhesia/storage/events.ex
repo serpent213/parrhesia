@@ -7,6 +7,7 @@ defmodule Parrhesia.Storage.Events do
   @type event_id :: binary()
   @type event :: map()
   @type filter :: map()
+  @type event_ref :: %{created_at: non_neg_integer(), id: binary()}
   @type query_opts :: keyword()
   @type count_result :: non_neg_integer() | %{optional(atom()) => term()}
   @type reason :: term()
@@ -14,6 +15,8 @@ defmodule Parrhesia.Storage.Events do
   @callback put_event(context(), event()) :: {:ok, event()} | {:error, reason()}
   @callback get_event(context(), event_id()) :: {:ok, event() | nil} | {:error, reason()}
   @callback query(context(), [filter()], query_opts()) :: {:ok, [event()]} | {:error, reason()}
+  @callback query_event_refs(context(), [filter()], query_opts()) ::
+              {:ok, [event_ref()]} | {:error, reason()}
   @callback count(context(), [filter()], query_opts()) ::
               {:ok, count_result()} | {:error, reason()}
   @callback delete_by_request(context(), event()) :: {:ok, non_neg_integer()} | {:error, reason()}

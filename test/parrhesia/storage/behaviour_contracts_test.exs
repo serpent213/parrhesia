@@ -3,7 +3,16 @@ defmodule Parrhesia.Storage.BehaviourContractsTest do
 
   test "events behavior exposes expected callbacks" do
     assert callback_names(Parrhesia.Storage.Events) ==
-             [:count, :delete_by_request, :get_event, :purge_expired, :put_event, :query, :vanish]
+             [
+               :count,
+               :delete_by_request,
+               :get_event,
+               :purge_expired,
+               :put_event,
+               :query,
+               :query_event_refs,
+               :vanish
+             ]
   end
 
   test "moderation behavior exposes expected callbacks" do

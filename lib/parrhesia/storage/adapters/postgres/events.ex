@@ -95,6 +95,31 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   def query(_context, _filters, _opts), do: {:error, :invalid_opts}
 
   @impl true
+  def query_event_refs(_context, filters, opts) when is_list(opts) do
+    with :ok <- Filter.validate_filters(filters) do
+      now = Keyword.get(opts, :now, System.system_time(:second))
+
+      refs =
+        filters
+        |> event_ref_union_query_for_filters(now, opts)
+        |> subquery()
+        |> then(fn union_query ->
+          from(ref in union_query,
+            group_by: [ref.created_at, ref.id],
+            order_by: [asc: ref.created_at, asc: ref.id],
+            select: %{created_at: ref.created_at, id: ref.id}
+          )
+        end)
+        |> maybe_limit_query(Keyword.get(opts, :limit))
+        |> Repo.all()
+
+      {:ok, refs}
+    end
+  end
+
+  def query_event_refs(_context, _filters, _opts), do: {:error, :invalid_opts}
+
+  @impl true
   def count(_context, filters, opts) when is_list(opts) do
     with :ok <- Filter.validate_filters(filters) do
       now = Keyword.get(opts, :now, System.system_time(:second))
@@ -662,6 +687,40 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     Enum.reduce(rest_filters, event_id_query_for_filter(first_filter, now, opts), fn filter,
                                                                                      acc ->
       union_all(acc, ^event_id_query_for_filter(filter, now, opts))
+    end)
+  end
+
+  defp event_ref_query_for_filter(filter, now, opts) do
+    from(event in "events",
+      where: is_nil(event.deleted_at) and (is_nil(event.expires_at) or event.expires_at > ^now),
+      order_by: [asc: event.created_at, asc: event.id],
+      select: %{
+        created_at: event.created_at,
+        id: event.id
+      }
+    )
+    |> maybe_filter_ids(Map.get(filter, "ids"))
+    |> maybe_filter_authors(Map.get(filter, "authors"))
+    |> maybe_filter_kinds(Map.get(filter, "kinds"))
+    |> maybe_filter_since(Map.get(filter, "since"))
+    |> maybe_filter_until(Map.get(filter, "until"))
+    |> maybe_filter_search(Map.get(filter, "search"))
+    |> filter_by_tags(filter)
+    |> maybe_restrict_giftwrap_access(filter, opts)
+    |> maybe_limit_query(effective_filter_limit(filter, opts))
+  end
+
+  defp event_ref_union_query_for_filters([], now, _opts) do
+    from(event in "events",
+      where: event.created_at > ^now and event.created_at < ^now,
+      select: %{created_at: event.created_at, id: event.id}
+    )
+  end
+
+  defp event_ref_union_query_for_filters([first_filter | rest_filters], now, opts) do
+    Enum.reduce(rest_filters, event_ref_query_for_filter(first_filter, now, opts), fn filter,
+                                                                                      acc ->
+      union_all(acc, ^event_ref_query_for_filter(filter, now, opts))
     end)
   end
 

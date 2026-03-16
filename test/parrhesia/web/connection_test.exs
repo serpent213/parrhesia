@@ -2,6 +2,8 @@ defmodule Parrhesia.Web.ConnectionTest do
   use ExUnit.Case, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Parrhesia.Negentropy.Engine
+  alias Parrhesia.Negentropy.Message
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Repo
   alias Parrhesia.Web.Connection
@@ -435,23 +437,109 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
-  test "NEG sessions open and close" do
-    state = connection_state()
+  test "NEG sessions open, return reconciliation payloads and close silently" do
+    negentropy_sessions =
+      start_supervised!(
+        {Parrhesia.Negentropy.Sessions,
+         name: nil,
+         max_payload_bytes: 1024,
+         max_sessions_per_owner: 8,
+         max_total_sessions: 16,
+         max_idle_seconds: 60,
+         sweep_interval_seconds: 60}
+      )
 
-    open_payload = JSON.encode!(["NEG-OPEN", "neg-1", %{"cursor" => 0}])
+    Sandbox.allow(Repo, self(), negentropy_sessions)
+
+    state = connection_state(negentropy_sessions: negentropy_sessions)
+
+    first =
+      valid_event(%{
+        "created_at" => 1_700_300_000,
+        "content" => "neg-a"
+      })
+
+    second =
+      valid_event(%{
+        "created_at" => 1_700_300_001,
+        "content" => "neg-b"
+      })
+
+    assert {:push, {:text, _response}, _next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", first]), [opcode: :text]}, state)
+
+    assert {:push, {:text, _response}, _next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", second]), [opcode: :text]}, state)
+
+    open_payload =
+      JSON.encode!([
+        "NEG-OPEN",
+        "neg-1",
+        %{"kinds" => [1]},
+        Base.encode16(Engine.initial_message([]), case: :lower)
+      ])
 
     assert {:push, {:text, open_response}, _next_state} =
              Connection.handle_in({open_payload, [opcode: :text]}, state)
 
-    assert ["NEG-MSG", "neg-1", %{"status" => "open", "cursor" => 0}] =
-             JSON.decode!(open_response)
+    assert ["NEG-MSG", "neg-1", response_hex] = JSON.decode!(open_response)
+
+    assert {:ok, [%{mode: :id_list, payload: ids, upper_bound: :infinity}]} =
+             response_hex |> Base.decode16!(case: :mixed) |> Message.decode()
+
+    assert ids == [
+             Base.decode16!(first["id"], case: :mixed),
+             Base.decode16!(second["id"], case: :mixed)
+           ]
 
     close_payload = JSON.encode!(["NEG-CLOSE", "neg-1"])
 
-    assert {:push, {:text, close_response}, _next_state} =
+    assert {:ok, _next_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, state)
+  end
 
-    assert JSON.decode!(close_response) == ["NEG-MSG", "neg-1", %{"status" => "closed"}]
+  test "NEG sessions return NEG-ERR for oversized snapshots" do
+    negentropy_sessions =
+      start_supervised!(
+        {Parrhesia.Negentropy.Sessions,
+         name: nil,
+         max_payload_bytes: 1024,
+         max_sessions_per_owner: 8,
+         max_total_sessions: 16,
+         max_idle_seconds: 60,
+         sweep_interval_seconds: 60,
+         max_items_per_session: 1}
+      )
+
+    Sandbox.allow(Repo, self(), negentropy_sessions)
+
+    state = connection_state(negentropy_sessions: negentropy_sessions)
+
+    first = valid_event(%{"created_at" => 1_700_301_000, "content" => "neg-big-a"})
+    second = valid_event(%{"created_at" => 1_700_301_001, "content" => "neg-big-b"})
+
+    assert {:push, {:text, _response}, _next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", first]), [opcode: :text]}, state)
+
+    assert {:push, {:text, _response}, _next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", second]), [opcode: :text]}, state)
+
+    open_payload =
+      JSON.encode!([
+        "NEG-OPEN",
+        "neg-oversized",
+        %{"kinds" => [1]},
+        Base.encode16(Engine.initial_message([]), case: :lower)
+      ])
+
+    assert {:push, {:text, response}, _next_state} =
+             Connection.handle_in({open_payload, [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "NEG-ERR",
+             "neg-oversized",
+             "blocked: negentropy query is too big"
+           ]
   end
 
   test "CLOSE removes subscription and replies with CLOSED" do

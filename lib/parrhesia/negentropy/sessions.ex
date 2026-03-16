@@ -1,9 +1,12 @@
 defmodule Parrhesia.Negentropy.Sessions do
   @moduledoc """
-  In-memory NEG-* session tracking.
+  In-memory NIP-77 session tracking over bounded local event snapshots.
   """
 
   use GenServer
+
+  alias Parrhesia.Negentropy.Engine
+  alias Parrhesia.Storage
 
   @type session_key :: {pid(), String.t()}
 
@@ -12,6 +15,8 @@ defmodule Parrhesia.Negentropy.Sessions do
   @default_max_total_sessions 10_000
   @default_max_idle_seconds 60
   @default_sweep_interval_seconds 10
+  @default_max_items_per_session 50_000
+  @default_id_list_threshold 32
   @sweep_idle_sessions :sweep_idle_sessions
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -20,16 +25,19 @@ defmodule Parrhesia.Negentropy.Sessions do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @spec open(GenServer.server(), pid(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def open(server \\ __MODULE__, owner_pid, subscription_id, params)
-      when is_pid(owner_pid) and is_binary(subscription_id) and is_map(params) do
-    GenServer.call(server, {:open, owner_pid, subscription_id, params})
+  @spec open(GenServer.server(), pid(), String.t(), map(), binary(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  def open(server \\ __MODULE__, owner_pid, subscription_id, filter, message, opts \\ [])
+      when is_pid(owner_pid) and is_binary(subscription_id) and is_map(filter) and
+             is_binary(message) and is_list(opts) do
+    GenServer.call(server, {:open, owner_pid, subscription_id, filter, message, opts})
   end
 
-  @spec message(GenServer.server(), pid(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def message(server \\ __MODULE__, owner_pid, subscription_id, payload)
-      when is_pid(owner_pid) and is_binary(subscription_id) and is_map(payload) do
-    GenServer.call(server, {:message, owner_pid, subscription_id, payload})
+  @spec message(GenServer.server(), pid(), String.t(), binary()) ::
+          {:ok, binary()} | {:error, term()}
+  def message(server \\ __MODULE__, owner_pid, subscription_id, message)
+      when is_pid(owner_pid) and is_binary(subscription_id) and is_binary(message) do
+    GenServer.call(server, {:message, owner_pid, subscription_id, message})
   end
 
   @spec close(GenServer.server(), pid(), String.t()) :: :ok
@@ -63,7 +71,17 @@ defmodule Parrhesia.Negentropy.Sessions do
       max_total_sessions:
         normalize_positive_integer(Keyword.get(opts, :max_total_sessions), max_total_sessions()),
       max_idle_ms: max_idle_ms,
-      sweep_interval_ms: sweep_interval_ms
+      sweep_interval_ms: sweep_interval_ms,
+      max_items_per_session:
+        normalize_positive_integer(
+          Keyword.get(opts, :max_items_per_session),
+          max_items_per_session()
+        ),
+      id_list_threshold:
+        normalize_positive_integer(
+          Keyword.get(opts, :id_list_threshold),
+          id_list_threshold()
+        )
     }
 
     :ok = schedule_idle_sweep(sweep_interval_ms)
@@ -72,16 +90,19 @@ defmodule Parrhesia.Negentropy.Sessions do
   end
 
   @impl true
-  def handle_call({:open, owner_pid, subscription_id, params}, _from, state) do
+  def handle_call({:open, owner_pid, subscription_id, filter, message, opts}, _from, state) do
     key = {owner_pid, subscription_id}
 
-    with :ok <- validate_payload_size(params, state.max_payload_bytes),
-         :ok <- enforce_session_limits(state, owner_pid, key) do
+    with :ok <- validate_payload_size(filter, message, state.max_payload_bytes),
+         :ok <- enforce_session_limits(state, owner_pid, key),
+         {:ok, refs} <- fetch_event_refs(filter, opts, state.max_items_per_session),
+         {:ok, response} <-
+           Engine.answer(refs, message, id_list_threshold: state.id_list_threshold) do
       now_ms = System.monotonic_time(:millisecond)
 
       session = %{
-        cursor: 0,
-        params: params,
+        filter: filter,
+        refs: refs,
         opened_at: System.system_time(:second),
         last_active_at_ms: now_ms
       }
@@ -91,14 +112,14 @@ defmodule Parrhesia.Negentropy.Sessions do
         |> ensure_monitor(owner_pid)
         |> put_in([:sessions, key], session)
 
-      {:reply, {:ok, %{"status" => "open", "cursor" => 0}}, state}
+      {:reply, {:ok, response}, state}
     else
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call({:message, owner_pid, subscription_id, payload}, _from, state) do
+  def handle_call({:message, owner_pid, subscription_id, message}, _from, state) do
     key = {owner_pid, subscription_id}
 
     case Map.get(state.sessions, key) do
@@ -106,20 +127,18 @@ defmodule Parrhesia.Negentropy.Sessions do
         {:reply, {:error, :unknown_session}, state}
 
       session ->
-        case validate_payload_size(payload, state.max_payload_bytes) do
-          :ok ->
-            cursor = session.cursor + 1
+        with :ok <- validate_payload_size(session.filter, message, state.max_payload_bytes),
+             {:ok, response} <-
+               Engine.answer(session.refs, message, id_list_threshold: state.id_list_threshold) do
+          next_session = %{
+            session
+            | last_active_at_ms: System.monotonic_time(:millisecond)
+          }
 
-            next_session = %{
-              session
-              | cursor: cursor,
-                last_active_at_ms: System.monotonic_time(:millisecond)
-            }
+          state = put_in(state, [:sessions, key], next_session)
 
-            state = put_in(state, [:sessions, key], next_session)
-
-            {:reply, {:ok, %{"status" => "ack", "cursor" => cursor}}, state}
-
+          {:reply, {:ok, response}, state}
+        else
           {:error, reason} ->
             {:reply, {:error, reason}, state}
         end
@@ -185,6 +204,21 @@ defmodule Parrhesia.Negentropy.Sessions do
 
   def handle_info(_message, state), do: {:noreply, state}
 
+  defp fetch_event_refs(filter, opts, max_items_per_session) do
+    query_opts =
+      opts
+      |> Keyword.take([:now, :requester_pubkeys])
+      |> Keyword.put(:limit, max_items_per_session + 1)
+
+    with {:ok, refs} <- Storage.events().query_event_refs(%{}, [filter], query_opts) do
+      if length(refs) > max_items_per_session do
+        {:error, :query_too_big}
+      else
+        {:ok, refs}
+      end
+    end
+  end
+
   defp clear_monitors_without_sessions(state, owner_pids) do
     Enum.reduce(Map.keys(state.monitors), state, fn owner_pid, acc ->
       if MapSet.member?(owner_pids, owner_pid) do
@@ -203,8 +237,8 @@ defmodule Parrhesia.Negentropy.Sessions do
     end)
   end
 
-  defp validate_payload_size(payload, max_payload_bytes) do
-    if :erlang.external_size(payload) <= max_payload_bytes do
+  defp validate_payload_size(filter, message, max_payload_bytes) do
+    if :erlang.external_size({filter, message}) <= max_payload_bytes do
       :ok
     else
       {:error, :payload_too_large}
@@ -294,6 +328,18 @@ defmodule Parrhesia.Negentropy.Sessions do
     :parrhesia
     |> Application.get_env(:limits, [])
     |> Keyword.get(:negentropy_session_sweep_interval_seconds, @default_sweep_interval_seconds)
+  end
+
+  defp max_items_per_session do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:max_negentropy_items_per_session, @default_max_items_per_session)
+  end
+
+  defp id_list_threshold do
+    :parrhesia
+    |> Application.get_env(:limits, [])
+    |> Keyword.get(:negentropy_id_list_threshold, @default_id_list_threshold)
   end
 
   defp normalize_positive_integer(value, _default) when is_integer(value) and value > 0,

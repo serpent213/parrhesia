@@ -131,14 +131,16 @@ This is enough for Tribes and keeps the first version simple.
 
 ### NIP-77
 
-NIP-77 is **not required** for the first sync implementation.
+Parrhesia now has a real reusable relay-side NIP-77 engine:
 
-Reason:
+- proper `NEG-OPEN` / `NEG-MSG` / `NEG-CLOSE` / `NEG-ERR` framing,
+- a reusable negentropy codec and reconciliation engine,
+- bounded local `(created_at, id)` snapshot enumeration for matching filters,
+- connection/session integration with policy checks and resource limits.
 
-- Parrhesia currently only has `NEG-*` session tracking, not real negentropy reconciliation.
-- The current Tribes sync profile already assumes catch-up plus live replay, not negentropy.
+That means NIP-77 can be used for bandwidth-efficient catch-up between trusted nodes.
 
-NIP-77 should be treated as a later optimization for bandwidth-efficient reconciliation once Parrhesia has a real reusable implementation.
+The first sync worker implementation may still default to ordinary NIP-01 catch-up plus live replay, because that path is operationally simpler and already matches the current Tribes sync profile. `:negentropy` can now be introduced as an optimization mode rather than a future prerequisite.
 
 ---
 

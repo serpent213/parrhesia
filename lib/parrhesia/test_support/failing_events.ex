@@ -13,6 +13,9 @@ defmodule Parrhesia.TestSupport.FailingEvents do
   def query(_context, _filters, _opts), do: {:error, :db_down}
 
   @impl true
+  def query_event_refs(_context, _filters, _opts), do: {:error, :db_down}
+
+  @impl true
   def count(_context, _filters, _opts), do: {:error, :db_down}
 
   @impl true

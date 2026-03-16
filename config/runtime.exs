@@ -210,6 +210,16 @@ if config_env() == :prod do
         "PARRHESIA_LIMITS_MAX_NEGENTROPY_TOTAL_SESSIONS",
         Keyword.get(limits_defaults, :max_negentropy_total_sessions, 10_000)
       ),
+    max_negentropy_items_per_session:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_NEGENTROPY_ITEMS_PER_SESSION",
+        Keyword.get(limits_defaults, :max_negentropy_items_per_session, 50_000)
+      ),
+    negentropy_id_list_threshold:
+      int_env.(
+        "PARRHESIA_LIMITS_NEGENTROPY_ID_LIST_THRESHOLD",
+        Keyword.get(limits_defaults, :negentropy_id_list_threshold, 32)
+      ),
     negentropy_session_idle_timeout_seconds:
       int_env.(
         "PARRHESIA_LIMITS_NEGENTROPY_SESSION_IDLE_TIMEOUT_SECONDS",

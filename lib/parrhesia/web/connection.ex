@@ -160,11 +160,11 @@ defmodule Parrhesia.Web.Connection do
 
   defp handle_decoded_message({:auth, auth_event}, state), do: handle_auth(state, auth_event)
 
-  defp handle_decoded_message({:neg_open, subscription_id, payload}, state),
-    do: handle_neg_open(state, subscription_id, payload)
+  defp handle_decoded_message({:neg_open, subscription_id, filter, message}, state),
+    do: handle_neg_open(state, subscription_id, filter, message)
 
-  defp handle_decoded_message({:neg_msg, subscription_id, payload}, state),
-    do: handle_neg_msg(state, subscription_id, payload)
+  defp handle_decoded_message({:neg_msg, subscription_id, message}, state),
+    do: handle_neg_msg(state, subscription_id, message)
 
   defp handle_decoded_message({:neg_close, subscription_id}, state),
     do: handle_neg_close(state, subscription_id)
@@ -447,34 +447,41 @@ defmodule Parrhesia.Web.Connection do
     end
   end
 
-  defp handle_neg_open(%__MODULE__{} = state, subscription_id, payload) do
-    case maybe_open_negentropy(state, subscription_id, payload) do
-      {:ok, message} ->
-        response = Protocol.encode_relay({:neg_msg, subscription_id, message})
-        {:push, {:text, response}, state}
+  defp handle_neg_open(%__MODULE__{} = state, subscription_id, filter, message) do
+    with :ok <- Filter.validate_filters([filter]),
+         :ok <- EventPolicy.authorize_read([filter], state.authenticated_pubkeys),
+         {:ok, response_message} <-
+           maybe_open_negentropy(state, subscription_id, filter, message) do
+      response =
+        response_message
+        |> Base.encode16(case: :lower)
+        |> then(&Protocol.encode_relay({:neg_msg, subscription_id, &1}))
 
+      {:push, {:text, response}, state}
+    else
       {:error, reason} ->
-        response = Protocol.encode_relay({:closed, subscription_id, "error: #{inspect(reason)}"})
-        {:push, {:text, response}, state}
+        negentropy_error_response(state, subscription_id, reason)
     end
   end
 
-  defp handle_neg_msg(%__MODULE__{} = state, subscription_id, payload) do
-    case maybe_negentropy_message(state, subscription_id, payload) do
-      {:ok, message} ->
-        response = Protocol.encode_relay({:neg_msg, subscription_id, message})
+  defp handle_neg_msg(%__MODULE__{} = state, subscription_id, message) do
+    case maybe_negentropy_message(state, subscription_id, message) do
+      {:ok, response_message} ->
+        response =
+          response_message
+          |> Base.encode16(case: :lower)
+          |> then(&Protocol.encode_relay({:neg_msg, subscription_id, &1}))
+
         {:push, {:text, response}, state}
 
       {:error, reason} ->
-        response = Protocol.encode_relay({:closed, subscription_id, "error: #{inspect(reason)}"})
-        {:push, {:text, response}, state}
+        negentropy_error_response(state, subscription_id, reason)
     end
   end
 
   defp handle_neg_close(%__MODULE__{} = state, subscription_id) do
     :ok = maybe_close_negentropy(state, subscription_id)
-    response = Protocol.encode_relay({:neg_msg, subscription_id, %{"status" => "closed"}})
-    {:push, {:text, response}, state}
+    {:ok, state}
   end
 
   defp maybe_process_group_event(event) do
@@ -664,6 +671,91 @@ defmodule Parrhesia.Web.Connection do
     with_auth_challenge_frame(state, {:push, {:text, response}, state})
   end
 
+  defp negentropy_error_response(state, subscription_id, reason) do
+    response =
+      Protocol.encode_relay({
+        :neg_err,
+        subscription_id,
+        negentropy_error_message(reason)
+      })
+
+    if reason in [:auth_required, :restricted_giftwrap] do
+      with_auth_challenge_frame(state, {:push, {:text, response}, state})
+    else
+      {:push, {:text, response}, state}
+    end
+  end
+
+  defp negentropy_error_message(reason)
+       when reason in [
+              :invalid_filters,
+              :empty_filters,
+              :too_many_filters,
+              :invalid_filter,
+              :invalid_filter_key,
+              :invalid_ids,
+              :invalid_authors,
+              :invalid_kinds,
+              :invalid_since,
+              :invalid_until,
+              :invalid_limit,
+              :invalid_search,
+              :invalid_tag_filter,
+              :auth_required,
+              :restricted_giftwrap,
+              :marmot_group_h_tag_required,
+              :marmot_group_h_values_exceeded,
+              :marmot_group_filter_window_too_wide
+            ],
+       do: negentropy_policy_or_filter_error_message(reason)
+
+  defp negentropy_error_message(:negentropy_disabled),
+    do: "blocked: negentropy is disabled"
+
+  defp negentropy_error_message(:negentropy_unavailable),
+    do: "blocked: negentropy is unavailable"
+
+  defp negentropy_error_message(:payload_too_large),
+    do: "blocked: negentropy payload exceeds configured limit"
+
+  defp negentropy_error_message(:session_limit_reached),
+    do: "blocked: maximum negentropy sessions reached"
+
+  defp negentropy_error_message(:owner_session_limit_reached),
+    do: "blocked: maximum negentropy sessions per connection reached"
+
+  defp negentropy_error_message(:query_too_big),
+    do: "blocked: negentropy query is too big"
+
+  defp negentropy_error_message(:unknown_session),
+    do: "closed: negentropy subscription is not open"
+
+  defp negentropy_error_message(:invalid_message),
+    do: "invalid: invalid negentropy message"
+
+  defp negentropy_error_message(reason) when is_binary(reason), do: reason
+  defp negentropy_error_message(reason), do: "error: #{inspect(reason)}"
+
+  defp negentropy_policy_or_filter_error_message(reason)
+       when reason in [
+              :invalid_filters,
+              :empty_filters,
+              :too_many_filters,
+              :invalid_filter,
+              :invalid_filter_key,
+              :invalid_ids,
+              :invalid_authors,
+              :invalid_kinds,
+              :invalid_since,
+              :invalid_until,
+              :invalid_limit,
+              :invalid_search,
+              :invalid_tag_filter
+            ],
+       do: Filter.error_message(reason)
+
+  defp negentropy_policy_or_filter_error_message(reason), do: EventPolicy.error_message(reason)
+
   defp validate_auth_event(%__MODULE__{} = state, %{"kind" => 22_242} = auth_event) do
     tags = Map.get(auth_event, "tags", [])
 
@@ -776,15 +868,31 @@ defmodule Parrhesia.Web.Connection do
     :exit, _reason -> :ok
   end
 
-  defp maybe_open_negentropy(%__MODULE__{negentropy_sessions: nil}, _subscription_id, _payload),
-    do: {:error, :negentropy_disabled}
+  defp maybe_open_negentropy(
+         %__MODULE__{negentropy_sessions: nil},
+         _subscription_id,
+         _filter,
+         _message
+       ),
+       do: {:error, :negentropy_disabled}
 
   defp maybe_open_negentropy(
-         %__MODULE__{negentropy_sessions: negentropy_sessions},
+         %__MODULE__{
+           negentropy_sessions: negentropy_sessions,
+           authenticated_pubkeys: authenticated_pubkeys
+         },
          subscription_id,
-         payload
+         filter,
+         message
        ) do
-    Sessions.open(negentropy_sessions, self(), subscription_id, payload)
+    Sessions.open(
+      negentropy_sessions,
+      self(),
+      subscription_id,
+      filter,
+      message,
+      requester_pubkeys: MapSet.to_list(authenticated_pubkeys)
+    )
   catch
     :exit, _reason -> {:error, :negentropy_unavailable}
   end
@@ -799,9 +907,9 @@ defmodule Parrhesia.Web.Connection do
   defp maybe_negentropy_message(
          %__MODULE__{negentropy_sessions: negentropy_sessions},
          subscription_id,
-         payload
+         message
        ) do
-    Sessions.message(negentropy_sessions, self(), subscription_id, payload)
+    Sessions.message(negentropy_sessions, self(), subscription_id, message)
   catch
     :exit, _reason -> {:error, :negentropy_unavailable}
   end

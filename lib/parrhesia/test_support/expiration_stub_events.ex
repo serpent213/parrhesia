@@ -13,6 +13,9 @@ defmodule Parrhesia.TestSupport.ExpirationStubEvents do
   def query(_context, _filters, _opts), do: {:ok, []}
 
   @impl true
+  def query_event_refs(_context, _filters, _opts), do: {:ok, []}
+
+  @impl true
   def count(_context, _filters, _opts), do: {:ok, 0}
 
   @impl true

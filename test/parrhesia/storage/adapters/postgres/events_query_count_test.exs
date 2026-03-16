@@ -106,6 +106,37 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert Enum.map(results, & &1["id"]) == [newest["id"], tie_winner_id]
   end
 
+  test "query_event_refs/3 returns sorted lightweight refs for negentropy" do
+    author = String.duplicate("9", 64)
+
+    later =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_510,
+        "kind" => 1,
+        "content" => "later"
+      })
+
+    earlier =
+      persist_event(%{
+        "pubkey" => author,
+        "created_at" => 1_700_000_500,
+        "kind" => 1,
+        "content" => "earlier"
+      })
+
+    assert {:ok, refs} =
+             Events.query_event_refs(%{}, [%{"authors" => [author], "kinds" => [1]}], [])
+
+    assert refs == [
+             %{
+               created_at: earlier["created_at"],
+               id: Base.decode16!(earlier["id"], case: :mixed)
+             },
+             %{created_at: later["created_at"], id: Base.decode16!(later["id"], case: :mixed)}
+           ]
+  end
+
   test "count/3 ORs filters, deduplicates matches and respects tag filters" do
     now = 1_700_001_000
     target_pubkey = String.duplicate("f", 64)

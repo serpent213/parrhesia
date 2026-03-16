@@ -56,6 +56,24 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
   end
 
   @impl true
+  def query_event_refs(context, filters, opts) do
+    with {:ok, events} <- query(context, filters, opts) do
+      refs =
+        events
+        |> Enum.map(fn event ->
+          %{
+            created_at: Map.fetch!(event, "created_at"),
+            id: Base.decode16!(Map.fetch!(event, "id"), case: :mixed)
+          }
+        end)
+        |> Enum.sort(&(compare_event_refs(&1, &2) != :gt))
+        |> maybe_limit_event_refs(opts)
+
+      {:ok, refs}
+    end
+  end
+
+  @impl true
   def count(context, filters, opts) do
     with {:ok, events} <- query(context, filters, opts) do
       {:ok, length(events)}
@@ -188,5 +206,22 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
       ["p", recipient | _rest] -> recipient in requester_pubkeys
       _tag -> false
     end)
+  end
+
+  defp compare_event_refs(left, right) do
+    cond do
+      left.created_at < right.created_at -> :lt
+      left.created_at > right.created_at -> :gt
+      left.id < right.id -> :lt
+      left.id > right.id -> :gt
+      true -> :eq
+    end
+  end
+
+  defp maybe_limit_event_refs(refs, opts) do
+    case Keyword.get(opts, :limit) do
+      limit when is_integer(limit) and limit > 0 -> Enum.take(refs, limit)
+      _other -> refs
+    end
   end
 end

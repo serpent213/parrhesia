@@ -21,6 +21,8 @@ config :parrhesia,
     max_negentropy_payload_bytes: 4096,
     max_negentropy_sessions_per_connection: 8,
     max_negentropy_total_sessions: 10_000,
+    max_negentropy_items_per_session: 50_000,
+    negentropy_id_list_threshold: 32,
     negentropy_session_idle_timeout_seconds: 60,
     negentropy_session_sweep_interval_seconds: 10
   ],

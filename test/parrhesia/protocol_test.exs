@@ -41,11 +41,13 @@ defmodule Parrhesia.ProtocolTest do
     assert {:ok, {:auth, ^auth_event}} =
              Protocol.decode_client(JSON.encode!(["AUTH", auth_event]))
 
-    assert {:ok, {:neg_open, "sub-neg", %{"cursor" => 0}}} =
-             Protocol.decode_client(JSON.encode!(["NEG-OPEN", "sub-neg", %{"cursor" => 0}]))
+    assert {:ok, {:neg_open, "sub-neg", %{"kinds" => [1]}, <<0x61>>}} =
+             Protocol.decode_client(
+               JSON.encode!(["NEG-OPEN", "sub-neg", %{"kinds" => [1]}, "61"])
+             )
 
-    assert {:ok, {:neg_msg, "sub-neg", %{"delta" => "abc"}}} =
-             Protocol.decode_client(JSON.encode!(["NEG-MSG", "sub-neg", %{"delta" => "abc"}]))
+    assert {:ok, {:neg_msg, "sub-neg", <<0x61, 0x00>>}} =
+             Protocol.decode_client(JSON.encode!(["NEG-MSG", "sub-neg", "6100"]))
 
     assert {:ok, {:neg_close, "sub-neg"}} =
              Protocol.decode_client(JSON.encode!(["NEG-CLOSE", "sub-neg"]))
@@ -90,6 +92,12 @@ defmodule Parrhesia.ProtocolTest do
 
     count_frame = Protocol.encode_relay({:count, "sub-1", %{"count" => 1}})
     assert JSON.decode!(count_frame) == ["COUNT", "sub-1", %{"count" => 1}]
+
+    neg_message_frame = Protocol.encode_relay({:neg_msg, "sub-neg", "61"})
+    assert JSON.decode!(neg_message_frame) == ["NEG-MSG", "sub-neg", "61"]
+
+    neg_error_frame = Protocol.encode_relay({:neg_err, "sub-neg", "closed: too slow"})
+    assert JSON.decode!(neg_error_frame) == ["NEG-ERR", "sub-neg", "closed: too slow"]
   end
 
   defp valid_event do
