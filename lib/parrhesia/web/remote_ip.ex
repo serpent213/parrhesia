@@ -3,12 +3,14 @@ defmodule Parrhesia.Web.RemoteIp do
 
   import Bitwise
 
+  alias Parrhesia.Web.Listener
+
   @spec init(term()) :: term()
   def init(opts), do: opts
 
   @spec call(Plug.Conn.t(), term()) :: Plug.Conn.t()
   def call(conn, _opts) do
-    if trusted_proxy?(conn.remote_ip) do
+    if trusted_proxy?(conn) do
       case forwarded_ip(conn) do
         nil -> conn
         forwarded_ip -> %{conn | remote_ip: forwarded_ip}
@@ -50,14 +52,22 @@ defmodule Parrhesia.Web.RemoteIp do
 
   defp fallback_real_ip(ip, _conn), do: ip
 
-  defp trusted_proxy?(remote_ip) do
-    Enum.any?(trusted_proxies(), &ip_in_cidr?(remote_ip, &1))
+  defp trusted_proxy?(conn) do
+    Enum.any?(trusted_proxies(conn), &ip_in_cidr?(conn.remote_ip, &1))
   end
 
-  defp trusted_proxies do
-    :parrhesia
-    |> Application.get_env(:trusted_proxies, [])
-    |> Enum.filter(&is_binary/1)
+  defp trusted_proxies(conn) do
+    listener = Listener.from_conn(conn)
+
+    case Listener.trusted_proxies(listener) do
+      [] ->
+        :parrhesia
+        |> Application.get_env(:trusted_proxies, [])
+        |> Enum.filter(&is_binary/1)
+
+      trusted_proxies ->
+        trusted_proxies
+    end
   end
 
   defp parse_x_forwarded_for(value) when is_binary(value) do

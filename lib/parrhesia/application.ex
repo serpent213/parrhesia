@@ -14,7 +14,6 @@ defmodule Parrhesia.Application do
       Parrhesia.Sync.Supervisor,
       Parrhesia.Policy.Supervisor,
       Parrhesia.Web.Endpoint,
-      Parrhesia.Web.MetricsEndpoint,
       Parrhesia.Tasks.Supervisor
     ]
 

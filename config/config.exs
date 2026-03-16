@@ -57,13 +57,26 @@ config :parrhesia,
     marmot_push_max_server_recipients: 1,
     management_auth_required: true
   ],
-  metrics: [
-    enabled_on_main_endpoint: true,
-    public: false,
-    private_networks_only: true,
-    allowed_cidrs: [],
-    auth_token: nil
-  ],
+  listeners: %{
+    public: %{
+      enabled: true,
+      bind: %{ip: {0, 0, 0, 0}, port: 4413},
+      transport: %{scheme: :http, tls: %{mode: :disabled}},
+      proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
+      network: %{allow_all: true},
+      features: %{
+        nostr: %{enabled: true},
+        admin: %{enabled: true},
+        metrics: %{
+          enabled: true,
+          access: %{private_networks_only: true},
+          auth_token: nil
+        }
+      },
+      auth: %{nip42_required: false, nip98_required_for_admin: true},
+      baseline_acl: %{read: [], write: []}
+    }
+  },
   retention: [
     check_interval_hours: 24,
     months_ahead: 2,
@@ -84,13 +97,6 @@ config :parrhesia,
     groups: Parrhesia.Storage.Adapters.Postgres.Groups,
     admin: Parrhesia.Storage.Adapters.Postgres.Admin
   ]
-
-config :parrhesia, Parrhesia.Web.Endpoint, port: 4413
-
-config :parrhesia, Parrhesia.Web.MetricsEndpoint,
-  enabled: false,
-  ip: {127, 0, 0, 1},
-  port: 9568
 
 config :parrhesia, Parrhesia.Repo, types: Parrhesia.PostgresTypes
 

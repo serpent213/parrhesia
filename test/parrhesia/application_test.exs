@@ -11,7 +11,6 @@ defmodule Parrhesia.ApplicationTest do
     assert is_pid(Process.whereis(Parrhesia.Sync.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Policy.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Web.Endpoint))
-    assert is_pid(Process.whereis(Parrhesia.Web.MetricsEndpoint))
     assert is_pid(Process.whereis(Parrhesia.Tasks.Supervisor))
 
     assert Enum.any?(Supervisor.which_children(Parrhesia.Web.Endpoint), fn {_id, pid, _type,

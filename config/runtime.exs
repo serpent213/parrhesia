@@ -121,10 +121,9 @@ if config_env() == :prod do
 
   limits_defaults = Application.get_env(:parrhesia, :limits, [])
   policies_defaults = Application.get_env(:parrhesia, :policies, [])
-  metrics_defaults = Application.get_env(:parrhesia, :metrics, [])
+  listeners_defaults = Application.get_env(:parrhesia, :listeners, %{})
   retention_defaults = Application.get_env(:parrhesia, :retention, [])
   features_defaults = Application.get_env(:parrhesia, :features, [])
-  metrics_endpoint_defaults = Application.get_env(:parrhesia, Parrhesia.Web.MetricsEndpoint, [])
 
   default_pool_size = Keyword.get(repo_defaults, :pool_size, 32)
   default_queue_target = Keyword.get(repo_defaults, :queue_target, 1_000)
@@ -340,33 +339,170 @@ if config_env() == :prod do
       )
   ]
 
-  metrics = [
-    enabled_on_main_endpoint:
-      bool_env.(
-        "PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT",
-        Keyword.get(metrics_defaults, :enabled_on_main_endpoint, true)
-      ),
-    public:
-      bool_env.(
-        "PARRHESIA_METRICS_PUBLIC",
-        Keyword.get(metrics_defaults, :public, false)
-      ),
-    private_networks_only:
-      bool_env.(
-        "PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY",
-        Keyword.get(metrics_defaults, :private_networks_only, true)
-      ),
-    allowed_cidrs:
-      csv_env.(
-        "PARRHESIA_METRICS_ALLOWED_CIDRS",
-        Keyword.get(metrics_defaults, :allowed_cidrs, [])
-      ),
-    auth_token:
-      string_env.(
-        "PARRHESIA_METRICS_AUTH_TOKEN",
-        Keyword.get(metrics_defaults, :auth_token)
+  public_listener_defaults = Map.get(listeners_defaults, :public, %{})
+  public_bind_defaults = Map.get(public_listener_defaults, :bind, %{})
+  public_transport_defaults = Map.get(public_listener_defaults, :transport, %{})
+  public_proxy_defaults = Map.get(public_listener_defaults, :proxy, %{})
+  public_network_defaults = Map.get(public_listener_defaults, :network, %{})
+  public_features_defaults = Map.get(public_listener_defaults, :features, %{})
+  public_auth_defaults = Map.get(public_listener_defaults, :auth, %{})
+  public_metrics_defaults = Map.get(public_features_defaults, :metrics, %{})
+  public_metrics_access_defaults = Map.get(public_metrics_defaults, :access, %{})
+
+  metrics_listener_defaults = Map.get(listeners_defaults, :metrics, %{})
+  metrics_listener_bind_defaults = Map.get(metrics_listener_defaults, :bind, %{})
+  metrics_listener_transport_defaults = Map.get(metrics_listener_defaults, :transport, %{})
+  metrics_listener_network_defaults = Map.get(metrics_listener_defaults, :network, %{})
+
+  metrics_listener_metrics_defaults =
+    metrics_listener_defaults
+    |> Map.get(:features, %{})
+    |> Map.get(:metrics, %{})
+
+  metrics_listener_metrics_access_defaults =
+    Map.get(metrics_listener_metrics_defaults, :access, %{})
+
+  public_listener = %{
+    enabled: Map.get(public_listener_defaults, :enabled, true),
+    bind: %{
+      ip: Map.get(public_bind_defaults, :ip, {0, 0, 0, 0}),
+      port: int_env.("PORT", Map.get(public_bind_defaults, :port, 4413))
+    },
+    transport: %{
+      scheme: Map.get(public_transport_defaults, :scheme, :http),
+      tls: Map.get(public_transport_defaults, :tls, %{mode: :disabled})
+    },
+    proxy: %{
+      trusted_cidrs:
+        csv_env.(
+          "PARRHESIA_TRUSTED_PROXIES",
+          Map.get(public_proxy_defaults, :trusted_cidrs, [])
+        ),
+      honor_x_forwarded_for: Map.get(public_proxy_defaults, :honor_x_forwarded_for, true)
+    },
+    network: %{
+      allow_cidrs: Map.get(public_network_defaults, :allow_cidrs, []),
+      private_networks_only: Map.get(public_network_defaults, :private_networks_only, false),
+      public: Map.get(public_network_defaults, :public, false),
+      allow_all: Map.get(public_network_defaults, :allow_all, true)
+    },
+    features: %{
+      nostr: %{
+        enabled: public_features_defaults |> Map.get(:nostr, %{}) |> Map.get(:enabled, true)
+      },
+      admin: %{
+        enabled: public_features_defaults |> Map.get(:admin, %{}) |> Map.get(:enabled, true)
+      },
+      metrics: %{
+        enabled:
+          bool_env.(
+            "PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT",
+            Map.get(public_metrics_defaults, :enabled, true)
+          ),
+        auth_token:
+          string_env.(
+            "PARRHESIA_METRICS_AUTH_TOKEN",
+            Map.get(public_metrics_defaults, :auth_token)
+          ),
+        access: %{
+          public:
+            bool_env.(
+              "PARRHESIA_METRICS_PUBLIC",
+              Map.get(public_metrics_access_defaults, :public, false)
+            ),
+          private_networks_only:
+            bool_env.(
+              "PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY",
+              Map.get(public_metrics_access_defaults, :private_networks_only, true)
+            ),
+          allow_cidrs:
+            csv_env.(
+              "PARRHESIA_METRICS_ALLOWED_CIDRS",
+              Map.get(public_metrics_access_defaults, :allow_cidrs, [])
+            ),
+          allow_all: Map.get(public_metrics_access_defaults, :allow_all, true)
+        }
+      }
+    },
+    auth: %{
+      nip42_required: Map.get(public_auth_defaults, :nip42_required, false),
+      nip98_required_for_admin:
+        bool_env.(
+          "PARRHESIA_POLICIES_MANAGEMENT_AUTH_REQUIRED",
+          Map.get(public_auth_defaults, :nip98_required_for_admin, true)
+        )
+    },
+    baseline_acl: Map.get(public_listener_defaults, :baseline_acl, %{read: [], write: []})
+  }
+
+  listeners =
+    if Map.get(metrics_listener_defaults, :enabled, false) or
+         bool_env.("PARRHESIA_METRICS_ENDPOINT_ENABLED", false) do
+      Map.put(
+        %{public: public_listener},
+        :metrics,
+        %{
+          enabled: true,
+          bind: %{
+            ip: Map.get(metrics_listener_bind_defaults, :ip, {127, 0, 0, 1}),
+            port:
+              int_env.(
+                "PARRHESIA_METRICS_ENDPOINT_PORT",
+                Map.get(metrics_listener_bind_defaults, :port, 9568)
+              )
+          },
+          transport: %{
+            scheme: Map.get(metrics_listener_transport_defaults, :scheme, :http),
+            tls: Map.get(metrics_listener_transport_defaults, :tls, %{mode: :disabled})
+          },
+          network: %{
+            allow_cidrs: Map.get(metrics_listener_network_defaults, :allow_cidrs, []),
+            private_networks_only:
+              Map.get(metrics_listener_network_defaults, :private_networks_only, false),
+            public: Map.get(metrics_listener_network_defaults, :public, false),
+            allow_all: Map.get(metrics_listener_network_defaults, :allow_all, true)
+          },
+          features: %{
+            nostr: %{enabled: false},
+            admin: %{enabled: false},
+            metrics: %{
+              enabled: true,
+              auth_token:
+                string_env.(
+                  "PARRHESIA_METRICS_AUTH_TOKEN",
+                  Map.get(metrics_listener_metrics_defaults, :auth_token)
+                ),
+              access: %{
+                public:
+                  bool_env.(
+                    "PARRHESIA_METRICS_PUBLIC",
+                    Map.get(metrics_listener_metrics_access_defaults, :public, false)
+                  ),
+                private_networks_only:
+                  bool_env.(
+                    "PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY",
+                    Map.get(
+                      metrics_listener_metrics_access_defaults,
+                      :private_networks_only,
+                      true
+                    )
+                  ),
+                allow_cidrs:
+                  csv_env.(
+                    "PARRHESIA_METRICS_ALLOWED_CIDRS",
+                    Map.get(metrics_listener_metrics_access_defaults, :allow_cidrs, [])
+                  ),
+                allow_all: Map.get(metrics_listener_metrics_access_defaults, :allow_all, true)
+              }
+            }
+          },
+          auth: %{nip42_required: false, nip98_required_for_admin: true},
+          baseline_acl: %{read: [], write: []}
+        }
       )
-  ]
+    else
+      %{public: public_listener}
+    end
 
   retention = [
     check_interval_hours:
@@ -430,25 +566,6 @@ if config_env() == :prod do
     queue_target: queue_target,
     queue_interval: queue_interval
 
-  config :parrhesia, Parrhesia.Web.Endpoint, port: int_env.("PORT", 4413)
-
-  config :parrhesia, Parrhesia.Web.MetricsEndpoint,
-    enabled:
-      bool_env.(
-        "PARRHESIA_METRICS_ENDPOINT_ENABLED",
-        Keyword.get(metrics_endpoint_defaults, :enabled, false)
-      ),
-    ip:
-      ipv4_env.(
-        "PARRHESIA_METRICS_ENDPOINT_IP",
-        Keyword.get(metrics_endpoint_defaults, :ip, {127, 0, 0, 1})
-      ),
-    port:
-      int_env.(
-        "PARRHESIA_METRICS_ENDPOINT_PORT",
-        Keyword.get(metrics_endpoint_defaults, :port, 9568)
-      )
-
   config :parrhesia,
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
     identity: [
@@ -467,9 +584,9 @@ if config_env() == :prod do
       bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),
     enable_expiration_worker:
       bool_env.("PARRHESIA_ENABLE_EXPIRATION_WORKER", enable_expiration_worker_default),
+    listeners: listeners,
     limits: limits,
     policies: policies,
-    metrics: metrics,
     retention: retention,
     features: features
 

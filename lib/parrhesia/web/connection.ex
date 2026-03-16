@@ -15,6 +15,7 @@ defmodule Parrhesia.Web.Connection do
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Subscriptions.Index
   alias Parrhesia.Telemetry
+  alias Parrhesia.Web.Listener
 
   @default_max_subscriptions_per_connection 32
   @default_max_outbound_queue 256
@@ -43,6 +44,7 @@ defmodule Parrhesia.Web.Connection do
 
   defstruct subscriptions: %{},
             authenticated_pubkeys: MapSet.new(),
+            listener: nil,
             max_subscriptions_per_connection: @default_max_subscriptions_per_connection,
             subscription_index: Index,
             auth_challenges: Challenges,
@@ -74,6 +76,7 @@ defmodule Parrhesia.Web.Connection do
   @type t :: %__MODULE__{
           subscriptions: %{String.t() => subscription()},
           authenticated_pubkeys: MapSet.t(String.t()),
+          listener: map() | nil,
           max_subscriptions_per_connection: pos_integer(),
           subscription_index: GenServer.server() | nil,
           auth_challenges: GenServer.server() | nil,
@@ -101,6 +104,7 @@ defmodule Parrhesia.Web.Connection do
     auth_challenges = auth_challenges(opts)
 
     state = %__MODULE__{
+      listener: Listener.from_opts(opts),
       max_subscriptions_per_connection: max_subscriptions_per_connection(opts),
       subscription_index: subscription_index(opts),
       auth_challenges: auth_challenges,
@@ -222,7 +226,10 @@ defmodule Parrhesia.Web.Connection do
 
     case maybe_allow_event_ingest(state) do
       {:ok, next_state} ->
-        publish_event_response(next_state, event)
+        case authorize_listener_write(next_state, event) do
+          :ok -> publish_event_response(next_state, event)
+          {:error, reason} -> ingest_error_response(state, event_id, reason)
+        end
 
       {:error, reason} ->
         ingest_error_response(state, event_id, reason)
@@ -265,6 +272,7 @@ defmodule Parrhesia.Web.Connection do
 
   defp handle_req(%__MODULE__{} = state, subscription_id, filters) do
     with :ok <- Filter.validate_filters(filters),
+         :ok <- authorize_listener_read(state, filters),
          :ok <-
            EventPolicy.authorize_read(
              filters,
@@ -300,6 +308,13 @@ defmodule Parrhesia.Web.Connection do
           state,
           subscription_id,
           EventPolicy.error_message(:sync_read_not_allowed)
+        )
+
+      {:error, :listener_read_not_allowed} ->
+        restricted_close(
+          state,
+          subscription_id,
+          "restricted: listener baseline denies requested filters"
         )
 
       {:error, :marmot_group_h_tag_required} ->
@@ -364,13 +379,21 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp handle_count(%__MODULE__{} = state, subscription_id, filters, options) do
-    case Events.count(filters,
-           context: request_context(state, subscription_id),
-           options: options
-         ) do
-      {:ok, payload} ->
-        response = Protocol.encode_relay({:count, subscription_id, payload})
-        {:push, {:text, response}, state}
+    with :ok <- authorize_listener_read(state, filters),
+         {:ok, payload} <-
+           Events.count(filters,
+             context: request_context(state, subscription_id),
+             options: options
+           ) do
+      response = Protocol.encode_relay({:count, subscription_id, payload})
+      {:push, {:text, response}, state}
+    else
+      {:error, :listener_read_not_allowed} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          "restricted: listener baseline denies requested filters"
+        )
 
       {:error, reason} ->
         handle_count_error(state, subscription_id, reason)
@@ -422,6 +445,7 @@ defmodule Parrhesia.Web.Connection do
 
   defp handle_neg_open(%__MODULE__{} = state, subscription_id, filter, message) do
     with :ok <- Filter.validate_filters([filter]),
+         :ok <- authorize_listener_read(state, [filter]),
          :ok <-
            EventPolicy.authorize_read(
              [filter],
@@ -471,6 +495,9 @@ defmodule Parrhesia.Web.Connection do
   defp error_message_for_ingest_failure(:event_too_large),
     do: "invalid: event exceeds max event size"
 
+  defp error_message_for_ingest_failure(:listener_write_not_allowed),
+    do: "restricted: listener baseline denies event"
+
   defp error_message_for_ingest_failure(:ephemeral_events_disabled),
     do: "blocked: ephemeral events are disabled"
 
@@ -480,6 +507,7 @@ defmodule Parrhesia.Web.Connection do
               :pubkey_not_allowed,
               :restricted_giftwrap,
               :sync_write_not_allowed,
+              :listener_write_not_allowed,
               :protected_event_requires_auth,
               :protected_event_pubkey_mismatch,
               :pow_below_minimum,
@@ -576,6 +604,7 @@ defmodule Parrhesia.Web.Connection do
               :pubkey_not_allowed,
               :restricted_giftwrap,
               :sync_read_not_allowed,
+              :listener_read_not_allowed,
               :marmot_group_h_tag_required,
               :marmot_group_h_values_exceeded,
               :marmot_group_filter_window_too_wide
@@ -626,6 +655,9 @@ defmodule Parrhesia.Web.Connection do
               :invalid_tag_filter
             ],
        do: Filter.error_message(reason)
+
+  defp negentropy_policy_or_filter_error_message(:listener_read_not_allowed),
+    do: "restricted: listener baseline denies requested filters"
 
   defp negentropy_policy_or_filter_error_message(reason), do: EventPolicy.error_message(reason)
 
@@ -705,6 +737,31 @@ defmodule Parrhesia.Web.Connection do
   defp auth_error_message(:pubkey_not_allowed), do: EventPolicy.error_message(:pubkey_not_allowed)
   defp auth_error_message(reason) when is_binary(reason), do: reason
   defp auth_error_message(reason), do: "invalid: #{inspect(reason)}"
+
+  defp authorize_listener_read(%__MODULE__{} = state, filters) do
+    case maybe_require_listener_auth(state) do
+      :ok -> Listener.authorize_read(state.listener, filters)
+      error -> error
+    end
+  end
+
+  defp authorize_listener_write(%__MODULE__{} = state, event) do
+    case maybe_require_listener_auth(state) do
+      :ok -> Listener.authorize_write(state.listener, event)
+      error -> error
+    end
+  end
+
+  defp maybe_require_listener_auth(%__MODULE__{
+         listener: listener,
+         authenticated_pubkeys: pubkeys
+       }) do
+    if Listener.nip42_required?(listener) and MapSet.size(pubkeys) == 0 do
+      {:error, :auth_required}
+    else
+      :ok
+    end
+  end
 
   defp with_auth_challenge_frame(
          %__MODULE__{auth_challenge: nil},
@@ -1417,7 +1474,8 @@ defmodule Parrhesia.Web.Connection do
       authenticated_pubkeys: state.authenticated_pubkeys,
       caller: :websocket,
       remote_ip: state.remote_ip,
-      subscription_id: subscription_id
+      subscription_id: subscription_id,
+      metadata: %{listener_id: state.listener.id}
     }
   end
 

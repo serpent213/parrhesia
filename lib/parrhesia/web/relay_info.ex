@@ -4,9 +4,10 @@ defmodule Parrhesia.Web.RelayInfo do
   """
 
   alias Parrhesia.API.Identity
+  alias Parrhesia.Web.Listener
 
-  @spec document() :: map()
-  def document do
+  @spec document(Listener.t()) :: map()
+  def document(listener) do
     %{
       "name" => "Parrhesia",
       "description" => "Nostr/Marmot relay",
@@ -14,7 +15,7 @@ defmodule Parrhesia.Web.RelayInfo do
       "supported_nips" => supported_nips(),
       "software" => "https://git.teralink.net/self/parrhesia",
       "version" => Application.spec(:parrhesia, :vsn) |> to_string(),
-      "limitation" => limitations()
+      "limitation" => limitations(listener)
     }
   end
 
@@ -31,13 +32,13 @@ defmodule Parrhesia.Web.RelayInfo do
     with_negentropy ++ [86, 98]
   end
 
-  defp limitations do
+  defp limitations(listener) do
     %{
       "max_message_length" => Parrhesia.Config.get([:limits, :max_frame_bytes], 1_048_576),
       "max_subscriptions" =>
         Parrhesia.Config.get([:limits, :max_subscriptions_per_connection], 32),
       "max_filters" => Parrhesia.Config.get([:limits, :max_filters_per_req], 16),
-      "auth_required" => Parrhesia.Config.get([:policies, :auth_required_for_reads], false)
+      "auth_required" => Listener.relay_auth_required?(listener)
     }
   end
 

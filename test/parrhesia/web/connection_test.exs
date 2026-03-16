@@ -123,6 +123,69 @@ defmodule Parrhesia.Web.ConnectionTest do
              Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
   end
 
+  test "listener can require NIP-42 for reads and writes" do
+    listener =
+      listener(%{
+        auth: %{nip42_required: true, nip98_required_for_admin: true}
+      })
+
+    state = connection_state(listener: listener)
+
+    req_payload = JSON.encode!(["REQ", "sub-auth", %{"kinds" => [1]}])
+
+    assert {:push, frames, ^state} = Connection.handle_in({req_payload, [opcode: :text]}, state)
+
+    assert Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end) == [
+             ["AUTH", state.auth_challenge],
+             ["CLOSED", "sub-auth", "auth-required: authentication required"]
+           ]
+
+    event = valid_event(%{"content" => "auth required"})
+
+    assert {:push, event_frames, ^state} =
+             Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
+
+    decoded = Enum.map(event_frames, fn {:text, frame} -> JSON.decode!(frame) end)
+
+    assert ["AUTH", state.auth_challenge] in decoded
+    assert ["OK", event["id"], false, "auth-required: authentication required"] in decoded
+  end
+
+  test "listener baseline ACL can deny read and write shapes before sync ACLs" do
+    listener =
+      listener(%{
+        baseline_acl: %{
+          read: [%{action: :deny, match: %{"kinds" => [5000]}}],
+          write: [%{action: :deny, match: %{"kinds" => [5000]}}]
+        }
+      })
+
+    state = connection_state(listener: listener)
+
+    req_payload = JSON.encode!(["REQ", "sub-baseline", %{"kinds" => [5000]}])
+
+    assert {:push, req_frames, ^state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, state)
+
+    assert Enum.map(req_frames, fn {:text, frame} -> JSON.decode!(frame) end) == [
+             ["AUTH", state.auth_challenge],
+             ["CLOSED", "sub-baseline", "restricted: listener baseline denies requested filters"]
+           ]
+
+    event =
+      valid_event(%{"kind" => 5000, "content" => "baseline blocked"}) |> recalculate_event_id()
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({JSON.encode!(["EVENT", event]), [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "OK",
+             event["id"],
+             false,
+             "restricted: listener baseline denies event"
+           ]
+  end
+
   test "protected sync REQ requires matching ACL grant" do
     previous_acl = Application.get_env(:parrhesia, :acl, [])
 
@@ -764,6 +827,27 @@ defmodule Parrhesia.Web.ConnectionTest do
   defp connection_state(opts \\ []) do
     {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
     state
+  end
+
+  defp listener(overrides) do
+    base = %{
+      id: :test,
+      enabled: true,
+      bind: %{ip: {127, 0, 0, 1}, port: 4413},
+      transport: %{scheme: :http, tls: %{mode: :disabled}},
+      proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
+      network: %{allow_all: true},
+      features: %{
+        nostr: %{enabled: true},
+        admin: %{enabled: true},
+        metrics: %{enabled: false, access: %{allow_all: true}, auth_token: nil}
+      },
+      auth: %{nip42_required: false, nip98_required_for_admin: true},
+      baseline_acl: %{read: [], write: []},
+      bandit_options: []
+    }
+
+    Map.merge(base, overrides)
   end
 
   defp live_event(id, kind) do

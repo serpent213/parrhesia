@@ -1,29 +1,27 @@
 defmodule Parrhesia.Web.Endpoint do
   @moduledoc """
-  Supervision entrypoint for WS/HTTP ingress.
+  Supervision entrypoint for configured ingress listeners.
   """
 
   use Supervisor
 
-  def start_link(init_arg \\ []) do
-    Supervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
+  alias Parrhesia.Web.Listener
+
+  def start_link(_init_arg \\ []) do
+    Supervisor.start_link(__MODULE__, :ok, name: __MODULE__)
   end
 
   @impl true
-  def init(init_arg) do
-    children = [
-      {Bandit, bandit_options(init_arg)}
-    ]
+  def init(:ok) do
+    children =
+      Listener.all()
+      |> Enum.map(fn listener ->
+        %{
+          id: {:listener, listener.id},
+          start: {Bandit, :start_link, [Listener.bandit_options(listener)]}
+        }
+      end)
 
     Supervisor.init(children, strategy: :one_for_one)
-  end
-
-  defp bandit_options(overrides) do
-    configured = Application.get_env(:parrhesia, __MODULE__, [])
-
-    configured
-    |> Keyword.merge(overrides)
-    |> Keyword.put_new(:scheme, :http)
-    |> Keyword.put_new(:plug, Parrhesia.Web.Router)
   end
 end

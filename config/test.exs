@@ -8,9 +8,21 @@ test_endpoint_port =
     value -> String.to_integer(value)
   end
 
-config :parrhesia, Parrhesia.Web.Endpoint,
-  port: test_endpoint_port,
-  ip: {127, 0, 0, 1}
+config :parrhesia, :listeners,
+  public: %{
+    enabled: true,
+    bind: %{ip: {127, 0, 0, 1}, port: test_endpoint_port},
+    transport: %{scheme: :http, tls: %{mode: :disabled}},
+    proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
+    network: %{allow_all: true},
+    features: %{
+      nostr: %{enabled: true},
+      admin: %{enabled: true},
+      metrics: %{enabled: true, access: %{private_networks_only: true}, auth_token: nil}
+    },
+    auth: %{nip42_required: false, nip98_required_for_admin: true},
+    baseline_acl: %{read: [], write: []}
+  }
 
 config :parrhesia,
   enable_expiration_worker: false,

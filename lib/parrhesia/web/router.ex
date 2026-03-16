@@ -4,10 +4,13 @@ defmodule Parrhesia.Web.Router do
   use Plug.Router
 
   alias Parrhesia.Policy.ConnectionPolicy
+  alias Parrhesia.Web.Listener
   alias Parrhesia.Web.Management
   alias Parrhesia.Web.Metrics
   alias Parrhesia.Web.Readiness
   alias Parrhesia.Web.RelayInfo
+
+  plug(:put_listener)
 
   plug(Plug.Parsers,
     parsers: [:json],
@@ -32,47 +35,75 @@ defmodule Parrhesia.Web.Router do
   end
 
   get "/metrics" do
-    if Metrics.enabled_on_main_endpoint?() do
-      Metrics.handle(conn)
+    listener = Listener.from_conn(conn)
+
+    if Listener.feature_enabled?(listener, :metrics) do
+      case authorize_listener_request(conn, listener) do
+        :ok -> Metrics.handle(conn)
+        {:error, :forbidden} -> send_resp(conn, 403, "forbidden")
+      end
     else
       send_resp(conn, 404, "not found")
     end
   end
 
   post "/management" do
-    case ConnectionPolicy.authorize_remote_ip(conn.remote_ip) do
-      :ok -> Management.handle(conn)
-      {:error, :ip_blocked} -> send_resp(conn, 403, "forbidden")
+    listener = Listener.from_conn(conn)
+
+    if Listener.feature_enabled?(listener, :admin) do
+      case authorize_listener_request(conn, listener) do
+        :ok -> Management.handle(conn, listener: listener)
+        {:error, :forbidden} -> send_resp(conn, 403, "forbidden")
+      end
+    else
+      send_resp(conn, 404, "not found")
     end
   end
 
   get "/relay" do
-    case ConnectionPolicy.authorize_remote_ip(conn.remote_ip) do
-      :ok ->
-        if accepts_nip11?(conn) do
-          body = JSON.encode!(RelayInfo.document())
+    listener = Listener.from_conn(conn)
 
-          conn
-          |> put_resp_content_type("application/nostr+json")
-          |> send_resp(200, body)
-        else
-          conn
-          |> WebSockAdapter.upgrade(
-            Parrhesia.Web.Connection,
-            %{relay_url: relay_url(conn), remote_ip: remote_ip(conn)},
-            timeout: 60_000,
-            max_frame_size: max_frame_bytes()
-          )
-          |> halt()
-        end
+    if Listener.feature_enabled?(listener, :nostr) do
+      case authorize_listener_request(conn, listener) do
+        :ok ->
+          if accepts_nip11?(conn) do
+            body = JSON.encode!(RelayInfo.document(listener))
 
-      {:error, :ip_blocked} ->
-        send_resp(conn, 403, "forbidden")
+            conn
+            |> put_resp_content_type("application/nostr+json")
+            |> send_resp(200, body)
+          else
+            conn
+            |> WebSockAdapter.upgrade(
+              Parrhesia.Web.Connection,
+              %{
+                listener: listener,
+                relay_url: Listener.relay_url(listener, conn),
+                remote_ip: remote_ip(conn)
+              },
+              timeout: 60_000,
+              max_frame_size: max_frame_bytes()
+            )
+            |> halt()
+          end
+
+        {:error, :forbidden} ->
+          send_resp(conn, 403, "forbidden")
+      end
+    else
+      send_resp(conn, 404, "not found")
     end
   end
 
   match _ do
     send_resp(conn, 404, "not found")
+  end
+
+  defp put_listener(conn, opts) do
+    case conn.private do
+      %{parrhesia_listener: _listener} -> conn
+      _other -> Listener.put_conn(conn, opts)
+    end
   end
 
   defp accepts_nip11?(conn) do
@@ -81,25 +112,22 @@ defmodule Parrhesia.Web.Router do
     |> Enum.any?(&String.contains?(&1, "application/nostr+json"))
   end
 
-  defp relay_url(conn) do
-    ws_scheme = if conn.scheme == :https, do: "wss", else: "ws"
-
-    port_segment =
-      if default_http_port?(conn.scheme, conn.port) do
-        ""
-      else
-        ":#{conn.port}"
-      end
-
-    "#{ws_scheme}://#{conn.host}#{port_segment}#{conn.request_path}"
-  end
-
-  defp default_http_port?(:http, 80), do: true
-  defp default_http_port?(:https, 443), do: true
-  defp default_http_port?(_scheme, _port), do: false
-
   defp max_frame_bytes do
     Parrhesia.Config.get([:limits, :max_frame_bytes], 1_048_576)
+  end
+
+  defp authorize_listener_request(conn, listener) do
+    with :ok <- authorize_remote_ip(conn),
+         true <- Listener.remote_ip_allowed?(listener, conn.remote_ip) do
+      :ok
+    else
+      {:error, :ip_blocked} -> {:error, :forbidden}
+      false -> {:error, :forbidden}
+    end
+  end
+
+  defp authorize_remote_ip(conn) do
+    ConnectionPolicy.authorize_remote_ip(conn.remote_ip)
   end
 
   defp remote_ip(conn) do

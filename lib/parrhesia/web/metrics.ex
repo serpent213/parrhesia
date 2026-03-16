@@ -4,18 +4,13 @@ defmodule Parrhesia.Web.Metrics do
   import Plug.Conn
 
   alias Parrhesia.Telemetry
-  alias Parrhesia.Web.MetricsAccess
-
-  @spec enabled_on_main_endpoint?() :: boolean()
-  def enabled_on_main_endpoint? do
-    :parrhesia
-    |> Application.get_env(:metrics, [])
-    |> Keyword.get(:enabled_on_main_endpoint, true)
-  end
+  alias Parrhesia.Web.Listener
 
   @spec handle(Plug.Conn.t()) :: Plug.Conn.t()
   def handle(conn) do
-    if MetricsAccess.allowed?(conn) do
+    listener = Listener.from_conn(conn)
+
+    if Listener.metrics_allowed?(listener, conn) do
       body = TelemetryMetricsPrometheus.Core.scrape(Telemetry.prometheus_reporter())
 
       conn

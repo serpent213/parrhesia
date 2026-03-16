@@ -7,6 +7,7 @@ defmodule Parrhesia.Web.RouterTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Repo
+  alias Parrhesia.Web.Listener
   alias Parrhesia.Web.Router
 
   setup do
@@ -44,7 +45,13 @@ defmodule Parrhesia.Web.RouterTest do
   end
 
   test "GET /metrics returns prometheus payload for private-network clients" do
-    conn = conn(:get, "/metrics") |> Router.call([])
+    conn =
+      conn(:get, "/metrics")
+      |> route_conn(
+        listener(%{
+          features: %{metrics: %{enabled: true, access: %{private_networks_only: true}}}
+        })
+      )
 
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
@@ -53,6 +60,14 @@ defmodule Parrhesia.Web.RouterTest do
   test "GET /metrics denies public-network clients by default" do
     conn = conn(:get, "/metrics")
     conn = %{conn | remote_ip: {8, 8, 8, 8}}
+
+    test_listener =
+      listener(%{features: %{metrics: %{enabled: true, access: %{private_networks_only: true}}}})
+
+    conn = Listener.put_conn(conn, listener: test_listener)
+
+    refute Listener.metrics_allowed?(Listener.from_conn(conn), conn)
+
     conn = Router.call(conn, [])
 
     assert conn.status == 403
@@ -60,47 +75,34 @@ defmodule Parrhesia.Web.RouterTest do
   end
 
   test "GET /metrics can be disabled on the main endpoint" do
-    previous_metrics = Application.get_env(:parrhesia, :metrics, [])
-
-    Application.put_env(
-      :parrhesia,
-      :metrics,
-      Keyword.put(previous_metrics, :enabled_on_main_endpoint, false)
-    )
-
-    on_exit(fn ->
-      Application.put_env(:parrhesia, :metrics, previous_metrics)
-    end)
-
-    conn = conn(:get, "/metrics") |> Router.call([])
+    conn =
+      conn(:get, "/metrics")
+      |> route_conn(listener(%{features: %{metrics: %{enabled: false}}}))
 
     assert conn.status == 404
     assert conn.resp_body == "not found"
   end
 
   test "GET /metrics accepts bearer auth when configured" do
-    previous_metrics = Application.get_env(:parrhesia, :metrics, [])
+    test_listener =
+      listener(%{
+        features: %{
+          metrics: %{
+            enabled: true,
+            access: %{private_networks_only: false},
+            auth_token: "secret-token"
+          }
+        }
+      })
 
-    Application.put_env(
-      :parrhesia,
-      :metrics,
-      previous_metrics
-      |> Keyword.put(:private_networks_only, false)
-      |> Keyword.put(:auth_token, "secret-token")
-    )
-
-    on_exit(fn ->
-      Application.put_env(:parrhesia, :metrics, previous_metrics)
-    end)
-
-    denied_conn = conn(:get, "/metrics") |> Router.call([])
+    denied_conn = conn(:get, "/metrics") |> route_conn(test_listener)
 
     assert denied_conn.status == 403
 
     allowed_conn =
       conn(:get, "/metrics")
       |> put_req_header("authorization", "Bearer secret-token")
-      |> Router.call([])
+      |> route_conn(test_listener)
 
     assert allowed_conn.status == 200
   end
@@ -247,6 +249,15 @@ defmodule Parrhesia.Web.RouterTest do
     assert byte_size(pubkey) == 64
   end
 
+  test "POST /management returns not found when admin feature is disabled on the listener" do
+    conn =
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
+      |> put_req_header("content-type", "application/json")
+      |> route_conn(listener(%{features: %{admin: %{enabled: false}}}))
+
+    assert conn.status == 404
+  end
+
   defp nip98_event(method, url) do
     now = System.system_time(:second)
 
@@ -260,5 +271,42 @@ defmodule Parrhesia.Web.RouterTest do
     }
 
     Map.put(base, "id", EventValidator.compute_id(base))
+  end
+
+  defp listener(overrides) do
+    deep_merge(
+      %{
+        id: :test,
+        enabled: true,
+        bind: %{ip: {127, 0, 0, 1}, port: 4413},
+        transport: %{scheme: :http, tls: %{mode: :disabled}},
+        proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
+        network: %{allow_all: true},
+        features: %{
+          nostr: %{enabled: true},
+          admin: %{enabled: true},
+          metrics: %{enabled: true, access: %{private_networks_only: true}, auth_token: nil}
+        },
+        auth: %{nip42_required: false, nip98_required_for_admin: true},
+        baseline_acl: %{read: [], write: []}
+      },
+      overrides
+    )
+  end
+
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      if is_map(left_value) and is_map(right_value) do
+        deep_merge(left_value, right_value)
+      else
+        right_value
+      end
+    end)
+  end
+
+  defp route_conn(conn, listener) do
+    conn
+    |> Listener.put_conn(listener: listener)
+    |> Router.call([])
   end
 end

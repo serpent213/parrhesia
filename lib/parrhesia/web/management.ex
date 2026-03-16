@@ -8,13 +8,15 @@ defmodule Parrhesia.Web.Management do
   alias Parrhesia.API.Admin
   alias Parrhesia.API.Auth
 
-  @spec handle(Plug.Conn.t()) :: Plug.Conn.t()
-  def handle(conn) do
+  @spec handle(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
+  def handle(conn, opts \\ []) do
     full_url = full_request_url(conn)
     method = conn.method
     authorization = get_req_header(conn, "authorization") |> List.first()
+    auth_required? = admin_auth_required?(opts)
 
-    with {:ok, auth_context} <- Auth.validate_nip98(authorization, method, full_url),
+    with {:ok, auth_context} <-
+           maybe_validate_nip98(auth_required?, authorization, method, full_url),
          {:ok, payload} <- parse_payload(conn.body_params),
          {:ok, result} <- execute_method(payload),
          :ok <- append_audit_log(auth_context, payload, result) do
@@ -44,6 +46,14 @@ defmodule Parrhesia.Web.Management do
       {:error, reason} ->
         send_json(conn, 400, %{"ok" => false, "error" => inspect(reason)})
     end
+  end
+
+  defp maybe_validate_nip98(true, authorization, method, url) do
+    Auth.validate_nip98(authorization, method, url)
+  end
+
+  defp maybe_validate_nip98(false, _authorization, _method, _url) do
+    {:ok, %{pubkey: nil}}
   end
 
   defp parse_payload(%{"method" => method} = payload) when is_binary(method) do
@@ -98,5 +108,14 @@ defmodule Parrhesia.Web.Management do
     query_suffix = if conn.query_string == "", do: "", else: "?#{conn.query_string}"
 
     "#{scheme}://#{host}#{port_suffix}#{conn.request_path}#{query_suffix}"
+  end
+
+  defp admin_auth_required?(opts) do
+    opts
+    |> Keyword.get(:listener)
+    |> case do
+      %{auth: %{nip98_required_for_admin: value}} -> value
+      _other -> true
+    end
   end
 end

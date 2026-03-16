@@ -13,11 +13,11 @@ Parrhesia is a Nostr relay server written in Elixir/OTP with PostgreSQL storage.
 
 It exposes:
 
-- a WebSocket relay endpoint at `/relay`
+- listener-configurable WS/HTTP ingress, with a default `public` listener on port `4413`
+- a WebSocket relay endpoint at `/relay` on listeners that enable the `nostr` feature
 - NIP-11 relay info on `GET /relay` with `Accept: application/nostr+json`
-- operational HTTP endpoints (`/health`, `/ready`, `/metrics`)
-  - `/metrics` is restricted by default to private/loopback source IPs
-- a NIP-86-style management API at `POST /management` (NIP-98 auth)
+- operational HTTP endpoints such as `/health`, `/ready`, and `/metrics` on listeners that enable them
+- a NIP-86-style management API at `POST /management` on listeners that enable the `admin` feature
 
 ## Supported NIPs
 
@@ -56,7 +56,7 @@ mix setup
 mix run --no-halt
 ```
 
-Server listens on `http://localhost:4413` by default.
+The default `public` listener binds to `http://localhost:4413`.
 
 WebSocket clients should connect to:
 
@@ -83,8 +83,8 @@ Before a Nostr client can publish its first event successfully, make sure these 
 1. PostgreSQL is reachable from Parrhesia.
    Set `DATABASE_URL` and create/migrate the database with `Parrhesia.Release.migrate()` or `mix ecto.migrate`.
 
-2. Parrhesia is reachable behind your reverse proxy.
-   Parrhesia itself listens on plain HTTP on port `4413`, and the reverse proxy is expected to terminate TLS and forward WebSocket traffic to `/relay`.
+2. Parrhesia listeners are configured for your deployment.
+   The default config exposes a `public` listener on plain HTTP port `4413`, and a reverse proxy can terminate TLS and forward WebSocket traffic to `/relay`. Additional listeners can be defined in `config/*.exs`.
 
 3. `:relay_url` matches the public relay URL clients should use.
    Set `PARRHESIA_RELAY_URL` to the public relay URL exposed by the reverse proxy.
@@ -100,7 +100,7 @@ In `prod`, these environment variables are used:
 - `DATABASE_URL` (**required**), e.g. `ecto://USER:PASS@HOST/parrhesia_prod`
 - `POOL_SIZE` (optional, default `32`)
 - `PORT` (optional, default `4413`)
-- `PARRHESIA_*` runtime overrides for relay config, limits, policies, metrics, and features
+- `PARRHESIA_*` runtime overrides for relay config, limits, policies, listener-related metrics helpers, and features
 - `PARRHESIA_EXTRA_CONFIG` (optional path to an extra runtime config file)
 
 `config/runtime.exs` reads these values at runtime in production releases.
@@ -110,6 +110,7 @@ In `prod`, these environment variables are used:
 For runtime overrides, use the `PARRHESIA_...` prefix:
 
 - `PARRHESIA_RELAY_URL`
+- `PARRHESIA_TRUSTED_PROXIES`
 - `PARRHESIA_MODERATION_CACHE_ENABLED`
 - `PARRHESIA_ENABLE_EXPIRATION_WORKER`
 - `PARRHESIA_LIMITS_*`
@@ -128,6 +129,8 @@ export PARRHESIA_METRICS_ALLOWED_CIDRS="10.0.0.0/8,192.168.0.0/16"
 export PARRHESIA_LIMITS_OUTBOUND_OVERFLOW_STRATEGY=drop_oldest
 ```
 
+Listeners themselves are primarily configured under `config :parrhesia, :listeners, ...`. The current runtime env helpers tune the default public listener and the optional dedicated metrics listener.
+
 For settings that are awkward to express as env vars, mount an extra config file and set `PARRHESIA_EXTRA_CONFIG` to its path inside the container.
 
 ### Config reference
@@ -143,7 +146,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:enable_expiration_worker` | `PARRHESIA_ENABLE_EXPIRATION_WORKER` | `true` | Toggle background expiration worker |
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
 | `:policies` | `PARRHESIA_POLICIES_*` | see table below | Runtime override group |
-| `:metrics` | `PARRHESIA_METRICS_*` | see table below | Runtime override group |
+| `:listeners` | config-file driven | see notes below | Ingress listeners with bind, transport, feature, auth, network, and baseline ACL settings |
 | `:retention` | `PARRHESIA_RETENTION_*` | see table below | Partition lifecycle and pruning policy |
 | `:features` | `PARRHESIA_FEATURES_*` | see table below | Runtime override group |
 | `:storage.events` | `-` | `Parrhesia.Storage.Adapters.Postgres.Events` | Config-file override only |
@@ -161,19 +164,15 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:queue_interval` | `DB_QUEUE_INTERVAL_MS` | `5000` | Ecto queue interval in ms |
 | `:types` | `-` | `Parrhesia.PostgresTypes` | Internal config-file setting |
 
-#### `Parrhesia.Web.Endpoint`
+#### `:listeners`
 
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
-| `:port` | `PORT` | `4413` | Main HTTP/WebSocket listener |
-
-#### `Parrhesia.Web.MetricsEndpoint`
-
-| Atom key | ENV | Default | Notes |
-| --- | --- | --- | --- |
-| `:enabled` | `PARRHESIA_METRICS_ENDPOINT_ENABLED` | `false` | Enables dedicated metrics listener |
-| `:ip` | `PARRHESIA_METRICS_ENDPOINT_IP` | `127.0.0.1` | IPv4 only |
-| `:port` | `PARRHESIA_METRICS_ENDPOINT_PORT` | `9568` | Dedicated metrics port |
+| `:public.bind.port` | `PORT` | `4413` | Default public listener port |
+| `:public.proxy.trusted_cidrs` | `PARRHESIA_TRUSTED_PROXIES` | `[]` | Trusted reverse proxies for forwarded IP handling |
+| `:public.features.metrics.*` | `PARRHESIA_METRICS_*` | see below | Convenience runtime overrides for metrics on the public listener |
+| `:metrics.bind.port` | `PARRHESIA_METRICS_ENDPOINT_PORT` | `9568` | Optional dedicated metrics listener port |
+| `:metrics.enabled` | `PARRHESIA_METRICS_ENDPOINT_ENABLED` | `false` | Enables the optional dedicated metrics listener |
 
 #### `:limits`
 
@@ -223,11 +222,11 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:marmot_push_max_server_recipients` | `PARRHESIA_POLICIES_MARMOT_PUSH_MAX_SERVER_RECIPIENTS` | `1` |
 | `:management_auth_required` | `PARRHESIA_POLICIES_MANAGEMENT_AUTH_REQUIRED` | `true` |
 
-#### `:metrics`
+#### Listener-related Metrics Helpers
 
 | Atom key | ENV | Default |
 | --- | --- | --- |
-| `:enabled_on_main_endpoint` | `PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT` | `true` |
+| `:public.features.metrics.enabled` | `PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT` | `true` |
 | `:public` | `PARRHESIA_METRICS_PUBLIC` | `false` |
 | `:private_networks_only` | `PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY` | `true` |
 | `:allowed_cidrs` | `PARRHESIA_METRICS_ALLOWED_CIDRS` | `[]` |

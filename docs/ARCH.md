@@ -68,10 +68,10 @@ Notes:
 ## 3) System architecture (high level)
 
 ```text
-WS/HTTP Edge (Bandit/Plug)
+Configured WS/HTTP Listeners (Bandit/Plug)
   -> Protocol Decoder/Encoder
   -> Command Router (EVENT/REQ/CLOSE/AUTH/COUNT/NEG-*)
-  -> Policy Pipeline (validation, auth, ACL, PoW, NIP-70)
+  -> Policy Pipeline (listener baseline, validation, auth, ACL, PoW, NIP-70)
   -> Event Service / Query Service
        -> Storage Port (behavior)
            -> Postgres Adapter (Ecto)
@@ -90,14 +90,21 @@ WS/HTTP Edge (Bandit/Plug)
 4. `Parrhesia.Subscriptions.Supervisor` – subscription index + fanout workers
 5. `Parrhesia.Auth.Supervisor` – AUTH challenge/session tracking
 6. `Parrhesia.Policy.Supervisor` – rate limiters / ACL caches
-7. `Parrhesia.Web.Endpoint` – WS + HTTP ingress
+7. `Parrhesia.Web.Endpoint` – supervises configured WS + HTTP listeners
 8. `Parrhesia.Tasks.Supervisor` – background jobs (expiry purge, maintenance)
 
 Failure model:
 
 - Connection failures are isolated per socket process.
+- Listener failures are isolated per Bandit child and restarted independently.
 - Storage outages degrade with explicit `OK/CLOSED` error prefixes (`error:`) per NIP-01.
 - Non-critical workers are `:transient`; core infra is `:permanent`.
+
+Ingress model:
+
+- Ingress is defined through `config :parrhesia, :listeners, ...`.
+- Each listener has its own bind/transport settings, proxy trust, network allowlist, enabled features (`nostr`, `admin`, `metrics`), auth requirements, and baseline read/write ACL.
+- Listeners can therefore expose different security postures, for example a public relay listener and a VPN-only sync-capable listener.
 
 ## 5) Core runtime components
 
