@@ -64,6 +64,12 @@ Runtime internals
 
 Rule: transport framing stays at the edge. Business decisions happen in `Parrhesia.API.*`.
 
+Implementation note:
+
+- the runtime beneath `Parrhesia.API.*` should expose clearer internal policy stages than it does today,
+- at minimum: connection/auth, publish, query/count, stream subscription, negentropy, response shaping, and broadcast/fanout,
+- these are internal runtime seams, not additional public APIs.
+
 ---
 
 ## 4. Core Context
@@ -73,11 +79,21 @@ defmodule Parrhesia.API.RequestContext do
   defstruct authenticated_pubkeys: MapSet.new(),
             actor: nil,
             caller: :local,
+            remote_ip: nil,
+            subscription_id: nil,
+            peer_id: nil,
             metadata: %{}
 end
 ```
 
 `caller` is for telemetry and policy parity, for example `:websocket`, `:http`, `:local`, or `:sync`.
+
+Recommended usage:
+
+- `remote_ip` for connection-level policy and audit,
+- `subscription_id` for query/stream/negentropy context,
+- `peer_id` for trusted sync peer identity when applicable,
+- `metadata` for transport-specific details that should not become API fields.
 
 ---
 
@@ -245,6 +261,12 @@ Purpose:
 
 This is a real authorization layer, not a reuse of moderation allowlists.
 
+Current implementation note:
+
+- Parrhesia already has storage-backed moderation presence tables such as `allowed_pubkeys` and `blocked_ips`,
+- those are not sufficient for sync ACLs,
+- the new ACL layer must be enforced directly in the active read/write/query/negentropy path, not only through management tables.
+
 ```elixir
 @spec grant(map(), keyword()) :: :ok | {:error, term()}
 @spec revoke(map(), keyword()) :: :ok | {:error, term()}
@@ -343,6 +365,7 @@ Important constraints:
 - Parrhesia must expose worker health and basic counters,
 - remote relay TLS pinning is required,
 - sync peer auth is bound to a server-auth pubkey, not inferred from event author pubkeys.
+- sync enforcement should reuse the same runtime policy stages as ordinary websocket traffic rather than inventing a parallel trust path.
 
 Server identity model:
 

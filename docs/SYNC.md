@@ -84,6 +84,12 @@ Private key export should not be supported.
 
 Sync traffic should use a real ACL layer, not moderation allowlists.
 
+Current implementation note:
+
+- Parrhesia already has storage-backed moderation state such as `allowed_pubkeys` and `blocked_ips`,
+- that is not the sync ACL model,
+- sync protection must be enforced in the active websocket/query/count/negentropy/write path, not inferred from management tables alone.
+
 Initial ACL model:
 
 - principal: authenticated pubkey,
@@ -109,6 +115,12 @@ Multiple pins should be allowed to support certificate rotation.
 ## 4. Sync Model
 
 Each configured sync server represents one outbound worker managed by Parrhesia.
+
+Implementation note:
+
+- Khatru-style relay designs benefit from explicit runtime stages,
+- Parrhesia sync should therefore plug into clear internal phases for connection admission, auth, query/count, subscription, negentropy, publish, and fanout,
+- this should stay a runtime refactor, not become extra sync semantics.
 
 Minimum behavior:
 
@@ -332,11 +344,17 @@ The sync worker may attach request-context metadata such as:
 ```elixir
 %Parrhesia.API.RequestContext{
   caller: :sync,
+  peer_id: "tribes-primary",
   metadata: %{sync_server_id: "tribes-primary"}
 }
 ```
 
-That metadata is for telemetry and audit only. It must not become app sync semantics.
+Recommended additional context when available:
+
+- `remote_ip`
+- `subscription_id`
+
+This context is for telemetry, policy, and audit only. It must not become app sync semantics.
 
 ---
 
