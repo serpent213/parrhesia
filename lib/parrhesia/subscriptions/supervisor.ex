@@ -13,7 +13,9 @@ defmodule Parrhesia.Subscriptions.Supervisor do
   def init(_init_arg) do
     children =
       [
-        {Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index}
+        {Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index},
+        {Registry, keys: :unique, name: Parrhesia.API.Stream.Registry},
+        {DynamicSupervisor, strategy: :one_for_one, name: Parrhesia.API.Stream.Supervisor}
       ] ++
         negentropy_children() ++ [{Parrhesia.Fanout.MultiNode, name: Parrhesia.Fanout.MultiNode}]
 

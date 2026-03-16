@@ -5,16 +5,14 @@ defmodule Parrhesia.Web.Connection do
 
   @behaviour WebSock
 
+  alias Parrhesia.API.Events
   alias Parrhesia.API.RequestContext
   alias Parrhesia.Auth.Challenges
-  alias Parrhesia.Fanout.MultiNode
-  alias Parrhesia.Groups.Flow
   alias Parrhesia.Negentropy.Sessions
   alias Parrhesia.Policy.ConnectionPolicy
   alias Parrhesia.Policy.EventPolicy
   alias Parrhesia.Protocol
   alias Parrhesia.Protocol.Filter
-  alias Parrhesia.Storage
   alias Parrhesia.Subscriptions.Index
   alias Parrhesia.Telemetry
 
@@ -28,7 +26,6 @@ defmodule Parrhesia.Web.Connection do
   @default_event_ingest_window_seconds 1
   @default_auth_max_age_seconds 600
   @drain_outbound_queue :drain_outbound_queue
-  @post_ack_ingest :post_ack_ingest
   @outbound_queue_pressure_threshold 0.75
 
   @marmot_kinds MapSet.new([
@@ -199,12 +196,6 @@ defmodule Parrhesia.Web.Connection do
     handle_fanout_events(state, fanout_events)
   end
 
-  def handle_info({@post_ack_ingest, event}, %__MODULE__{} = state) when is_map(event) do
-    fanout_event(event)
-    maybe_publish_multi_node(event)
-    {:ok, state}
-  end
-
   def handle_info(@drain_outbound_queue, %__MODULE__{} = state) do
     {frames, next_state} = drain_outbound_frames(state)
 
@@ -227,59 +218,39 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp handle_event_ingest(%__MODULE__{} = state, event) do
-    started_at = System.monotonic_time()
     event_id = Map.get(event, "id", "")
 
     case maybe_allow_event_ingest(state) do
       {:ok, next_state} ->
-        result =
-          with :ok <- validate_event_payload_size(event, next_state.max_event_bytes),
-               :ok <- Protocol.validate_event(event),
-               :ok <-
-                 EventPolicy.authorize_write(
-                   event,
-                   next_state.authenticated_pubkeys,
-                   request_context(next_state)
-                 ),
-               :ok <- maybe_process_group_event(event),
-               {:ok, _result, message} <- persist_event(event) do
-            {:ok, message}
-          end
-
-        handle_event_ingest_result(result, next_state, event, event_id, started_at)
+        publish_event_response(next_state, event)
 
       {:error, reason} ->
         ingest_error_response(state, event_id, reason)
     end
   end
 
-  defp handle_event_ingest_result(
-         {:ok, message},
-         %__MODULE__{} = state,
-         event,
-         event_id,
-         started_at
-       ) do
-    Telemetry.emit(
-      [:parrhesia, :ingest, :stop],
-      %{duration: System.monotonic_time() - started_at},
-      telemetry_metadata_for_event(event)
-    )
+  defp publish_event_response(%__MODULE__{} = state, event) do
+    case Events.publish(
+           event,
+           context: request_context(state),
+           max_event_bytes: state.max_event_bytes
+         ) do
+      {:ok, %{event_id: event_id, accepted: accepted, message: message, reason: reason}} ->
+        response = Protocol.encode_relay({:ok, event_id, accepted, message})
+        maybe_with_auth_challenge(state, reason, response)
 
-    send(self(), {@post_ack_ingest, event})
-
-    response = Protocol.encode_relay({:ok, event_id, true, message})
-    {:push, {:text, response}, state}
+      {:error, reason} ->
+        ingest_error_response(state, Map.get(event, "id", ""), reason)
+    end
   end
 
-  defp handle_event_ingest_result(
-         {:error, reason},
-         %__MODULE__{} = state,
-         _event,
-         event_id,
-         _started_at
-       ),
-       do: ingest_error_response(state, event_id, reason)
+  defp maybe_with_auth_challenge(state, reason, response) do
+    if reason in [:auth_required, :protected_event_requires_auth] do
+      with_auth_challenge_frame(state, {:push, {:text, response}, state})
+    else
+      {:push, {:text, response}, state}
+    end
+  end
 
   defp ingest_error_response(%__MODULE__{} = state, event_id, reason) do
     message = error_message_for_ingest_failure(reason)
@@ -293,8 +264,6 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp handle_req(%__MODULE__{} = state, subscription_id, filters) do
-    started_at = System.monotonic_time()
-
     with :ok <- Filter.validate_filters(filters),
          :ok <-
            EventPolicy.authorize_read(
@@ -304,13 +273,12 @@ defmodule Parrhesia.Web.Connection do
            ),
          {:ok, next_state} <- upsert_subscription(state, subscription_id, filters),
          :ok <- maybe_upsert_index_subscription(next_state, subscription_id, filters),
-         {:ok, events} <- query_initial_events(filters, state.authenticated_pubkeys) do
-      Telemetry.emit(
-        [:parrhesia, :query, :stop],
-        %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_filters(filters)
-      )
-
+         {:ok, events} <-
+           Events.query(filters,
+             context: request_context(next_state, subscription_id),
+             validate_filters?: false,
+             authorize_read?: false
+           ) do
       frames =
         Enum.map(events, fn event ->
           {:text, Protocol.encode_relay({:event, subscription_id, event})}
@@ -396,75 +364,35 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp handle_count(%__MODULE__{} = state, subscription_id, filters, options) do
-    started_at = System.monotonic_time()
-
-    with :ok <- Filter.validate_filters(filters),
-         :ok <-
-           EventPolicy.authorize_read(
-             filters,
-             state.authenticated_pubkeys,
-             request_context(state, subscription_id)
-           ),
-         {:ok, count} <- count_events(filters, state.authenticated_pubkeys),
-         {:ok, payload} <- build_count_payload(filters, count, options) do
-      Telemetry.emit(
-        [:parrhesia, :query, :stop],
-        %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_filters(filters)
-      )
-
-      response = Protocol.encode_relay({:count, subscription_id, payload})
-      {:push, {:text, response}, state}
-    else
-      {:error, :auth_required} ->
-        restricted_count_notice(state, subscription_id, EventPolicy.error_message(:auth_required))
-
-      {:error, :pubkey_not_allowed} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:pubkey_not_allowed)
-        )
-
-      {:error, :restricted_giftwrap} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:restricted_giftwrap)
-        )
-
-      {:error, :sync_read_not_allowed} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:sync_read_not_allowed)
-        )
-
-      {:error, :marmot_group_h_tag_required} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:marmot_group_h_tag_required)
-        )
-
-      {:error, :marmot_group_h_values_exceeded} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:marmot_group_h_values_exceeded)
-        )
-
-      {:error, :marmot_group_filter_window_too_wide} ->
-        restricted_count_notice(
-          state,
-          subscription_id,
-          EventPolicy.error_message(:marmot_group_filter_window_too_wide)
-        )
+    case Events.count(filters,
+           context: request_context(state, subscription_id),
+           options: options
+         ) do
+      {:ok, payload} ->
+        response = Protocol.encode_relay({:count, subscription_id, payload})
+        {:push, {:text, response}, state}
 
       {:error, reason} ->
-        response = Protocol.encode_relay({:closed, subscription_id, inspect(reason)})
-        {:push, {:text, response}, state}
+        handle_count_error(state, subscription_id, reason)
     end
+  end
+
+  defp handle_count_error(state, subscription_id, reason)
+       when reason in [
+              :auth_required,
+              :pubkey_not_allowed,
+              :restricted_giftwrap,
+              :sync_read_not_allowed,
+              :marmot_group_h_tag_required,
+              :marmot_group_h_values_exceeded,
+              :marmot_group_filter_window_too_wide
+            ] do
+    restricted_count_notice(state, subscription_id, EventPolicy.error_message(reason))
+  end
+
+  defp handle_count_error(state, subscription_id, reason) do
+    response = Protocol.encode_relay({:closed, subscription_id, inspect(reason)})
+    {:push, {:text, response}, state}
   end
 
   defp handle_auth(%__MODULE__{} = state, auth_event) do
@@ -534,52 +462,6 @@ defmodule Parrhesia.Web.Connection do
     {:ok, state}
   end
 
-  defp maybe_process_group_event(event) do
-    if Flow.group_related_kind?(Map.get(event, "kind")) do
-      Flow.handle_event(event)
-    else
-      :ok
-    end
-  end
-
-  defp persist_event(event) do
-    kind = Map.get(event, "kind")
-
-    cond do
-      kind in [5, 62] -> persist_control_event(kind, event)
-      ephemeral_kind?(kind) -> persist_ephemeral_event()
-      true -> persist_regular_event(event)
-    end
-  end
-
-  defp persist_control_event(5, event) do
-    with {:ok, deleted_count} <- Storage.events().delete_by_request(%{}, event) do
-      {:ok, deleted_count, "ok: deletion request processed"}
-    end
-  end
-
-  defp persist_control_event(62, event) do
-    with {:ok, deleted_count} <- Storage.events().vanish(%{}, event) do
-      {:ok, deleted_count, "ok: vanish request processed"}
-    end
-  end
-
-  defp persist_ephemeral_event do
-    if accept_ephemeral_events?() do
-      {:ok, :ephemeral, "ok: ephemeral event accepted"}
-    else
-      {:error, :ephemeral_events_disabled}
-    end
-  end
-
-  defp persist_regular_event(event) do
-    case Storage.events().put_event(%{}, event) do
-      {:ok, persisted_event} -> {:ok, persisted_event, "ok: event stored"}
-      {:error, :duplicate_event} -> {:error, :duplicate_event}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp error_message_for_ingest_failure(:duplicate_event),
     do: "duplicate: event already stored"
 
@@ -623,49 +505,6 @@ defmodule Parrhesia.Web.Connection do
   defp error_message_for_ingest_failure(reason) when is_binary(reason), do: reason
   defp error_message_for_ingest_failure(reason), do: "error: #{inspect(reason)}"
 
-  defp query_initial_events(filters, authenticated_pubkeys) do
-    Storage.events().query(%{}, filters,
-      max_filter_limit: Parrhesia.Config.get([:limits, :max_filter_limit]),
-      requester_pubkeys: MapSet.to_list(authenticated_pubkeys)
-    )
-  end
-
-  defp count_events(filters, authenticated_pubkeys) do
-    Storage.events().count(%{}, filters, requester_pubkeys: MapSet.to_list(authenticated_pubkeys))
-  end
-
-  defp build_count_payload(filters, count, options) when is_integer(count) and is_map(options) do
-    include_hll? =
-      Map.get(options, "hll", false) and Parrhesia.Config.get([:features, :nip_45_count], true)
-
-    payload = %{"count" => count, "approximate" => false}
-
-    payload =
-      if include_hll? do
-        Map.put(payload, "hll", generate_hll_payload(filters, count))
-      else
-        payload
-      end
-
-    {:ok, payload}
-  end
-
-  defp generate_hll_payload(filters, count) do
-    filters
-    |> JSON.encode!()
-    |> then(&"#{&1}:#{count}")
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode64()
-  end
-
-  defp telemetry_metadata_for_event(event) do
-    %{traffic_class: traffic_class_for_event(event)}
-  end
-
-  defp telemetry_metadata_for_filters(filters) do
-    %{traffic_class: traffic_class_for_filters(filters)}
-  end
-
   defp telemetry_metadata_for_fanout_events(fanout_events) do
     traffic_class =
       if Enum.any?(fanout_events, fn
@@ -682,26 +521,6 @@ defmodule Parrhesia.Web.Connection do
 
     %{traffic_class: traffic_class}
   end
-
-  defp traffic_class_for_filters(filters) do
-    if Enum.any?(filters, &marmot_filter?/1) do
-      :marmot
-    else
-      :generic
-    end
-  end
-
-  defp marmot_filter?(filter) when is_map(filter) do
-    has_marmot_kind? =
-      case Map.get(filter, "kinds") do
-        kinds when is_list(kinds) -> Enum.any?(kinds, &MapSet.member?(@marmot_kinds, &1))
-        _other -> false
-      end
-
-    has_marmot_kind? or Map.has_key?(filter, "#h") or Map.has_key?(filter, "#i")
-  end
-
-  defp marmot_filter?(_filter), do: false
 
   defp traffic_class_for_event(event) when is_map(event) do
     if MapSet.member?(@marmot_kinds, Map.get(event, "kind")) do
@@ -976,27 +795,6 @@ defmodule Parrhesia.Web.Connection do
          subscription_id
        ) do
     Sessions.close(negentropy_sessions, self(), subscription_id)
-    :ok
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp fanout_event(event) do
-    case Index.candidate_subscription_keys(event) do
-      candidates when is_list(candidates) ->
-        Enum.each(candidates, fn {owner_pid, subscription_id} ->
-          send(owner_pid, {:fanout_event, subscription_id, event})
-        end)
-
-      _other ->
-        :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp maybe_publish_multi_node(event) do
-    MultiNode.publish(event)
     :ok
   catch
     :exit, _reason -> :ok
@@ -1655,25 +1453,5 @@ defmodule Parrhesia.Web.Connection do
       true ->
         {:error, :event_rate_limited}
     end
-  end
-
-  defp validate_event_payload_size(event, max_event_bytes)
-       when is_map(event) and is_integer(max_event_bytes) and max_event_bytes > 0 do
-    if byte_size(JSON.encode!(event)) <= max_event_bytes do
-      :ok
-    else
-      {:error, :event_too_large}
-    end
-  end
-
-  defp validate_event_payload_size(_event, _max_event_bytes), do: :ok
-
-  defp ephemeral_kind?(kind) when is_integer(kind), do: kind >= 20_000 and kind < 30_000
-  defp ephemeral_kind?(_kind), do: false
-
-  defp accept_ephemeral_events? do
-    :parrhesia
-    |> Application.get_env(:policies, [])
-    |> Keyword.get(:accept_ephemeral_events, true)
   end
 end
