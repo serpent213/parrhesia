@@ -15,6 +15,7 @@ defmodule Parrhesia.Web.Router do
     json_decoder: JSON
   )
 
+  plug(Parrhesia.Web.RemoteIp)
   plug(:match)
   plug(:dispatch)
 
