@@ -4,7 +4,15 @@
 
 Parrhesia is a Nostr relay server written in Elixir/OTP with PostgreSQL storage.
 
+**ALPHA CONDITION – BREAKING CHANGES MIGHT HAPPEN!**
+
+- Advanced Querying: Full-text search (NIP-50) and COUNT queries (NIP-45).
+- Secure Messaging: First-class support for Marmot MLS-encrypted groups and NIP-17/44/59 gift-wrapped DMs.
+- Identity & Auth: NIP-42 authentication flows and NIP-86 management API with NIP-98 HTTP auth.
+- Data Integrity: Negentropy-based synchronization and NIP-62 vanish flows.
+
 It exposes:
+
 - a WebSocket relay endpoint at `/relay`
 - NIP-11 relay info on `GET /relay` with `Accept: application/nostr+json`
 - operational HTTP endpoints (`/health`, `/ready`, `/metrics`)
