@@ -11,6 +11,7 @@ defmodule Parrhesia.Application do
       Parrhesia.Storage.Supervisor,
       Parrhesia.Subscriptions.Supervisor,
       Parrhesia.Auth.Supervisor,
+      Parrhesia.Sync.Supervisor,
       Parrhesia.Policy.Supervisor,
       Parrhesia.Web.Endpoint,
       Parrhesia.Web.MetricsEndpoint,

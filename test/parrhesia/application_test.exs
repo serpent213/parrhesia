@@ -8,6 +8,7 @@ defmodule Parrhesia.ApplicationTest do
     assert is_pid(Process.whereis(Parrhesia.Storage.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Subscriptions.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Auth.Supervisor))
+    assert is_pid(Process.whereis(Parrhesia.Sync.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Policy.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Web.Endpoint))
     assert is_pid(Process.whereis(Parrhesia.Web.MetricsEndpoint))
@@ -20,6 +21,7 @@ defmodule Parrhesia.ApplicationTest do
 
     assert is_pid(Process.whereis(Parrhesia.Auth.Challenges))
     assert is_pid(Process.whereis(Parrhesia.API.Identity.Manager))
+    assert is_pid(Process.whereis(Parrhesia.API.Sync.Manager))
 
     if negentropy_enabled?() do
       assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))

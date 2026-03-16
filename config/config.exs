@@ -9,6 +9,9 @@ config :parrhesia,
     path: nil,
     private_key: nil
   ],
+  sync: [
+    path: nil
+  ],
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,

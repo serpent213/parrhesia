@@ -19,6 +19,9 @@ config :parrhesia,
     path: Path.join(System.tmp_dir!(), "parrhesia_test_identity.json"),
     private_key: nil
   ],
+  sync: [
+    path: Path.join(System.tmp_dir!(), "parrhesia_test_sync.json")
+  ],
   features: [verify_event_signatures: false]
 
 pg_host = System.get_env("PGHOST")

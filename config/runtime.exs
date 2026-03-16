@@ -455,6 +455,9 @@ if config_env() == :prod do
       path: string_env.("PARRHESIA_IDENTITY_PATH", nil),
       private_key: string_env.("PARRHESIA_IDENTITY_PRIVATE_KEY", nil)
     ],
+    sync: [
+      path: string_env.("PARRHESIA_SYNC_PATH", nil)
+    ],
     moderation_cache_enabled:
       bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),
     enable_expiration_worker:
