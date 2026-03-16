@@ -5,6 +5,7 @@ defmodule Parrhesia.StorageTest do
 
   test "resolves default storage modules" do
     assert Storage.events() == Parrhesia.Storage.Adapters.Postgres.Events
+    assert Storage.acl() == Parrhesia.Storage.Adapters.Postgres.ACL
     assert Storage.moderation() == Parrhesia.Storage.Adapters.Postgres.Moderation
     assert Storage.groups() == Parrhesia.Storage.Adapters.Postgres.Groups
     assert Storage.admin() == Parrhesia.Storage.Adapters.Postgres.Admin

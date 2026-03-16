@@ -3,6 +3,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Repo
+  alias Parrhesia.Storage.Adapters.Postgres.ACL
   alias Parrhesia.Storage.Adapters.Postgres.Admin
   alias Parrhesia.Storage.Adapters.Postgres.Groups
   alias Parrhesia.Storage.Adapters.Postgres.Moderation
@@ -32,10 +33,13 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
     assert {:ok, false} = Moderation.pubkey_banned?(%{}, pubkey)
 
     assert {:ok, false} = Moderation.pubkey_allowed?(%{}, pubkey)
+    assert {:ok, false} = Moderation.has_allowed_pubkeys?(%{})
     assert :ok = Moderation.allow_pubkey(%{}, pubkey)
     assert {:ok, true} = Moderation.pubkey_allowed?(%{}, pubkey)
+    assert {:ok, true} = Moderation.has_allowed_pubkeys?(%{})
     assert :ok = Moderation.disallow_pubkey(%{}, pubkey)
     assert {:ok, false} = Moderation.pubkey_allowed?(%{}, pubkey)
+    assert {:ok, false} = Moderation.has_allowed_pubkeys?(%{})
 
     assert {:ok, false} = Moderation.event_banned?(%{}, event_id)
     assert :ok = Moderation.ban_event(%{}, event_id)
@@ -102,6 +106,28 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
     assert {:ok, nil} = Groups.get_membership(%{}, group_id, member_pubkey)
   end
 
+  test "acl adapter upserts, lists, and deletes rules" do
+    principal = String.duplicate("f", 64)
+
+    rule = %{
+      principal_type: :pubkey,
+      principal: principal,
+      capability: :sync_read,
+      match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+    }
+
+    assert {:ok, stored_rule} = ACL.put_rule(%{}, rule)
+    assert stored_rule.principal == principal
+
+    assert {:ok, [listed_rule]} =
+             ACL.list_rules(%{}, principal_type: :pubkey, capability: :sync_read)
+
+    assert listed_rule.id == stored_rule.id
+
+    assert :ok = ACL.delete_rule(%{}, %{id: stored_rule.id})
+    assert {:ok, []} = ACL.list_rules(%{}, principal: principal)
+  end
+
   test "admin adapter appends and filters audit logs" do
     actor_pubkey = String.duplicate("d", 64)
 
@@ -130,8 +156,18 @@ defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
 
     assert {:ok, %{"status" => "ok"}} = Admin.execute(%{}, :ping, %{})
 
-    assert {:ok, %{"events" => _events, "banned_pubkeys" => _banned, "blocked_ips" => _ips}} =
+    assert {:ok,
+            %{
+              "events" => _events,
+              "banned_pubkeys" => _banned,
+              "allowed_pubkeys" => _allowed,
+              "acl_rules" => _acl_rules,
+              "blocked_ips" => _ips
+            }} =
              Admin.execute(%{}, :stats, %{})
+
+    assert {:ok, %{"methods" => methods}} = Admin.execute(%{}, :supportedmethods, %{})
+    assert "allow_pubkey" in methods
 
     assert {:error, {:unsupported_method, "status"}} = Admin.execute(%{}, :status, %{})
   end

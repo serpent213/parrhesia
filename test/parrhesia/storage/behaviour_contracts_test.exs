@@ -24,12 +24,22 @@ defmodule Parrhesia.Storage.BehaviourContractsTest do
                :block_ip,
                :disallow_pubkey,
                :event_banned?,
+               :has_allowed_pubkeys?,
                :ip_blocked?,
                :pubkey_allowed?,
                :pubkey_banned?,
                :unban_event,
                :unban_pubkey,
                :unblock_ip
+             ]
+  end
+
+  test "acl behavior exposes expected callbacks" do
+    assert callback_names(Parrhesia.Storage.ACL) ==
+             [
+               :delete_rule,
+               :list_rules,
+               :put_rule
              ]
   end
 

@@ -3,6 +3,7 @@ defmodule Parrhesia.Web.Router do
 
   use Plug.Router
 
+  alias Parrhesia.Policy.ConnectionPolicy
   alias Parrhesia.Web.Management
   alias Parrhesia.Web.Metrics
   alias Parrhesia.Web.Readiness
@@ -38,25 +39,34 @@ defmodule Parrhesia.Web.Router do
   end
 
   post "/management" do
-    Management.handle(conn)
+    case ConnectionPolicy.authorize_remote_ip(conn.remote_ip) do
+      :ok -> Management.handle(conn)
+      {:error, :ip_blocked} -> send_resp(conn, 403, "forbidden")
+    end
   end
 
   get "/relay" do
-    if accepts_nip11?(conn) do
-      body = JSON.encode!(RelayInfo.document())
+    case ConnectionPolicy.authorize_remote_ip(conn.remote_ip) do
+      :ok ->
+        if accepts_nip11?(conn) do
+          body = JSON.encode!(RelayInfo.document())
 
-      conn
-      |> put_resp_content_type("application/nostr+json")
-      |> send_resp(200, body)
-    else
-      conn
-      |> WebSockAdapter.upgrade(
-        Parrhesia.Web.Connection,
-        %{relay_url: relay_url(conn)},
-        timeout: 60_000,
-        max_frame_size: max_frame_bytes()
-      )
-      |> halt()
+          conn
+          |> put_resp_content_type("application/nostr+json")
+          |> send_resp(200, body)
+        else
+          conn
+          |> WebSockAdapter.upgrade(
+            Parrhesia.Web.Connection,
+            %{relay_url: relay_url(conn), remote_ip: remote_ip(conn)},
+            timeout: 60_000,
+            max_frame_size: max_frame_bytes()
+          )
+          |> halt()
+        end
+
+      {:error, :ip_blocked} ->
+        send_resp(conn, 403, "forbidden")
     end
   end
 
@@ -89,5 +99,13 @@ defmodule Parrhesia.Web.Router do
 
   defp max_frame_bytes do
     Parrhesia.Config.get([:limits, :max_frame_bytes], 1_048_576)
+  end
+
+  defp remote_ip(conn) do
+    case conn.remote_ip do
+      {_, _, _, _} = remote_ip -> :inet.ntoa(remote_ip) |> to_string()
+      {_, _, _, _, _, _, _, _} = remote_ip -> :inet.ntoa(remote_ip) |> to_string()
+      _other -> nil
+    end
   end
 end

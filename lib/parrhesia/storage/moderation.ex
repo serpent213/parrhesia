@@ -16,6 +16,7 @@ defmodule Parrhesia.Storage.Moderation do
   @callback allow_pubkey(context(), pubkey()) :: :ok | {:error, reason()}
   @callback disallow_pubkey(context(), pubkey()) :: :ok | {:error, reason()}
   @callback pubkey_allowed?(context(), pubkey()) :: {:ok, boolean()} | {:error, reason()}
+  @callback has_allowed_pubkeys?(context()) :: {:ok, boolean()} | {:error, reason()}
 
   @callback ban_event(context(), event_id()) :: :ok | {:error, reason()}
   @callback unban_event(context(), event_id()) :: :ok | {:error, reason()}

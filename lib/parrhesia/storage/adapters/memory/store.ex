@@ -10,6 +10,8 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
     deleted: MapSet.new(),
     bans: %{pubkeys: MapSet.new(), events: MapSet.new(), ips: MapSet.new()},
     allowed_pubkeys: MapSet.new(),
+    acl_rules: [],
+    next_acl_rule_id: 1,
     groups: %{},
     roles: %{},
     audit_logs: []

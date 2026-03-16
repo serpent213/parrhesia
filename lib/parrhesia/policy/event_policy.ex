@@ -3,11 +3,17 @@ defmodule Parrhesia.Policy.EventPolicy do
   Write/read policy checks for relay operations.
   """
 
+  alias Parrhesia.API.ACL
+  alias Parrhesia.API.RequestContext
+  alias Parrhesia.Policy.ConnectionPolicy
   alias Parrhesia.Storage
 
   @type policy_error ::
           :auth_required
+          | :pubkey_not_allowed
           | :restricted_giftwrap
+          | :sync_read_not_allowed
+          | :sync_write_not_allowed
           | :marmot_group_h_tag_required
           | :marmot_group_h_values_exceeded
           | :marmot_group_filter_window_too_wide
@@ -33,14 +39,30 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   @spec authorize_read([map()], MapSet.t(String.t())) :: :ok | {:error, policy_error()}
   def authorize_read(filters, authenticated_pubkeys) when is_list(filters) do
+    authorize_read(filters, authenticated_pubkeys, request_context(authenticated_pubkeys))
+  end
+
+  @spec authorize_read([map()], MapSet.t(String.t()), RequestContext.t()) ::
+          :ok | {:error, policy_error()}
+  def authorize_read(filters, authenticated_pubkeys, %RequestContext{} = context)
+      when is_list(filters) do
     auth_required? = config_bool([:policies, :auth_required_for_reads], false)
 
     cond do
+      match?(
+        {:error, _reason},
+        ConnectionPolicy.authorize_authenticated_pubkeys(authenticated_pubkeys)
+      ) ->
+        ConnectionPolicy.authorize_authenticated_pubkeys(authenticated_pubkeys)
+
       auth_required? and MapSet.size(authenticated_pubkeys) == 0 ->
         {:error, :auth_required}
 
       giftwrap_restricted?(filters, authenticated_pubkeys) ->
         {:error, :restricted_giftwrap}
+
+      match?({:error, _reason}, authorize_sync_reads(filters, context)) ->
+        authorize_sync_reads(filters, context)
 
       true ->
         enforce_marmot_group_read_guardrails(filters)
@@ -49,8 +71,17 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   @spec authorize_write(map(), MapSet.t(String.t())) :: :ok | {:error, policy_error()}
   def authorize_write(event, authenticated_pubkeys) when is_map(event) do
+    authorize_write(event, authenticated_pubkeys, request_context(authenticated_pubkeys))
+  end
+
+  @spec authorize_write(map(), MapSet.t(String.t()), RequestContext.t()) ::
+          :ok | {:error, policy_error()}
+  def authorize_write(event, authenticated_pubkeys, %RequestContext{} = context)
+      when is_map(event) do
     checks = [
+      fn -> ConnectionPolicy.authorize_authenticated_pubkeys(authenticated_pubkeys) end,
       fn -> maybe_require_auth_for_write(authenticated_pubkeys) end,
+      fn -> authorize_sync_write(event, context) end,
       fn -> reject_if_pubkey_banned(event) end,
       fn -> reject_if_event_banned(event) end,
       fn -> enforce_pow(event) end,
@@ -69,9 +100,16 @@ defmodule Parrhesia.Policy.EventPolicy do
 
   @spec error_message(policy_error()) :: String.t()
   def error_message(:auth_required), do: "auth-required: authentication required"
+  def error_message(:pubkey_not_allowed), do: "restricted: authenticated pubkey is not allowed"
 
   def error_message(:restricted_giftwrap),
     do: "restricted: giftwrap access requires recipient authentication"
+
+  def error_message(:sync_read_not_allowed),
+    do: "restricted: sync read not allowed for authenticated pubkey"
+
+  def error_message(:sync_write_not_allowed),
+    do: "restricted: sync write not allowed for authenticated pubkey"
 
   def error_message(:marmot_group_h_tag_required),
     do: "restricted: kind 445 queries must include a #h tag"
@@ -141,6 +179,19 @@ defmodule Parrhesia.Policy.EventPolicy do
     else
       :ok
     end
+  end
+
+  defp authorize_sync_reads(filters, %RequestContext{} = context) do
+    Enum.reduce_while(filters, :ok, fn filter, :ok ->
+      case ACL.check(:sync_read, filter, context: context) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp authorize_sync_write(event, %RequestContext{} = context) do
+    ACL.check(:sync_write, event, context: context)
   end
 
   defp giftwrap_restricted?(filters, authenticated_pubkeys) do
@@ -671,5 +722,9 @@ defmodule Parrhesia.Policy.EventPolicy do
       _other ->
         default
     end
+  end
+
+  defp request_context(authenticated_pubkeys) do
+    %RequestContext{authenticated_pubkeys: authenticated_pubkeys}
   end
 end

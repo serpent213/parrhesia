@@ -2,6 +2,7 @@ defmodule Parrhesia.Web.ConnectionTest do
   use ExUnit.Case, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Parrhesia.API.ACL
   alias Parrhesia.Negentropy.Engine
   alias Parrhesia.Negentropy.Message
   alias Parrhesia.Protocol.EventValidator
@@ -105,6 +106,124 @@ defmodule Parrhesia.Web.ConnectionTest do
 
     assert ["OK", _, false, "invalid: AUTH event is too old"] =
              Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
+  end
+
+  test "AUTH rejects pubkeys outside the allowlist" do
+    assert :ok = Parrhesia.Storage.moderation().allow_pubkey(%{}, String.duplicate("a", 64))
+
+    state = connection_state()
+    auth_event = valid_auth_event(state.auth_challenge)
+    payload = JSON.encode!(["AUTH", auth_event])
+
+    assert {:push, frames, _next_state} = Connection.handle_in({payload, [opcode: :text]}, state)
+
+    decoded = Enum.map(frames, fn {:text, frame} -> JSON.decode!(frame) end)
+
+    assert ["OK", _, false, "restricted: authenticated pubkey is not allowed"] =
+             Enum.find(decoded, fn frame -> List.first(frame) == "OK" end)
+  end
+
+  test "protected sync REQ requires matching ACL grant" do
+    previous_acl = Application.get_env(:parrhesia, :acl, [])
+
+    Application.put_env(
+      :parrhesia,
+      :acl,
+      protected_filters: [%{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}]
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :acl, previous_acl)
+    end)
+
+    state = connection_state()
+    auth_event = valid_auth_event(state.auth_challenge)
+
+    assert {:push, _, authed_state} =
+             Connection.handle_in({JSON.encode!(["AUTH", auth_event]), [opcode: :text]}, state)
+
+    req_payload =
+      JSON.encode!(["REQ", "sync-sub", %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}])
+
+    assert {:push, denied_frames, ^authed_state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, authed_state)
+
+    assert Enum.map(denied_frames, fn {:text, frame} -> JSON.decode!(frame) end) == [
+             ["AUTH", authed_state.auth_challenge],
+             ["CLOSED", "sync-sub", "restricted: sync read not allowed for authenticated pubkey"]
+           ]
+
+    assert :ok =
+             ACL.grant(%{
+               principal_type: :pubkey,
+               principal: auth_event["pubkey"],
+               capability: :sync_read,
+               match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+             })
+
+    assert {:push, responses, granted_state} =
+             Connection.handle_in({req_payload, [opcode: :text]}, authed_state)
+
+    assert Map.has_key?(granted_state.subscriptions, "sync-sub")
+
+    assert List.last(Enum.map(responses, fn {:text, frame} -> JSON.decode!(frame) end)) == [
+             "EOSE",
+             "sync-sub"
+           ]
+  end
+
+  test "protected sync EVENT requires matching ACL grant" do
+    previous_acl = Application.get_env(:parrhesia, :acl, [])
+
+    Application.put_env(
+      :parrhesia,
+      :acl,
+      protected_filters: [%{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}]
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :acl, previous_acl)
+    end)
+
+    state = connection_state()
+    auth_event = valid_auth_event(state.auth_challenge)
+
+    assert {:push, _, authed_state} =
+             Connection.handle_in({JSON.encode!(["AUTH", auth_event]), [opcode: :text]}, state)
+
+    event =
+      valid_event(%{
+        "kind" => 5000,
+        "tags" => [["r", "tribes.accounts.user"]],
+        "content" => "sync payload"
+      })
+
+    payload = JSON.encode!(["EVENT", event])
+
+    assert {:push, {:text, denied_response}, denied_state} =
+             Connection.handle_in({payload, [opcode: :text]}, authed_state)
+
+    assert JSON.decode!(denied_response) == [
+             "OK",
+             event["id"],
+             false,
+             "restricted: sync write not allowed for authenticated pubkey"
+           ]
+
+    assert denied_state.authenticated_pubkeys == authed_state.authenticated_pubkeys
+
+    assert :ok =
+             ACL.grant(%{
+               principal_type: :pubkey,
+               principal: auth_event["pubkey"],
+               capability: :sync_write,
+               match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+             })
+
+    assert {:push, {:text, accepted_response}, _next_state} =
+             Connection.handle_in({payload, [opcode: :text]}, authed_state)
+
+    assert JSON.decode!(accepted_response) == ["OK", event["id"], true, "ok: event stored"]
   end
 
   test "protected event is rejected unless authenticated" do

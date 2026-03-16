@@ -22,6 +22,9 @@ defmodule Parrhesia.TestSupport.PermissiveModeration do
   def pubkey_allowed?(_context, _pubkey), do: {:ok, true}
 
   @impl true
+  def has_allowed_pubkeys?(_context), do: {:ok, false}
+
+  @impl true
   def ban_event(_context, _event_id), do: :ok
 
   @impl true

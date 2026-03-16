@@ -8,6 +8,7 @@ defmodule Parrhesia.Storage do
 
   @default_modules [
     events: Parrhesia.Storage.Adapters.Postgres.Events,
+    acl: Parrhesia.Storage.Adapters.Postgres.ACL,
     moderation: Parrhesia.Storage.Adapters.Postgres.Moderation,
     groups: Parrhesia.Storage.Adapters.Postgres.Groups,
     admin: Parrhesia.Storage.Adapters.Postgres.Admin
@@ -18,6 +19,9 @@ defmodule Parrhesia.Storage do
 
   @spec moderation() :: module()
   def moderation, do: fetch_module!(:moderation, Parrhesia.Storage.Moderation)
+
+  @spec acl() :: module()
+  def acl, do: fetch_module!(:acl, Parrhesia.Storage.ACL)
 
   @spec groups() :: module()
   def groups, do: fetch_module!(:groups, Parrhesia.Storage.Groups)

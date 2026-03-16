@@ -34,6 +34,11 @@ defmodule Parrhesia.Storage.Adapters.Memory.Moderation do
   end
 
   @impl true
+  def has_allowed_pubkeys?(_context) do
+    {:ok, Store.get(fn state -> MapSet.size(state.allowed_pubkeys) > 0 end)}
+  end
+
+  @impl true
   def ban_event(_context, event_id), do: update_ban_set(:events, event_id, :add)
 
   @impl true

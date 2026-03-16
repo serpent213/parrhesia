@@ -5,8 +5,8 @@ defmodule Parrhesia.Web.Management do
 
   import Plug.Conn
 
+  alias Parrhesia.API.Admin
   alias Parrhesia.Auth.Nip98
-  alias Parrhesia.Storage
 
   @spec handle(Plug.Conn.t()) :: Plug.Conn.t()
   def handle(conn) do
@@ -59,11 +59,11 @@ defmodule Parrhesia.Web.Management do
   defp parse_payload(_payload), do: {:error, :invalid_payload}
 
   defp execute_method(payload) do
-    Storage.admin().execute(%{}, payload.method, payload.params)
+    Admin.execute(payload.method, payload.params)
   end
 
   defp append_audit_log(auth_event, payload, result) do
-    Storage.admin().append_audit_log(%{}, %{
+    Parrhesia.Storage.admin().append_audit_log(%{}, %{
       method: payload.method,
       actor_pubkey: Map.get(auth_event, "pubkey"),
       params: payload.params,

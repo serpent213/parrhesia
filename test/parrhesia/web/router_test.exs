@@ -135,6 +135,87 @@ defmodule Parrhesia.Web.RouterTest do
            }
   end
 
+  test "POST /management denies blocked IPs before auth" do
+    assert :ok = Parrhesia.Storage.moderation().block_ip(%{}, "8.8.8.8")
+
+    conn =
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
+      |> put_req_header("content-type", "application/json")
+      |> Map.put(:remote_ip, {8, 8, 8, 8})
+      |> Router.call([])
+
+    assert conn.status == 403
+    assert conn.resp_body == "forbidden"
+  end
+
+  test "GET /relay denies blocked IPs" do
+    assert :ok = Parrhesia.Storage.moderation().block_ip(%{}, "8.8.4.4")
+
+    conn =
+      conn(:get, "/relay")
+      |> put_req_header("accept", "application/nostr+json")
+      |> Map.put(:remote_ip, {8, 8, 4, 4})
+      |> Router.call([])
+
+    assert conn.status == 403
+    assert conn.resp_body == "forbidden"
+  end
+
+  test "POST /management supports ACL methods" do
+    management_url = "http://www.example.com/management"
+    auth_event = nip98_event("POST", management_url)
+    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
+
+    grant_conn =
+      conn(
+        :post,
+        "/management",
+        JSON.encode!(%{
+          "method" => "acl_grant",
+          "params" => %{
+            "principal_type" => "pubkey",
+            "principal" => String.duplicate("c", 64),
+            "capability" => "sync_read",
+            "match" => %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+          }
+        })
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert grant_conn.status == 200
+
+    list_conn =
+      conn(
+        :post,
+        "/management",
+        JSON.encode!(%{
+          "method" => "acl_list",
+          "params" => %{"principal" => String.duplicate("c", 64)}
+        })
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert list_conn.status == 200
+
+    assert %{
+             "ok" => true,
+             "result" => %{
+               "rules" => [
+                 %{
+                   "principal" => principal,
+                   "capability" => "sync_read"
+                 }
+               ]
+             }
+           } = JSON.decode!(list_conn.resp_body)
+
+    assert principal == String.duplicate("c", 64)
+  end
+
   defp nip98_event(method, url) do
     now = System.system_time(:second)
 

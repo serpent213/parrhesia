@@ -1,6 +1,7 @@
 defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
   use ExUnit.Case, async: false
 
+  alias Parrhesia.Storage.Adapters.Memory.ACL
   alias Parrhesia.Storage.Adapters.Memory.Admin
   alias Parrhesia.Storage.Adapters.Memory.Events
   alias Parrhesia.Storage.Adapters.Memory.Groups
@@ -27,6 +28,17 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
 
     assert :ok = Moderation.ban_pubkey(%{}, "pk")
     assert {:ok, true} = Moderation.pubkey_banned?(%{}, "pk")
+    assert {:ok, false} = Moderation.has_allowed_pubkeys?(%{})
+    assert :ok = Moderation.allow_pubkey(%{}, String.duplicate("f", 64))
+    assert {:ok, true} = Moderation.has_allowed_pubkeys?(%{})
+
+    assert {:ok, %{capability: :sync_read}} =
+             ACL.put_rule(%{}, %{
+               principal_type: :pubkey,
+               principal: String.duplicate("f", 64),
+               capability: :sync_read,
+               match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+             })
 
     assert {:ok, membership} =
              Groups.put_membership(%{}, %{group_id: "g1", pubkey: "pk", role: "member"})

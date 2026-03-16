@@ -20,6 +20,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
     case method_name do
       "ping" -> {:ok, %{"status" => "ok"}}
       "stats" -> {:ok, relay_stats()}
+      "supportedmethods" -> {:ok, %{"methods" => supported_methods()}}
       "list_audit_logs" -> list_audit_logs(%{}, audit_list_opts(params))
       _other -> execute_moderation_method(moderation, method_name, params)
     end
@@ -84,13 +85,34 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
   defp relay_stats do
     events_count = Repo.aggregate("events", :count, :id)
     banned_pubkeys = Repo.aggregate("banned_pubkeys", :count, :pubkey)
+    allowed_pubkeys = Repo.aggregate("allowed_pubkeys", :count, :pubkey)
     blocked_ips = Repo.aggregate("blocked_ips", :count, :ip)
+    acl_rules = Repo.aggregate("acl_rules", :count, :id)
 
     %{
       "events" => events_count,
       "banned_pubkeys" => banned_pubkeys,
+      "allowed_pubkeys" => allowed_pubkeys,
+      "acl_rules" => acl_rules,
       "blocked_ips" => blocked_ips
     }
+  end
+
+  defp supported_methods do
+    [
+      "allow_pubkey",
+      "ban_event",
+      "ban_pubkey",
+      "block_ip",
+      "disallow_pubkey",
+      "list_audit_logs",
+      "ping",
+      "stats",
+      "supportedmethods",
+      "unban_event",
+      "unban_pubkey",
+      "unblock_ip"
+    ]
   end
 
   defp execute_moderation_method(moderation, "ban_pubkey", params),

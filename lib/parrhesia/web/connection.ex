@@ -5,10 +5,12 @@ defmodule Parrhesia.Web.Connection do
 
   @behaviour WebSock
 
+  alias Parrhesia.API.RequestContext
   alias Parrhesia.Auth.Challenges
   alias Parrhesia.Fanout.MultiNode
   alias Parrhesia.Groups.Flow
   alias Parrhesia.Negentropy.Sessions
+  alias Parrhesia.Policy.ConnectionPolicy
   alias Parrhesia.Policy.EventPolicy
   alias Parrhesia.Protocol
   alias Parrhesia.Protocol.Filter
@@ -49,6 +51,7 @@ defmodule Parrhesia.Web.Connection do
             auth_challenges: Challenges,
             auth_challenge: nil,
             relay_url: nil,
+            remote_ip: nil,
             negentropy_sessions: Sessions,
             outbound_queue: :queue.new(),
             outbound_queue_size: 0,
@@ -79,6 +82,7 @@ defmodule Parrhesia.Web.Connection do
           auth_challenges: GenServer.server() | nil,
           auth_challenge: String.t() | nil,
           relay_url: String.t() | nil,
+          remote_ip: String.t() | nil,
           negentropy_sessions: GenServer.server() | nil,
           outbound_queue: :queue.queue({String.t(), map()}),
           outbound_queue_size: non_neg_integer(),
@@ -105,6 +109,7 @@ defmodule Parrhesia.Web.Connection do
       auth_challenges: auth_challenges,
       auth_challenge: maybe_issue_auth_challenge(auth_challenges),
       relay_url: relay_url(opts),
+      remote_ip: remote_ip(opts),
       negentropy_sessions: negentropy_sessions(opts),
       max_outbound_queue: max_outbound_queue(opts),
       outbound_overflow_strategy: outbound_overflow_strategy(opts),
@@ -230,7 +235,12 @@ defmodule Parrhesia.Web.Connection do
         result =
           with :ok <- validate_event_payload_size(event, next_state.max_event_bytes),
                :ok <- Protocol.validate_event(event),
-               :ok <- EventPolicy.authorize_write(event, next_state.authenticated_pubkeys),
+               :ok <-
+                 EventPolicy.authorize_write(
+                   event,
+                   next_state.authenticated_pubkeys,
+                   request_context(next_state)
+                 ),
                :ok <- maybe_process_group_event(event),
                {:ok, _result, message} <- persist_event(event) do
             {:ok, message}
@@ -286,7 +296,12 @@ defmodule Parrhesia.Web.Connection do
     started_at = System.monotonic_time()
 
     with :ok <- Filter.validate_filters(filters),
-         :ok <- EventPolicy.authorize_read(filters, state.authenticated_pubkeys),
+         :ok <-
+           EventPolicy.authorize_read(
+             filters,
+             state.authenticated_pubkeys,
+             request_context(state, subscription_id)
+           ),
          {:ok, next_state} <- upsert_subscription(state, subscription_id, filters),
          :ok <- maybe_upsert_index_subscription(next_state, subscription_id, filters),
          {:ok, events} <- query_initial_events(filters, state.authenticated_pubkeys) do
@@ -306,8 +321,18 @@ defmodule Parrhesia.Web.Connection do
       {:error, :auth_required} ->
         restricted_close(state, subscription_id, EventPolicy.error_message(:auth_required))
 
+      {:error, :pubkey_not_allowed} ->
+        restricted_close(state, subscription_id, EventPolicy.error_message(:pubkey_not_allowed))
+
       {:error, :restricted_giftwrap} ->
         restricted_close(state, subscription_id, EventPolicy.error_message(:restricted_giftwrap))
+
+      {:error, :sync_read_not_allowed} ->
+        restricted_close(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:sync_read_not_allowed)
+        )
 
       {:error, :marmot_group_h_tag_required} ->
         restricted_close(
@@ -374,7 +399,12 @@ defmodule Parrhesia.Web.Connection do
     started_at = System.monotonic_time()
 
     with :ok <- Filter.validate_filters(filters),
-         :ok <- EventPolicy.authorize_read(filters, state.authenticated_pubkeys),
+         :ok <-
+           EventPolicy.authorize_read(
+             filters,
+             state.authenticated_pubkeys,
+             request_context(state, subscription_id)
+           ),
          {:ok, count} <- count_events(filters, state.authenticated_pubkeys),
          {:ok, payload} <- build_count_payload(filters, count, options) do
       Telemetry.emit(
@@ -389,11 +419,25 @@ defmodule Parrhesia.Web.Connection do
       {:error, :auth_required} ->
         restricted_count_notice(state, subscription_id, EventPolicy.error_message(:auth_required))
 
+      {:error, :pubkey_not_allowed} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:pubkey_not_allowed)
+        )
+
       {:error, :restricted_giftwrap} ->
         restricted_count_notice(
           state,
           subscription_id,
           EventPolicy.error_message(:restricted_giftwrap)
+        )
+
+      {:error, :sync_read_not_allowed} ->
+        restricted_count_notice(
+          state,
+          subscription_id,
+          EventPolicy.error_message(:sync_read_not_allowed)
         )
 
       {:error, :marmot_group_h_tag_required} ->
@@ -428,7 +472,8 @@ defmodule Parrhesia.Web.Connection do
 
     with :ok <- Protocol.validate_event(auth_event),
          :ok <- validate_auth_event(state, auth_event),
-         :ok <- validate_auth_challenge(state, auth_event) do
+         :ok <- validate_auth_challenge(state, auth_event),
+         :ok <- authorize_authenticated_pubkey(auth_event) do
       pubkey = Map.get(auth_event, "pubkey")
 
       next_state =
@@ -449,7 +494,12 @@ defmodule Parrhesia.Web.Connection do
 
   defp handle_neg_open(%__MODULE__{} = state, subscription_id, filter, message) do
     with :ok <- Filter.validate_filters([filter]),
-         :ok <- EventPolicy.authorize_read([filter], state.authenticated_pubkeys),
+         :ok <-
+           EventPolicy.authorize_read(
+             [filter],
+             state.authenticated_pubkeys,
+             request_context(state, subscription_id)
+           ),
          {:ok, response_message} <-
            maybe_open_negentropy(state, subscription_id, filter, message) do
       response =
@@ -545,7 +595,9 @@ defmodule Parrhesia.Web.Connection do
   defp error_message_for_ingest_failure(reason)
        when reason in [
               :auth_required,
+              :pubkey_not_allowed,
               :restricted_giftwrap,
+              :sync_write_not_allowed,
               :protected_event_requires_auth,
               :protected_event_pubkey_mismatch,
               :pow_below_minimum,
@@ -702,7 +754,9 @@ defmodule Parrhesia.Web.Connection do
               :invalid_search,
               :invalid_tag_filter,
               :auth_required,
+              :pubkey_not_allowed,
               :restricted_giftwrap,
+              :sync_read_not_allowed,
               :marmot_group_h_tag_required,
               :marmot_group_h_values_exceeded,
               :marmot_group_filter_window_too_wide
@@ -829,6 +883,7 @@ defmodule Parrhesia.Web.Connection do
   defp auth_error_message(:auth_event_too_old), do: "invalid: AUTH event is too old"
   defp auth_error_message(:challenge_mismatch), do: "invalid: AUTH challenge mismatch"
   defp auth_error_message(:missing_challenge), do: "invalid: AUTH challenge unavailable"
+  defp auth_error_message(:pubkey_not_allowed), do: EventPolicy.error_message(:pubkey_not_allowed)
   defp auth_error_message(reason) when is_binary(reason), do: reason
   defp auth_error_message(reason), do: "invalid: #{inspect(reason)}"
 
@@ -1422,6 +1477,23 @@ defmodule Parrhesia.Web.Connection do
     |> normalize_relay_url()
   end
 
+  defp remote_ip(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:remote_ip)
+    |> normalize_remote_ip()
+  end
+
+  defp remote_ip(opts) when is_map(opts) do
+    opts
+    |> Map.get(:remote_ip)
+    |> normalize_remote_ip()
+  end
+
+  defp remote_ip(_opts), do: nil
+
+  defp normalize_remote_ip(remote_ip) when is_binary(remote_ip) and remote_ip != "", do: remote_ip
+  defp normalize_remote_ip(_remote_ip), do: nil
+
   defp max_frame_bytes(opts) when is_list(opts) do
     opts
     |> Keyword.get(:max_frame_bytes)
@@ -1541,6 +1613,21 @@ defmodule Parrhesia.Web.Connection do
     |> Application.get_env(:limits, [])
     |> Keyword.get(:auth_max_age_seconds, @default_auth_max_age_seconds)
   end
+
+  defp request_context(%__MODULE__{} = state, subscription_id \\ nil) do
+    %RequestContext{
+      authenticated_pubkeys: state.authenticated_pubkeys,
+      caller: :websocket,
+      remote_ip: state.remote_ip,
+      subscription_id: subscription_id
+    }
+  end
+
+  defp authorize_authenticated_pubkey(%{"pubkey" => pubkey}) when is_binary(pubkey) do
+    ConnectionPolicy.authorize_authenticated_pubkey(pubkey)
+  end
+
+  defp authorize_authenticated_pubkey(_auth_event), do: {:error, :invalid_event}
 
   defp maybe_allow_event_ingest(
          %__MODULE__{

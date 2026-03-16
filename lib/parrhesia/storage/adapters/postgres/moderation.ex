@@ -68,6 +68,11 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
   end
 
   @impl true
+  def has_allowed_pubkeys?(_context) do
+    {:ok, scope_populated?(:allowed_pubkeys)}
+  end
+
+  @impl true
   def ban_event(_context, event_id) do
     with {:ok, normalized_event_id} <- normalize_hex_or_binary(event_id, 32, :invalid_event_id),
          :ok <- upsert_presence_table("banned_events", :event_id, normalized_event_id) do
@@ -163,6 +168,24 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
     end
   end
 
+  defp scope_populated?(scope) do
+    {table, field} = cache_scope_source!(scope)
+
+    if moderation_cache_enabled?() do
+      case cache_table_ref() do
+        :undefined ->
+          scope_populated_db?(table, field)
+
+        cache_table ->
+          ensure_cache_scope_loaded(scope, cache_table)
+
+          :ets.select_count(cache_table, [{{{:member, scope, :_}, true}, [], [true]}]) > 0
+      end
+    else
+      scope_populated_db?(table, field)
+    end
+  end
+
   defp ensure_cache_scope_loaded(scope, table) do
     loaded_key = cache_loaded_key(scope)
 
@@ -244,6 +267,16 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
       )
 
     Repo.one(query) == 1
+  end
+
+  defp scope_populated_db?(table, field) do
+    query =
+      from(record in table,
+        select: field(record, ^field),
+        limit: 1
+      )
+
+    not is_nil(Repo.one(query))
   end
 
   defp normalize_hex_or_binary(value, expected_bytes, _reason)
