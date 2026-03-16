@@ -451,6 +451,10 @@ if config_env() == :prod do
 
   config :parrhesia,
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
+    identity: [
+      path: string_env.("PARRHESIA_IDENTITY_PATH", nil),
+      private_key: string_env.("PARRHESIA_IDENTITY_PRIVATE_KEY", nil)
+    ],
     moderation_cache_enabled:
       bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),
     enable_expiration_worker:

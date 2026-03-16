@@ -216,6 +216,37 @@ defmodule Parrhesia.Web.RouterTest do
     assert principal == String.duplicate("c", 64)
   end
 
+  test "POST /management supports identity methods" do
+    management_url = "http://www.example.com/management"
+    auth_event = nip98_event("POST", management_url)
+    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
+
+    conn =
+      conn(
+        :post,
+        "/management",
+        JSON.encode!(%{
+          "method" => "identity_ensure",
+          "params" => %{}
+        })
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert conn.status == 200
+
+    assert %{
+             "ok" => true,
+             "result" => %{
+               "pubkey" => pubkey
+             }
+           } = JSON.decode!(conn.resp_body)
+
+    assert is_binary(pubkey)
+    assert byte_size(pubkey) == 64
+  end
+
   defp nip98_event(method, url) do
     now = System.system_time(:second)
 

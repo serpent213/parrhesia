@@ -25,7 +25,18 @@ defmodule Parrhesia.Auth.Nip98Test do
              Nip98.validate_authorization_header(header, "POST", "http://example.com/other")
   end
 
-  defp nip98_event(method, url) do
+  test "supports overriding the freshness window" do
+    url = "http://example.com/management"
+    event = nip98_event("POST", url, %{"created_at" => System.system_time(:second) - 120})
+    header = "Nostr " <> Base.encode64(JSON.encode!(event))
+
+    assert {:error, :stale_event} = Nip98.validate_authorization_header(header, "POST", url)
+
+    assert {:ok, _event} =
+             Nip98.validate_authorization_header(header, "POST", url, max_age_seconds: 180)
+  end
+
+  defp nip98_event(method, url, overrides \\ %{}) do
     now = System.system_time(:second)
 
     base = %{
@@ -37,6 +48,7 @@ defmodule Parrhesia.Auth.Nip98Test do
       "sig" => String.duplicate("b", 128)
     }
 
-    Map.put(base, "id", EventValidator.compute_id(base))
+    event = Map.merge(base, overrides)
+    Map.put(event, "id", EventValidator.compute_id(event))
   end
 end

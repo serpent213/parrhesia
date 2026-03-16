@@ -15,6 +15,10 @@ config :parrhesia, Parrhesia.Web.Endpoint,
 config :parrhesia,
   enable_expiration_worker: false,
   moderation_cache_enabled: false,
+  identity: [
+    path: Path.join(System.tmp_dir!(), "parrhesia_test_identity.json"),
+    private_key: nil
+  ],
   features: [verify_event_signatures: false]
 
 pg_host = System.get_env("PGHOST")

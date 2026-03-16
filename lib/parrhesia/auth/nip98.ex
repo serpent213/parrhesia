@@ -9,13 +9,20 @@ defmodule Parrhesia.Auth.Nip98 do
 
   @spec validate_authorization_header(String.t() | nil, String.t(), String.t()) ::
           {:ok, map()} | {:error, atom()}
-  def validate_authorization_header(nil, _method, _url), do: {:error, :missing_authorization}
+  def validate_authorization_header(authorization, method, url) do
+    validate_authorization_header(authorization, method, url, [])
+  end
 
-  def validate_authorization_header("Nostr " <> encoded_event, method, url)
-      when is_binary(method) and is_binary(url) do
+  @spec validate_authorization_header(String.t() | nil, String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, atom()}
+  def validate_authorization_header(nil, _method, _url, _opts),
+    do: {:error, :missing_authorization}
+
+  def validate_authorization_header("Nostr " <> encoded_event, method, url, opts)
+      when is_binary(method) and is_binary(url) and is_list(opts) do
     with {:ok, event_json} <- decode_base64(encoded_event),
          {:ok, event} <- JSON.decode(event_json),
-         :ok <- validate_event_shape(event),
+         :ok <- validate_event_shape(event, opts),
          :ok <- validate_http_binding(event, method, url) do
       {:ok, event}
     else
@@ -24,7 +31,8 @@ defmodule Parrhesia.Auth.Nip98 do
     end
   end
 
-  def validate_authorization_header(_header, _method, _url), do: {:error, :invalid_authorization}
+  def validate_authorization_header(_header, _method, _url, _opts),
+    do: {:error, :invalid_authorization}
 
   defp decode_base64(encoded_event) do
     case Base.decode64(encoded_event) do
@@ -33,33 +41,35 @@ defmodule Parrhesia.Auth.Nip98 do
     end
   end
 
-  defp validate_event_shape(event) when is_map(event) do
+  defp validate_event_shape(event, opts) when is_map(event) do
     with :ok <- EventValidator.validate(event),
          :ok <- validate_kind(event),
-         :ok <- validate_fresh_created_at(event) do
+         :ok <- validate_fresh_created_at(event, opts) do
       :ok
     else
-      :ok -> :ok
+      {:error, :stale_event} -> {:error, :stale_event}
       {:error, _reason} -> {:error, :invalid_event}
     end
   end
 
-  defp validate_event_shape(_event), do: {:error, :invalid_event}
+  defp validate_event_shape(_event, _opts), do: {:error, :invalid_event}
 
   defp validate_kind(%{"kind" => 27_235}), do: :ok
   defp validate_kind(_event), do: {:error, :invalid_event}
 
-  defp validate_fresh_created_at(%{"created_at" => created_at}) when is_integer(created_at) do
+  defp validate_fresh_created_at(%{"created_at" => created_at}, opts)
+       when is_integer(created_at) do
     now = System.system_time(:second)
+    max_age_seconds = Keyword.get(opts, :max_age_seconds, @max_age_seconds)
 
-    if abs(now - created_at) <= @max_age_seconds do
+    if abs(now - created_at) <= max_age_seconds do
       :ok
     else
       {:error, :stale_event}
     end
   end
 
-  defp validate_fresh_created_at(_event), do: {:error, :invalid_event}
+  defp validate_fresh_created_at(_event, _opts), do: {:error, :invalid_event}
 
   defp validate_http_binding(event, method, url) do
     tags = Map.get(event, "tags", [])

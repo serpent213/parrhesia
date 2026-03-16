@@ -5,6 +5,10 @@ config :postgrex, :json_library, JSON
 config :parrhesia,
   moderation_cache_enabled: true,
   relay_url: "ws://localhost:4413/relay",
+  identity: [
+    path: nil,
+    private_key: nil
+  ],
   limits: [
     max_frame_bytes: 1_048_576,
     max_event_bytes: 262_144,

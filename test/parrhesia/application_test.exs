@@ -19,6 +19,7 @@ defmodule Parrhesia.ApplicationTest do
            end)
 
     assert is_pid(Process.whereis(Parrhesia.Auth.Challenges))
+    assert is_pid(Process.whereis(Parrhesia.API.Identity.Manager))
 
     if negentropy_enabled?() do
       assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))

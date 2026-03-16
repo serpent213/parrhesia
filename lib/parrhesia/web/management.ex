@@ -6,7 +6,7 @@ defmodule Parrhesia.Web.Management do
   import Plug.Conn
 
   alias Parrhesia.API.Admin
-  alias Parrhesia.Auth.Nip98
+  alias Parrhesia.API.Auth
 
   @spec handle(Plug.Conn.t()) :: Plug.Conn.t()
   def handle(conn) do
@@ -14,10 +14,10 @@ defmodule Parrhesia.Web.Management do
     method = conn.method
     authorization = get_req_header(conn, "authorization") |> List.first()
 
-    with {:ok, auth_event} <- Nip98.validate_authorization_header(authorization, method, full_url),
+    with {:ok, auth_context} <- Auth.validate_nip98(authorization, method, full_url),
          {:ok, payload} <- parse_payload(conn.body_params),
          {:ok, result} <- execute_method(payload),
-         :ok <- append_audit_log(auth_event, payload, result) do
+         :ok <- append_audit_log(auth_context, payload, result) do
       send_json(conn, 200, %{"ok" => true, "result" => result})
     else
       {:error, :missing_authorization} ->
@@ -62,10 +62,10 @@ defmodule Parrhesia.Web.Management do
     Admin.execute(payload.method, payload.params)
   end
 
-  defp append_audit_log(auth_event, payload, result) do
+  defp append_audit_log(auth_context, payload, result) do
     Parrhesia.Storage.admin().append_audit_log(%{}, %{
       method: payload.method,
-      actor_pubkey: Map.get(auth_event, "pubkey"),
+      actor_pubkey: auth_context.pubkey,
       params: payload.params,
       result: normalize_result(result)
     })

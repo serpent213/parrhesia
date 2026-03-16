@@ -4,20 +4,21 @@ defmodule Parrhesia.API.Admin do
   """
 
   alias Parrhesia.API.ACL
+  alias Parrhesia.API.Identity
   alias Parrhesia.Storage
 
   @supported_acl_methods ~w(acl_grant acl_revoke acl_list)
+  @supported_identity_methods ~w(identity_ensure identity_get identity_import identity_rotate)
 
   @spec execute(String.t() | atom(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def execute(method, params, opts \\ [])
 
   def execute(method, params, _opts) when is_map(params) do
-    case normalize_method_name(method) do
-      "acl_grant" -> acl_grant(params)
-      "acl_revoke" -> acl_revoke(params)
-      "acl_list" -> acl_list(params)
-      "supportedmethods" -> {:ok, %{"methods" => supported_methods()}}
-      other_method -> Storage.admin().execute(%{}, other_method, params)
+    method_name = normalize_method_name(method)
+
+    case execute_builtin(method_name, params) do
+      {:continue, other_method} -> Storage.admin().execute(%{}, other_method, params)
+      result -> result
     end
   end
 
@@ -68,10 +69,33 @@ defmodule Parrhesia.API.Admin do
         _other -> []
       end
 
-    (storage_supported ++ @supported_acl_methods)
+    (storage_supported ++ @supported_acl_methods ++ @supported_identity_methods)
     |> Enum.uniq()
     |> Enum.sort()
   end
+
+  defp identity_get(_params), do: Identity.get()
+
+  defp identity_ensure(_params), do: Identity.ensure()
+
+  defp identity_rotate(_params), do: Identity.rotate()
+
+  defp identity_import(params) do
+    Identity.import(params)
+  end
+
+  defp execute_builtin("acl_grant", params), do: acl_grant(params)
+  defp execute_builtin("acl_revoke", params), do: acl_revoke(params)
+  defp execute_builtin("acl_list", params), do: acl_list(params)
+  defp execute_builtin("identity_get", params), do: identity_get(params)
+  defp execute_builtin("identity_ensure", params), do: identity_ensure(params)
+  defp execute_builtin("identity_import", params), do: identity_import(params)
+  defp execute_builtin("identity_rotate", params), do: identity_rotate(params)
+
+  defp execute_builtin("supportedmethods", _params),
+    do: {:ok, %{"methods" => supported_methods()}}
+
+  defp execute_builtin(other_method, _params), do: {:continue, other_method}
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
