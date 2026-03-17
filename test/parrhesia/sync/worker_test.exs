@@ -157,15 +157,32 @@ defmodule Parrhesia.Sync.WorkerTest do
     worker_supervisor = unique_name("SyncWorkerSupervisor")
     supervisor_name = unique_name("SyncSupervisor")
 
-    start_supervised!(
-      {Supervisor,
-       name: supervisor_name,
-       manager: manager_name,
-       worker_registry: worker_registry,
-       worker_supervisor: worker_supervisor,
-       path: unique_sync_path(),
-       start_workers?: true}
-    )
+    supervisor_pid =
+      start_supervised!(
+        {Supervisor,
+         name: supervisor_name,
+         manager: manager_name,
+         worker_registry: worker_registry,
+         worker_supervisor: worker_supervisor,
+         path: unique_sync_path(),
+         start_workers?: true}
+      )
+
+    on_exit(fn ->
+      ref = Process.monitor(supervisor_pid)
+
+      try do
+        _ = GenServer.stop(supervisor_pid, :normal)
+      catch
+        :exit, _reason -> :ok
+      end
+
+      receive do
+        {:DOWN, ^ref, :process, ^supervisor_pid, _reason} -> :ok
+      after
+        1_000 -> :ok
+      end
+    end)
 
     {manager_name, supervisor_name}
   end

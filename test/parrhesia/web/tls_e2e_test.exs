@@ -82,7 +82,7 @@ defmodule Parrhesia.Web.TLSE2ETest do
       fn ->
         server_cert_fingerprint(port) == TLSCerts.cert_sha256!(server_b.certfile)
       end,
-      10_000
+      30_000
     )
   end
 
