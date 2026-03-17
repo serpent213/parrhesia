@@ -70,19 +70,27 @@ defmodule Parrhesia.Web.TLSE2ETest do
       5_000
     )
 
-    first_fingerprint = server_cert_fingerprint(port)
-    assert first_fingerprint == TLSCerts.cert_sha256!(server_a.certfile)
+    expected_first_fingerprint = TLSCerts.cert_sha256!(server_a.certfile)
+
+    assert_eventually(
+      fn ->
+        server_cert_fingerprint(port) == {:ok, expected_first_fingerprint}
+      end,
+      5_000
+    )
 
     File.cp!(server_b.certfile, active_certfile)
     File.cp!(server_b.keyfile, active_keyfile)
 
     assert :ok = Endpoint.reload_listener(endpoint_name, listener_id)
 
+    expected_reloaded_fingerprint = TLSCerts.cert_sha256!(server_b.certfile)
+
     assert_eventually(
       fn ->
-        server_cert_fingerprint(port) == TLSCerts.cert_sha256!(server_b.certfile)
+        server_cert_fingerprint(port) == {:ok, expected_reloaded_fingerprint}
       end,
-      30_000
+      10_000
     )
   end
 
@@ -275,18 +283,30 @@ defmodule Parrhesia.Web.TLSE2ETest do
   end
 
   defp server_cert_fingerprint(port) do
-    {:ok, socket} =
-      :ssl.connect(
-        ~c"127.0.0.1",
-        port,
-        [verify: :verify_none, active: false, server_name_indication: ~c"localhost"],
-        5_000
-      )
+    case :ssl.connect(
+           ~c"127.0.0.1",
+           port,
+           [
+             verify: :verify_none,
+             active: false,
+             reuse_sessions: false,
+             server_name_indication: ~c"localhost"
+           ],
+           5_000
+         ) do
+      {:ok, socket} ->
+        try do
+          case :ssl.peercert(socket) do
+            {:ok, cert_der} -> {:ok, Base.encode64(:crypto.hash(:sha256, cert_der))}
+            {:error, _reason} = error -> error
+          end
+        after
+          :ok = :ssl.close(socket)
+        end
 
-    {:ok, cert_der} = :ssl.peercert(socket)
-    :ok = :ssl.close(socket)
-
-    Base.encode64(:crypto.hash(:sha256, cert_der))
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp ca_certs(certfile) do
