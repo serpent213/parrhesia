@@ -22,7 +22,8 @@ defmodule Parrhesia.Sync.RelayInfoClient do
            url: url,
            headers: [{"accept", "application/nostr+json"}],
            decode_body: false,
-           connect_options: opts
+           connect_options: Keyword.merge([timeout: 5_000], opts),
+           receive_timeout: 5_000
          ) do
       {:ok, response} -> {:ok, response}
       {:error, reason} -> {:error, reason}

@@ -74,6 +74,7 @@ defmodule Parrhesia.API.Sync.Manager do
       {:ok, normalized_server} ->
         updated_state =
           state
+          |> stop_worker_if_running(normalized_server.id)
           |> put_server_state(normalized_server)
           |> persist_and_reconcile!(normalized_server.id)
 
@@ -248,9 +249,7 @@ defmodule Parrhesia.API.Sync.Manager do
         state
 
       desired_running?(state, server_id) ->
-        state
-        |> stop_worker_if_running(server_id)
-        |> maybe_start_worker(server_id)
+        maybe_start_worker(state, server_id)
 
       true ->
         stop_worker_if_running(state, server_id)

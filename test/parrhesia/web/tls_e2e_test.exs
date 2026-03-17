@@ -296,29 +296,24 @@ defmodule Parrhesia.Web.TLSE2ETest do
   end
 
   defp server_cert_fingerprint(port) do
-    command =
-      "printf '' | /usr/bin/openssl s_client -connect 127.0.0.1:#{port} -servername localhost -showcerts"
+    ssl_opts = [verify: :verify_none, server_name_indication: ~c"localhost"]
 
-    case System.cmd("/bin/sh", ["-c", command], stderr_to_stdout: true) do
-      {output, 0} ->
-        with {:ok, pem_entry} <- first_certificate_pem(output),
-             [entry | _rest] <- :public_key.pem_decode(pem_entry),
-             cert_der <- elem(entry, 1) do
-          {:ok, Base.encode64(:crypto.hash(:sha256, cert_der))}
-        else
-          [] -> {:error, :missing_certificate}
-          {:error, _reason} = error -> error
+    case :ssl.connect({127, 0, 0, 1}, port, ssl_opts, 5_000) do
+      {:ok, ssl_socket} ->
+        try do
+          case :ssl.peercert(ssl_socket) do
+            {:ok, cert_der} ->
+              {:ok, Base.encode64(:crypto.hash(:sha256, cert_der))}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        after
+          :ssl.close(ssl_socket)
         end
 
-      {output, status} ->
-        {:error, {:openssl_failed, status, output}}
-    end
-  end
-
-  defp first_certificate_pem(output) do
-    case Regex.run(~r/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/ms, output) do
-      [pem] -> {:ok, pem}
-      _other -> {:error, :missing_certificate}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

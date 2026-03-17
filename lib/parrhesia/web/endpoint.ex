@@ -16,6 +16,7 @@ defmodule Parrhesia.Web.Endpoint do
   @spec reload_listener(Supervisor.supervisor(), atom()) :: :ok | {:error, term()}
   def reload_listener(supervisor \\ __MODULE__, listener_id) when is_atom(listener_id) do
     with :ok <- Supervisor.terminate_child(supervisor, {:listener, listener_id}),
+         :ok <- clear_pem_cache(),
          {:ok, _pid} <- Supervisor.restart_child(supervisor, {:listener, listener_id}) do
       :ok
     else
@@ -27,17 +28,44 @@ defmodule Parrhesia.Web.Endpoint do
 
   @spec reload_all(Supervisor.supervisor()) :: :ok | {:error, term()}
   def reload_all(supervisor \\ __MODULE__) do
-    supervisor
-    |> Supervisor.which_children()
-    |> Enum.filter(fn {id, _pid, _type, _modules} ->
-      match?({:listener, _listener_id}, id)
-    end)
-    |> Enum.reduce_while(:ok, fn {{:listener, listener_id}, _pid, _type, _modules}, :ok ->
-      case reload_listener(supervisor, listener_id) do
-        :ok -> {:cont, :ok}
-        {:error, _reason} = error -> {:halt, error}
-      end
-    end)
+    listener_ids =
+      supervisor
+      |> Supervisor.which_children()
+      |> Enum.flat_map(fn
+        {{:listener, listener_id}, _pid, _type, _modules} -> [listener_id]
+        _other -> []
+      end)
+
+    with :ok <- terminate_listeners(supervisor, listener_ids),
+         :ok <- clear_pem_cache() do
+      restart_listeners(supervisor, listener_ids)
+    end
+  end
+
+  defp terminate_listeners(_supervisor, []), do: :ok
+
+  defp terminate_listeners(supervisor, [listener_id | rest]) do
+    case Supervisor.terminate_child(supervisor, {:listener, listener_id}) do
+      :ok -> terminate_listeners(supervisor, rest)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp restart_listeners(_supervisor, []), do: :ok
+
+  defp restart_listeners(supervisor, [listener_id | rest]) do
+    case Supervisor.restart_child(supervisor, {:listener, listener_id}) do
+      {:ok, _pid} -> restart_listeners(supervisor, rest)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # OTP's ssl module caches PEM file contents by filename. When cert/key
+  # files are replaced on disk, the cache must be cleared so the restarted
+  # listener reads the updated files.
+  defp clear_pem_cache do
+    :ssl.clear_pem_cache()
+    :ok
   end
 
   @impl true
