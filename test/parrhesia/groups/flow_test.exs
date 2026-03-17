@@ -1,15 +1,8 @@
 defmodule Parrhesia.Groups.FlowTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Groups.Flow
-  alias Parrhesia.Repo
   alias Parrhesia.Storage
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "handles membership request kinds by upserting group memberships" do
     event = %{

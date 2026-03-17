@@ -1,28 +1,15 @@
 defmodule Parrhesia.Sync.WorkerTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: :shared
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.ACL
   alias Parrhesia.API.Events
   alias Parrhesia.API.Identity
   alias Parrhesia.API.RequestContext
   alias Parrhesia.API.Sync
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Sync.Supervisor
   alias Parrhesia.TestSupport.SyncFakeRelay.Plug
   alias Parrhesia.TestSupport.SyncFakeRelay.Server
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    Sandbox.mode(Repo, {:shared, self()})
-
-    on_exit(fn ->
-      Sandbox.mode(Repo, :manual)
-    end)
-
-    :ok
-  end
 
   test "req_stream worker verifies remote identity, authenticates, syncs catch-up, streams live, and sync_now reruns catch-up" do
     {:ok, %{pubkey: local_pubkey}} = Identity.ensure()

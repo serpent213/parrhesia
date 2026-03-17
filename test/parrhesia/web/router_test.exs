@@ -1,20 +1,13 @@
 defmodule Parrhesia.Web.RouterTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
   import Plug.Conn
   import Plug.Test
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.Sync
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Web.Listener
   alias Parrhesia.Web.Router
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "GET /health returns ok" do
     conn = conn(:get, "/health") |> Router.call([])

@@ -1,5 +1,5 @@
 defmodule Parrhesia.Protocol.EventValidatorSignatureTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Protocol.EventValidator
 

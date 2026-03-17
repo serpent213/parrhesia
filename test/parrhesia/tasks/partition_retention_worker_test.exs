@@ -1,5 +1,5 @@
 defmodule Parrhesia.Tasks.PartitionRetentionWorkerTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Tasks.PartitionRetentionWorker
   alias Parrhesia.TestSupport.PartitionRetentionStubPartitions

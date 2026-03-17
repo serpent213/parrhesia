@@ -5,19 +5,6 @@ defmodule Parrhesia.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      Parrhesia.Telemetry,
-      Parrhesia.Config,
-      Parrhesia.Storage.Supervisor,
-      Parrhesia.Subscriptions.Supervisor,
-      Parrhesia.Auth.Supervisor,
-      Parrhesia.Sync.Supervisor,
-      Parrhesia.Policy.Supervisor,
-      Parrhesia.Web.Endpoint,
-      Parrhesia.Tasks.Supervisor
-    ]
-
-    opts = [strategy: :one_for_one, name: Parrhesia.Supervisor]
-    Supervisor.start_link(children, opts)
+    Parrhesia.Runtime.start_link(name: Parrhesia.Supervisor)
   end
 end

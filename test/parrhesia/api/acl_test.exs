@@ -1,14 +1,10 @@
 defmodule Parrhesia.API.ACLTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.ACL
   alias Parrhesia.API.RequestContext
-  alias Parrhesia.Repo
 
   setup do
-    :ok = Sandbox.checkout(Repo)
-
     previous_acl = Application.get_env(:parrhesia, :acl, [])
 
     Application.put_env(

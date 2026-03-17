@@ -1,5 +1,5 @@
 defmodule Parrhesia.E2E.NakCliTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   @moduletag :nak_e2e
 

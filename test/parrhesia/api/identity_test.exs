@@ -1,5 +1,5 @@
 defmodule Parrhesia.API.IdentityTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.API.Auth
   alias Parrhesia.API.Identity

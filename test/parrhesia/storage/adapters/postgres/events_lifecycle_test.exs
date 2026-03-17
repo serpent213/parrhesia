@@ -1,15 +1,8 @@
 defmodule Parrhesia.Storage.Adapters.Postgres.EventsLifecycleTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Storage.Adapters.Postgres.Events
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "event tags round-trip without truncation" do
     tagged_event =

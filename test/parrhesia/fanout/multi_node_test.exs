@@ -1,5 +1,5 @@
 defmodule Parrhesia.Fanout.MultiNodeTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Fanout.MultiNode
   alias Parrhesia.Subscriptions.Index

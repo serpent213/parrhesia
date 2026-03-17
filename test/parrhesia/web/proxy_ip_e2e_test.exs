@@ -1,9 +1,7 @@
 defmodule Parrhesia.Web.ProxyIpE2ETest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: :shared
 
   alias __MODULE__.TestClient
-  alias Ecto.Adapters.SQL.Sandbox
-  alias Parrhesia.Repo
 
   setup_all do
     {:ok, _apps} = Application.ensure_all_started(:websockex)
@@ -11,14 +9,10 @@ defmodule Parrhesia.Web.ProxyIpE2ETest do
   end
 
   setup do
-    :ok = Sandbox.checkout(Repo)
-    Sandbox.mode(Repo, {:shared, self()})
-
     previous_trusted_proxies = Application.get_env(:parrhesia, :trusted_proxies, [])
 
     on_exit(fn ->
       Application.put_env(:parrhesia, :trusted_proxies, previous_trusted_proxies)
-      Sandbox.mode(Repo, :manual)
     end)
 
     {:ok, port: free_port()}

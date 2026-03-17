@@ -1,27 +1,12 @@
 defmodule Parrhesia.Negentropy.SessionsTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Negentropy.Engine
   alias Parrhesia.Negentropy.Message
   alias Parrhesia.Negentropy.Sessions
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Repo
   alias Parrhesia.Storage.Adapters.Postgres.Events
-
-  setup_all do
-    if is_nil(Process.whereis(Repo)) do
-      start_supervised!(Repo)
-    end
-
-    Sandbox.mode(Repo, :manual)
-    :ok
-  end
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "opens, responds, advances and closes sessions" do
     server = start_supervised!({Sessions, name: nil})

@@ -1,16 +1,11 @@
 defmodule Parrhesia.Web.TLSE2ETest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: :shared
 
-  alias Ecto.Adapters.SQL.Sandbox
-  alias Parrhesia.Repo
   alias Parrhesia.Sync.Transport.WebSockexClient
   alias Parrhesia.TestSupport.TLSCerts
   alias Parrhesia.Web.Endpoint
 
   setup do
-    :ok = Sandbox.checkout(Repo)
-    Sandbox.mode(Repo, {:shared, self()})
-
     tmp_dir =
       Path.join(
         System.tmp_dir!(),
@@ -20,7 +15,6 @@ defmodule Parrhesia.Web.TLSE2ETest do
     File.mkdir_p!(tmp_dir)
 
     on_exit(fn ->
-      Sandbox.mode(Repo, :manual)
       _ = File.rm_rf(tmp_dir)
     end)
 

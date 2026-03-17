@@ -1,5 +1,5 @@
 defmodule Parrhesia.ApplicationTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   test "starts the core supervision tree" do
     assert is_pid(Process.whereis(Parrhesia.Supervisor))

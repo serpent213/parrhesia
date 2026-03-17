@@ -1,5 +1,5 @@
 defmodule Parrhesia.FaultInjectionTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Web.Connection

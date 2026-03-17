@@ -1,5 +1,5 @@
 defmodule Parrhesia.Policy.EventPolicyTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Policy.EventPolicy
 

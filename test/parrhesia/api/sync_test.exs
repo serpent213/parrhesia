@@ -1,16 +1,9 @@
 defmodule Parrhesia.API.SyncTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.Admin
   alias Parrhesia.API.Sync
   alias Parrhesia.API.Sync.Manager
-  alias Parrhesia.Repo
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "put_server stores normalized config and persists it across restart" do
     {manager, path, pid} = start_sync_manager()

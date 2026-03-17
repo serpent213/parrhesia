@@ -1,23 +1,8 @@
 defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Storage.Adapters.Postgres.Events
-
-  setup_all do
-    if is_nil(Process.whereis(Repo)) do
-      start_supervised!(Repo)
-    end
-
-    Sandbox.mode(Repo, :manual)
-    :ok
-  end
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-  end
 
   test "query/3 translates NIP filters including tag filters" do
     author = String.duplicate("a", 64)

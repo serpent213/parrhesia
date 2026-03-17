@@ -1,25 +1,10 @@
 defmodule Parrhesia.Storage.Adapters.Postgres.AdapterContractTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
-  alias Parrhesia.Repo
   alias Parrhesia.Storage.Adapters.Postgres.ACL
   alias Parrhesia.Storage.Adapters.Postgres.Admin
   alias Parrhesia.Storage.Adapters.Postgres.Groups
   alias Parrhesia.Storage.Adapters.Postgres.Moderation
-
-  setup_all do
-    if is_nil(Process.whereis(Repo)) do
-      start_supervised!(Repo)
-    end
-
-    Sandbox.mode(Repo, :manual)
-    :ok
-  end
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-  end
 
   test "moderation adapter persists pubkey/event/ip block state" do
     pubkey = String.duplicate("a", 64)

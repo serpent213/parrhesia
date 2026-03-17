@@ -1,14 +1,10 @@
 defmodule Parrhesia.Performance.LoadSoakTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
-  alias Parrhesia.Repo
   alias Parrhesia.Web.Connection
 
   @tag :performance
   test "fanout enqueue/drain stays within relaxed p95 budget" do
-    :ok = Sandbox.checkout(Repo)
-
     {:ok, state} = Connection.init(subscription_index: nil, max_outbound_queue: 10_000)
 
     req_payload = JSON.encode!(["REQ", "sub-load", %{"kinds" => [1]}])

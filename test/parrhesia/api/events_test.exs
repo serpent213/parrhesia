@@ -1,16 +1,9 @@
 defmodule Parrhesia.API.EventsTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.Events
   alias Parrhesia.API.RequestContext
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "publish stores valid events through the shared API" do
     event = valid_event()

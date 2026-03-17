@@ -1,5 +1,5 @@
 defmodule Parrhesia.Tasks.ExpirationWorkerTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Tasks.ExpirationWorker
   alias Parrhesia.TestSupport.ExpirationStubEvents

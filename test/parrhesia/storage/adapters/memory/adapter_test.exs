@@ -1,5 +1,5 @@
 defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Storage.Adapters.Memory.ACL
   alias Parrhesia.Storage.Adapters.Memory.Admin

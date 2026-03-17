@@ -1,17 +1,13 @@
 defmodule Parrhesia.FaultInjectionGroupFlowTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Storage
   alias Parrhesia.TestSupport.FailingEvents
   alias Parrhesia.TestSupport.PermissiveModeration
   alias Parrhesia.Web.Connection
 
   setup do
-    :ok = Sandbox.checkout(Repo)
-
     previous_storage = Application.get_env(:parrhesia, :storage, [])
 
     Application.put_env(

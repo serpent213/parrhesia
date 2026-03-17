@@ -1,16 +1,9 @@
 defmodule Parrhesia.Web.ConformanceTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.Protocol.EventValidator
-  alias Parrhesia.Repo
   alias Parrhesia.Storage
   alias Parrhesia.Web.Connection
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "REQ -> EOSE emitted once and CLOSE emits CLOSED" do
     {:ok, state} = Connection.init(subscription_index: nil)

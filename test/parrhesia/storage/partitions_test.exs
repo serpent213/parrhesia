@@ -1,14 +1,7 @@
 defmodule Parrhesia.Storage.PartitionsTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: true
 
-  alias Ecto.Adapters.SQL.Sandbox
-  alias Parrhesia.Repo
   alias Parrhesia.Storage.Partitions
-
-  setup do
-    :ok = Sandbox.checkout(Repo)
-    :ok
-  end
 
   test "list_partitions returns partition tables" do
     partitions = Partitions.list_partitions()

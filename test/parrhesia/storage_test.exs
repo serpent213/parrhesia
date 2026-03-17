@@ -1,5 +1,5 @@
 defmodule Parrhesia.StorageTest do
-  use ExUnit.Case, async: false
+  use Parrhesia.IntegrationCase, async: false
 
   alias Parrhesia.Storage
 
