@@ -47,7 +47,8 @@ defmodule Parrhesia.IntegrationCase do
             send(test_pid, {:sandbox_ready, self()})
 
             receive do
-              :stop -> :ok
+              :stop ->
+                Sandbox.checkin(Repo)
             end
           end)
 
@@ -60,8 +61,16 @@ defmodule Parrhesia.IntegrationCase do
         Sandbox.mode(Repo, {:shared, owner})
 
         on_exit(fn ->
-          Sandbox.mode(Repo, :manual)
+          ref = Process.monitor(owner)
           send(owner, :stop)
+
+          receive do
+            {:DOWN, ^ref, :process, ^owner, _reason} -> :ok
+          after
+            5_000 -> :ok
+          end
+
+          Sandbox.mode(Repo, :manual)
         end)
     end
 
