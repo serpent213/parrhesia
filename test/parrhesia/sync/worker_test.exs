@@ -51,7 +51,7 @@ defmodule Parrhesia.Sync.WorkerTest do
                match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
              })
 
-    {manager_name, _supervisor_name} = start_sync_runtime()
+    {manager_name, _supervisor_name, _worker_supervisor} = start_sync_runtime()
 
     assert {:ok, _server} =
              Sync.put_server(
@@ -109,7 +109,7 @@ defmodule Parrhesia.Sync.WorkerTest do
     relay_url = "ws://127.0.0.1:#{port}/relay"
     wait_for_relay(relay_url, String.duplicate("d", 64))
 
-    {manager_name, _supervisor_name} = start_sync_runtime()
+    {manager_name, _supervisor_name, _worker_supervisor} = start_sync_runtime()
 
     assert {:ok, _server} =
              Sync.put_server(
@@ -156,6 +156,8 @@ defmodule Parrhesia.Sync.WorkerTest do
       )
 
     on_exit(fn ->
+      stop_sync_workers(manager_name, worker_supervisor)
+
       ref = Process.monitor(supervisor_pid)
 
       try do
@@ -167,11 +169,30 @@ defmodule Parrhesia.Sync.WorkerTest do
       receive do
         {:DOWN, ^ref, :process, ^supervisor_pid, _reason} -> :ok
       after
-        1_000 -> :ok
+        5_000 -> :ok
       end
     end)
 
-    {manager_name, supervisor_name}
+    {manager_name, supervisor_name, worker_supervisor}
+  end
+
+  defp stop_sync_workers(manager_name, worker_supervisor) do
+    with manager_pid when is_pid(manager_pid) <- Process.whereis(manager_name),
+         {:ok, servers} <- Sync.list_servers(manager: manager_name) do
+      Enum.each(servers, fn server ->
+        _ = Sync.stop_server(server.id, manager: manager_name)
+      end)
+    end
+
+    case Process.whereis(worker_supervisor) do
+      pid when is_pid(pid) ->
+        assert_eventually(fn ->
+          DynamicSupervisor.which_children(worker_supervisor) == []
+        end)
+
+      nil ->
+        :ok
+    end
   end
 
   defp assert_event_synced(event, remote_pubkey) do

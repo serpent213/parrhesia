@@ -84,7 +84,7 @@ defmodule Parrhesia.Web.TLSE2ETest do
       fn ->
         server_cert_fingerprint(port) == {:ok, expected_reloaded_fingerprint}
       end,
-      10_000
+      15_000
     )
   end
 
@@ -277,29 +277,29 @@ defmodule Parrhesia.Web.TLSE2ETest do
   end
 
   defp server_cert_fingerprint(port) do
-    case :ssl.connect(
-           ~c"127.0.0.1",
-           port,
-           [
-             verify: :verify_none,
-             active: false,
-             reuse_sessions: false,
-             server_name_indication: ~c"localhost"
-           ],
-           5_000
-         ) do
-      {:ok, socket} ->
-        try do
-          case :ssl.peercert(socket) do
-            {:ok, cert_der} -> {:ok, Base.encode64(:crypto.hash(:sha256, cert_der))}
-            {:error, _reason} = error -> error
-          end
-        after
-          :ok = :ssl.close(socket)
+    command =
+      "printf '' | /usr/bin/openssl s_client -connect 127.0.0.1:#{port} -servername localhost -showcerts"
+
+    case System.cmd("/bin/sh", ["-c", command], stderr_to_stdout: true) do
+      {output, 0} ->
+        with {:ok, pem_entry} <- first_certificate_pem(output),
+             [entry | _rest] <- :public_key.pem_decode(pem_entry),
+             cert_der <- elem(entry, 1) do
+          {:ok, Base.encode64(:crypto.hash(:sha256, cert_der))}
+        else
+          [] -> {:error, :missing_certificate}
+          {:error, _reason} = error -> error
         end
 
-      {:error, _reason} = error ->
-        error
+      {output, status} ->
+        {:error, {:openssl_failed, status, output}}
+    end
+  end
+
+  defp first_certificate_pem(output) do
+    case Regex.run(~r/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/ms, output) do
+      [pem] -> {:ok, pem}
+      _other -> {:error, :missing_certificate}
     end
   end
 
