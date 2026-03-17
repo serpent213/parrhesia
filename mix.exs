@@ -62,6 +62,8 @@ defmodule Parrhesia.MixProject do
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "test.nak_e2e": ["cmd ./scripts/run_nak_e2e.sh"],
       "test.marmot_e2e": ["cmd ./scripts/run_marmot_e2e.sh"],
+      "test.node_sync_e2e": ["cmd ./scripts/run_node_sync_e2e.sh"],
+      "test.node_sync_docker_e2e": ["cmd ./scripts/run_node_sync_docker_e2e.sh"],
       bench: ["cmd ./scripts/run_bench_compare.sh"],
       # cov: ["cmd mix coveralls.lcov"],
       lint: ["format --check-formatted", "credo"],

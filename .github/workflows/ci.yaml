@@ -113,5 +113,9 @@ jobs:
       - name: Run tests
         run: mix test --color
 
+      - name: Run Node Sync E2E tests
+        if: ${{ matrix.main }}
+        run: mix test.node_sync_e2e
+
       - name: Run Marmot E2E tests
         run: mix test.marmot_e2e

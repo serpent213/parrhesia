@@ -81,6 +81,28 @@ ws://localhost:4413/relay
 
 ---
 
+## Test suites
+
+Primary test entrypoints:
+
+- `mix test` for the ExUnit suite
+- `mix test.marmot_e2e` for the Marmot client end-to-end suite
+- `mix test.node_sync_e2e` for the two-node relay sync end-to-end suite
+- `mix test.node_sync_docker_e2e` for the release-image Docker two-node relay sync suite
+
+The node-sync harnesses are driven by:
+
+- [`scripts/run_node_sync_e2e.sh`](./scripts/run_node_sync_e2e.sh)
+- [`scripts/run_node_sync_docker_e2e.sh`](./scripts/run_node_sync_docker_e2e.sh)
+- [`scripts/node_sync_e2e.exs`](./scripts/node_sync_e2e.exs)
+- [`compose.node-sync-e2e.yaml`](./compose.node-sync-e2e.yaml)
+
+`mix test.node_sync_e2e` runs two real Parrhesia nodes against separate PostgreSQL databases, verifies catch-up and live sync, restarts one node, and verifies persisted resume behavior. `mix test.node_sync_docker_e2e` runs the same scenario against the release Docker image.
+
+GitHub CI currently runs the non-Docker node-sync e2e on the main Linux matrix job. The Docker node-sync e2e remains an explicit/manual check because it depends on release-image build/runtime fidelity and a working Docker host.
+
+---
+
 ## Production configuration
 
 ### Minimal setup
@@ -283,10 +305,10 @@ mix compile
 mix release
 
 _build/prod/rel/parrhesia/bin/parrhesia eval "Parrhesia.Release.migrate()"
-_build/prod/rel/parrhesia/bin/parrhesia foreground
+_build/prod/rel/parrhesia/bin/parrhesia start
 ```
 
-For systemd/process managers, run the release command in foreground mode.
+For systemd/process managers, run the release command with `start`.
 
 ### Option B: Nix release package (`default.nix`)
 
