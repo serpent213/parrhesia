@@ -28,8 +28,8 @@ defmodule Parrhesia.Web.TLSE2ETest do
 
     active_certfile = Path.join(tmp_dir, "active-server.cert.pem")
     active_keyfile = Path.join(tmp_dir, "active-server.key.pem")
-    File.cp!(server_a.certfile, active_certfile)
-    File.cp!(server_a.keyfile, active_keyfile)
+    replace_file!(server_a.certfile, active_certfile)
+    replace_file!(server_a.keyfile, active_keyfile)
 
     port = free_port()
     endpoint_name = unique_name("TLSEndpointReload")
@@ -73,10 +73,29 @@ defmodule Parrhesia.Web.TLSE2ETest do
       5_000
     )
 
-    File.cp!(server_b.certfile, active_certfile)
-    File.cp!(server_b.keyfile, active_keyfile)
+    {:ok, first_listener_pid} = listener_pid(endpoint_name, listener_id)
+
+    replace_file!(server_b.certfile, active_certfile)
+    replace_file!(server_b.keyfile, active_keyfile)
 
     assert :ok = Endpoint.reload_listener(endpoint_name, listener_id)
+
+    assert_eventually(
+      fn ->
+        case listener_pid(endpoint_name, listener_id) do
+          {:ok, listener_pid} -> listener_pid != first_listener_pid
+          _other -> false
+        end
+      end,
+      5_000
+    )
+
+    assert_eventually(
+      fn ->
+        nip11_request(port, ca.certfile) == {:ok, 200}
+      end,
+      5_000
+    )
 
     expected_reloaded_fingerprint = TLSCerts.cert_sha256!(server_b.certfile)
 
@@ -301,6 +320,26 @@ defmodule Parrhesia.Web.TLSE2ETest do
       [pem] -> {:ok, pem}
       _other -> {:error, :missing_certificate}
     end
+  end
+
+  defp listener_pid(endpoint_name, listener_id) do
+    case Enum.find(Supervisor.which_children(endpoint_name), fn {id, _pid, _type, _modules} ->
+           id == {:listener, listener_id}
+         end) do
+      {{:listener, ^listener_id}, pid, _type, _modules} when is_pid(pid) -> {:ok, pid}
+      _other -> {:error, :listener_not_running}
+    end
+  end
+
+  defp replace_file!(source, destination) do
+    staged_destination =
+      Path.join(
+        Path.dirname(destination),
+        ".#{Path.basename(destination)}.#{System.unique_integer([:positive, :monotonic])}.tmp"
+      )
+
+    File.write!(staged_destination, File.read!(source))
+    File.rename!(staged_destination, destination)
   end
 
   defp ca_certs(certfile) do
