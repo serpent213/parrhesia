@@ -6,6 +6,7 @@ defmodule Parrhesia.TestSupport.Runtime do
     Parrhesia.Config,
     Parrhesia.Repo,
     Parrhesia.Subscriptions.Supervisor,
+    Parrhesia.API.Stream.Supervisor,
     Parrhesia.Web.Endpoint
   ]
 

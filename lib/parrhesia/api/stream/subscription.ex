@@ -1,7 +1,7 @@
 defmodule Parrhesia.API.Stream.Subscription do
   @moduledoc false
 
-  use GenServer
+  use GenServer, restart: :temporary
 
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Subscriptions.Index
