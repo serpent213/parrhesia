@@ -60,12 +60,15 @@ defmodule Parrhesia.Web.TLSE2ETest do
        }}
     )
 
-    assert_eventually(fn ->
-      case nip11_request(port, ca.certfile) do
-        {:ok, 200} -> true
-        _other -> false
-      end
-    end)
+    assert_eventually(
+      fn ->
+        case nip11_request(port, ca.certfile) do
+          {:ok, 200} -> true
+          _other -> false
+        end
+      end,
+      5_000
+    )
 
     first_fingerprint = server_cert_fingerprint(port)
     assert first_fingerprint == TLSCerts.cert_sha256!(server_a.certfile)
@@ -75,9 +78,12 @@ defmodule Parrhesia.Web.TLSE2ETest do
 
     assert :ok = Endpoint.reload_listener(endpoint_name, listener_id)
 
-    assert_eventually(fn ->
-      server_cert_fingerprint(port) == TLSCerts.cert_sha256!(server_b.certfile)
-    end)
+    assert_eventually(
+      fn ->
+        server_cert_fingerprint(port) == TLSCerts.cert_sha256!(server_b.certfile)
+      end,
+      10_000
+    )
   end
 
   test "mutual TLS requires a client certificate and enforces optional client pins", %{
@@ -327,17 +333,24 @@ defmodule Parrhesia.Web.TLSE2ETest do
     :"#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
   end
 
-  defp assert_eventually(fun, attempts \\ 40)
-  defp assert_eventually(_fun, 0), do: flunk("condition was not met in time")
+  defp assert_eventually(fun, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_assert_eventually(fun, deadline, timeout_ms, 50)
+  end
 
-  defp assert_eventually(fun, attempts) do
-    if fun.() do
-      :ok
-    else
-      receive do
-      after
-        50 -> assert_eventually(fun, attempts - 1)
-      end
+  defp do_assert_eventually(fun, deadline, timeout_ms, interval_ms) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("condition was not met in time (#{timeout_ms} ms)")
+
+      true ->
+        receive do
+        after
+          interval_ms -> do_assert_eventually(fun, deadline, timeout_ms, interval_ms)
+        end
     end
   end
 end

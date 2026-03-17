@@ -5,4 +5,6 @@ exclude_tags =
     [:nak_e2e]
   end
 
+{:ok, _apps} = Application.ensure_all_started(:parrhesia)
+
 ExUnit.start(exclude: exclude_tags)

@@ -146,7 +146,7 @@ start_node() {
     PARRHESIA_IDENTITY_PATH="$identity_path" \
     PARRHESIA_SYNC_PATH="$sync_path" \
     MIX_ENV=prod \
-    mix run --no-halt >"$log_path" 2>&1 &
+    mix run --no-compile --no-halt >"$log_path" 2>&1 &
 
   if [[ "$node_name" == "a" ]]; then
     NODE_A_PID=$!
