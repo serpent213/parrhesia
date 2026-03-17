@@ -5,6 +5,7 @@ defmodule Parrhesia.Web.RouterTest do
   import Plug.Test
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Parrhesia.API.Sync
   alias Parrhesia.Protocol.EventValidator
   alias Parrhesia.Repo
   alias Parrhesia.Web.Listener
@@ -332,6 +333,84 @@ defmodule Parrhesia.Web.RouterTest do
 
     assert is_binary(pubkey)
     assert byte_size(pubkey) == 64
+  end
+
+  test "POST /management stats and health include sync summary" do
+    management_url = "http://www.example.com/management"
+    auth_event = nip98_event("POST", management_url)
+    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
+    initial_total = Sync.sync_stats() |> elem(1) |> Map.fetch!("servers_total")
+    server_id = "router-sync-#{System.unique_integer([:positive, :monotonic])}"
+
+    assert {:ok, _server} =
+             Sync.put_server(%{
+               "id" => server_id,
+               "url" => "wss://relay-a.example/relay",
+               "enabled?" => false,
+               "auth_pubkey" => String.duplicate("a", 64),
+               "filters" => [%{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}],
+               "tls" => %{
+                 "pins" => [
+                   %{
+                     "type" => "spki_sha256",
+                     "value" => "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                   }
+                 ]
+               }
+             })
+
+    on_exit(fn ->
+      _ = Sync.remove_server(server_id)
+    end)
+
+    stats_conn =
+      conn(
+        :post,
+        "/management",
+        JSON.encode!(%{
+          "method" => "stats",
+          "params" => %{}
+        })
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert stats_conn.status == 200
+
+    assert %{
+             "ok" => true,
+             "result" => %{
+               "sync" => %{"servers_total" => servers_total}
+             }
+           } = JSON.decode!(stats_conn.resp_body)
+
+    assert servers_total == initial_total + 1
+
+    health_conn =
+      conn(
+        :post,
+        "/management",
+        JSON.encode!(%{
+          "method" => "health",
+          "params" => %{}
+        })
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert health_conn.status == 200
+
+    assert %{
+             "ok" => true,
+             "result" => %{
+               "status" => status,
+               "sync" => %{"servers_total" => ^servers_total}
+             }
+           } = JSON.decode!(health_conn.resp_body)
+
+    assert status in ["ok", "degraded"]
   end
 
   test "POST /management returns not found when admin feature is disabled on the listener" do

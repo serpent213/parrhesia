@@ -19,7 +19,7 @@ defmodule Parrhesia.Web.Management do
     with {:ok, auth_context} <-
            maybe_validate_nip98(auth_required?, authorization, method, full_url),
          {:ok, payload} <- parse_payload(conn.body_params),
-         {:ok, result} <- execute_method(payload),
+         {:ok, result} <- execute_method(payload, opts),
          :ok <- append_audit_log(auth_context, payload, result) do
       send_json(conn, 200, %{"ok" => true, "result" => result})
     else
@@ -69,8 +69,8 @@ defmodule Parrhesia.Web.Management do
 
   defp parse_payload(_payload), do: {:error, :invalid_payload}
 
-  defp execute_method(payload) do
-    Admin.execute(payload.method, payload.params)
+  defp execute_method(payload, opts) do
+    Admin.execute(payload.method, payload.params, opts)
   end
 
   defp append_audit_log(auth_context, payload, result) do

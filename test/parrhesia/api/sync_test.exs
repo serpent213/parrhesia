@@ -120,9 +120,16 @@ defmodule Parrhesia.API.SyncTest do
     assert sync_stats["sync"]["servers_total"] == 1
     assert sync_stats["sync"]["query_runs"] == 1
 
+    assert {:ok, execute_stats} = Admin.execute("stats", %{}, manager: manager)
+    assert execute_stats["sync"]["servers_total"] == 1
+
     assert {:ok, health} = Admin.health(manager: manager)
     assert health["status"] == "ok"
     assert health["sync"]["servers_total"] == 1
+
+    assert {:ok, execute_health} = Admin.execute("health", %{}, manager: manager)
+    assert execute_health["status"] == "ok"
+    assert execute_health["sync"]["servers_total"] == 1
   end
 
   defp start_sync_manager do

@@ -9,6 +9,7 @@ defmodule Parrhesia.API.Admin do
   alias Parrhesia.Storage
   alias Parrhesia.Web.Endpoint
 
+  @supported_admin_methods ~w(health list_audit_logs stats)
   @supported_acl_methods ~w(acl_grant acl_revoke acl_list)
   @supported_identity_methods ~w(identity_ensure identity_get identity_import identity_rotate)
   @supported_listener_methods ~w(listener_reload)
@@ -98,6 +99,7 @@ defmodule Parrhesia.API.Admin do
       end
 
     (storage_supported ++
+       @supported_admin_methods ++
        @supported_acl_methods ++
        @supported_identity_methods ++ @supported_listener_methods ++ @supported_sync_methods)
     |> Enum.uniq()
@@ -112,6 +114,13 @@ defmodule Parrhesia.API.Admin do
 
   defp identity_import(params) do
     Identity.import(params)
+  end
+
+  defp admin_stats(_params, opts), do: stats(opts)
+  defp admin_health(_params, opts), do: health(opts)
+
+  defp admin_list_audit_logs(params, _opts) do
+    list_audit_logs(audit_log_opts(params))
   end
 
   defp listener_reload(params) do
@@ -185,6 +194,9 @@ defmodule Parrhesia.API.Admin do
   defp sync_stats(_params, opts), do: Sync.sync_stats(opts)
   defp sync_health(_params, opts), do: Sync.sync_health(opts)
 
+  defp execute_builtin("stats", params, opts), do: admin_stats(params, opts)
+  defp execute_builtin("health", params, opts), do: admin_health(params, opts)
+  defp execute_builtin("list_audit_logs", params, opts), do: admin_list_audit_logs(params, opts)
   defp execute_builtin("acl_grant", params, _opts), do: acl_grant(params)
   defp execute_builtin("acl_revoke", params, _opts), do: acl_revoke(params)
   defp execute_builtin("acl_list", params, _opts), do: acl_list(params)
@@ -219,6 +231,13 @@ defmodule Parrhesia.API.Admin do
 
   defp overall_health_status(%{"status" => "degraded"}), do: "degraded"
   defp overall_health_status(_sync_health), do: "ok"
+
+  defp audit_log_opts(params) do
+    []
+    |> maybe_put_opt(:limit, fetch_value(params, :limit))
+    |> maybe_put_opt(:method, fetch_value(params, :method))
+    |> maybe_put_opt(:actor_pubkey, fetch_value(params, :actor_pubkey))
+  end
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)

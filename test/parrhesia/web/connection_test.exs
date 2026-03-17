@@ -3,6 +3,8 @@ defmodule Parrhesia.Web.ConnectionTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Parrhesia.API.ACL
+  alias Parrhesia.API.Events
+  alias Parrhesia.API.RequestContext
   alias Parrhesia.Negentropy.Engine
   alias Parrhesia.Negentropy.Message
   alias Parrhesia.Protocol.EventValidator
@@ -11,6 +13,7 @@ defmodule Parrhesia.Web.ConnectionTest do
 
   setup do
     :ok = Sandbox.checkout(Repo)
+    ensure_stream_runtime_started()
     :ok
   end
 
@@ -738,14 +741,45 @@ defmodule Parrhesia.Web.ConnectionTest do
 
   test "CLOSE removes subscription and replies with CLOSED" do
     state = subscribed_connection_state([])
+    subscription = state.subscriptions["sub-1"]
+    [{stream_pid, _value}] = Registry.lookup(Parrhesia.API.Stream.Registry, subscription.ref)
+    monitor_ref = Process.monitor(stream_pid)
 
     close_payload = JSON.encode!(["CLOSE", "sub-1"])
 
     assert {:push, {:text, response}, next_state} =
              Connection.handle_in({close_payload, [opcode: :text]}, state)
 
+    assert_receive {:DOWN, ^monitor_ref, :process, ^stream_pid, :normal}
     refute Map.has_key?(next_state.subscriptions, "sub-1")
     assert JSON.decode!(response) == ["CLOSED", "sub-1", "error: subscription closed"]
+  end
+
+  test "REQ live delivery is bridged through API.Stream" do
+    state = subscribed_connection_state([])
+    subscription = state.subscriptions["sub-1"]
+    subscription_ref = subscription.ref
+    event = valid_event(%{"content" => "stream-live"}) |> recalculate_event_id()
+
+    assert {:ok, %{accepted: true}} = Events.publish(event, context: %RequestContext{})
+
+    assert_receive {:parrhesia, :event, ^subscription_ref, "sub-1", received_event}
+    assert received_event["id"] == event["id"]
+
+    assert {:ok, queued_state} =
+             Connection.handle_info(
+               {:parrhesia, :event, subscription_ref, "sub-1", received_event},
+               state
+             )
+
+    assert queued_state.outbound_queue_size == 1
+    assert_receive :drain_outbound_queue
+
+    assert {:push, [{:text, payload}], drained_state} =
+             Connection.handle_info(:drain_outbound_queue, queued_state)
+
+    assert drained_state.outbound_queue_size == 0
+    assert JSON.decode!(payload) == ["EVENT", "sub-1", received_event]
   end
 
   test "fanout_event enqueues and drains matching events" do
@@ -839,6 +873,26 @@ defmodule Parrhesia.Web.ConnectionTest do
   defp connection_state(opts \\ []) do
     {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
     state
+  end
+
+  defp ensure_stream_runtime_started do
+    if is_nil(Process.whereis(Parrhesia.Subscriptions.Supervisor)) do
+      start_supervised!({Parrhesia.Subscriptions.Supervisor, []})
+    end
+
+    if is_nil(Process.whereis(Parrhesia.Subscriptions.Index)) do
+      start_supervised!({Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index})
+    end
+
+    if is_nil(Process.whereis(Parrhesia.API.Stream.Registry)) do
+      start_supervised!({Registry, keys: :unique, name: Parrhesia.API.Stream.Registry})
+    end
+
+    if is_nil(Process.whereis(Parrhesia.API.Stream.Supervisor)) do
+      start_supervised!(
+        {DynamicSupervisor, strategy: :one_for_one, name: Parrhesia.API.Stream.Supervisor}
+      )
+    end
   end
 
   defp listener(overrides) do

@@ -7,6 +7,7 @@ defmodule Parrhesia.Web.Connection do
 
   alias Parrhesia.API.Events
   alias Parrhesia.API.RequestContext
+  alias Parrhesia.API.Stream
   alias Parrhesia.Auth.Challenges
   alias Parrhesia.Negentropy.Sessions
   alias Parrhesia.Policy.ConnectionPolicy
@@ -70,6 +71,7 @@ defmodule Parrhesia.Web.Connection do
   @type overflow_strategy :: :close | :drop_oldest | :drop_newest
 
   @type subscription :: %{
+          ref: reference(),
           filters: [map()],
           eose_sent?: boolean()
         }
@@ -181,6 +183,7 @@ defmodule Parrhesia.Web.Connection do
   defp handle_decoded_message({:close, subscription_id}, state) do
     next_state =
       state
+      |> maybe_unsubscribe_stream_subscription(subscription_id)
       |> drop_subscription(subscription_id)
       |> drop_queued_subscription_events(subscription_id)
 
@@ -193,6 +196,50 @@ defmodule Parrhesia.Web.Connection do
   end
 
   @impl true
+  def handle_info(
+        {:parrhesia, :event, ref, subscription_id, event},
+        %__MODULE__{} = state
+      )
+      when is_reference(ref) and is_binary(subscription_id) and is_map(event) do
+    if current_subscription_ref?(state, subscription_id, ref) do
+      handle_fanout_events(state, [{subscription_id, event}])
+    else
+      {:ok, state}
+    end
+  end
+
+  def handle_info(
+        {:parrhesia, :eose, ref, subscription_id},
+        %__MODULE__{} = state
+      )
+      when is_reference(ref) and is_binary(subscription_id) do
+    if current_subscription_ref?(state, subscription_id, ref) and
+         not subscription_eose_sent?(state, subscription_id) do
+      response = Protocol.encode_relay({:eose, subscription_id})
+      {:push, {:text, response}, mark_subscription_eose_sent(state, subscription_id)}
+    else
+      {:ok, state}
+    end
+  end
+
+  def handle_info(
+        {:parrhesia, :closed, ref, subscription_id, reason},
+        %__MODULE__{} = state
+      )
+      when is_reference(ref) and is_binary(subscription_id) do
+    if current_subscription_ref?(state, subscription_id, ref) do
+      next_state =
+        state
+        |> drop_subscription(subscription_id)
+        |> drop_queued_subscription_events(subscription_id)
+
+      response = Protocol.encode_relay({:closed, subscription_id, stream_closed_reason(reason)})
+      {:push, {:text, response}, next_state}
+    else
+      {:ok, state}
+    end
+  end
+
   def handle_info({:fanout_event, subscription_id, event}, %__MODULE__{} = state)
       when is_binary(subscription_id) and is_map(event) do
     handle_fanout_events(state, [{subscription_id, event}])
@@ -219,6 +266,7 @@ defmodule Parrhesia.Web.Connection do
 
   @impl true
   def terminate(_reason, %__MODULE__{} = state) do
+    :ok = maybe_unsubscribe_all_stream_subscriptions(state)
     :ok = maybe_remove_index_owner(state)
     :ok = maybe_clear_auth_challenge(state)
     :ok
@@ -282,20 +330,18 @@ defmodule Parrhesia.Web.Connection do
              state.authenticated_pubkeys,
              request_context(state, subscription_id)
            ),
-         {:ok, next_state} <- upsert_subscription(state, subscription_id, filters),
-         :ok <- maybe_upsert_index_subscription(next_state, subscription_id, filters),
-         {:ok, events} <-
-           Events.query(filters,
-             context: request_context(next_state, subscription_id),
-             validate_filters?: false,
-             authorize_read?: false
+         :ok <- ensure_subscription_capacity(state, subscription_id),
+         {:ok, ref} <-
+           Stream.subscribe(self(), subscription_id, filters,
+             context: request_context(state, subscription_id)
            ) do
-      frames =
-        Enum.map(events, fn event ->
-          {:text, Protocol.encode_relay({:event, subscription_id, event})}
-        end) ++ [{:text, Protocol.encode_relay({:eose, subscription_id})}]
+      next_state =
+        state
+        |> maybe_unsubscribe_stream_subscription(subscription_id)
+        |> put_subscription(subscription_id, %{ref: ref, filters: filters, eose_sent?: false})
 
-      {:push, frames, next_state}
+      {frames, finalized_state} = drain_initial_stream_frames(next_state, ref, subscription_id)
+      {:push, frames, finalized_state}
     else
       {:error, :auth_required} ->
         restricted_close(state, subscription_id, EventPolicy.error_message(:auth_required))
@@ -1049,15 +1095,13 @@ defmodule Parrhesia.Web.Connection do
     end
   end
 
-  defp upsert_subscription(%__MODULE__{} = state, subscription_id, filters) do
-    subscription = %{filters: filters, eose_sent?: true}
-
+  defp ensure_subscription_capacity(%__MODULE__{} = state, subscription_id) do
     cond do
       Map.has_key?(state.subscriptions, subscription_id) ->
-        {:ok, put_subscription(state, subscription_id, subscription)}
+        :ok
 
       map_size(state.subscriptions) < state.max_subscriptions_per_connection ->
-        {:ok, put_subscription(state, subscription_id, subscription)}
+        :ok
 
       true ->
         {:error, :subscription_limit_reached}
@@ -1101,26 +1145,6 @@ defmodule Parrhesia.Web.Connection do
     next_state
   end
 
-  defp maybe_upsert_index_subscription(
-         %__MODULE__{subscription_index: nil},
-         _subscription_id,
-         _filters
-       ),
-       do: :ok
-
-  defp maybe_upsert_index_subscription(
-         %__MODULE__{subscription_index: subscription_index},
-         subscription_id,
-         filters
-       ) do
-    case Index.upsert(subscription_index, self(), subscription_id, filters) do
-      :ok -> :ok
-      {:error, _reason} -> :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
-
   defp maybe_remove_index_subscription(
          %__MODULE__{subscription_index: nil},
          _subscription_id
@@ -1145,6 +1169,81 @@ defmodule Parrhesia.Web.Connection do
   catch
     :exit, _reason -> :ok
   end
+
+  defp maybe_unsubscribe_stream_subscription(%__MODULE__{} = state, subscription_id) do
+    case Map.get(state.subscriptions, subscription_id) do
+      %{ref: ref} when is_reference(ref) -> Stream.unsubscribe(ref)
+      _other -> :ok
+    end
+
+    state
+  end
+
+  defp maybe_unsubscribe_all_stream_subscriptions(%__MODULE__{} = state) do
+    Enum.each(state.subscriptions, fn {_subscription_id, subscription} ->
+      case Map.get(subscription, :ref) do
+        ref when is_reference(ref) -> Stream.unsubscribe(ref)
+        _other -> :ok
+      end
+    end)
+
+    :ok
+  end
+
+  defp current_subscription_ref?(%__MODULE__{} = state, subscription_id, ref) do
+    case Map.get(state.subscriptions, subscription_id) do
+      %{ref: ^ref} -> true
+      _other -> false
+    end
+  end
+
+  defp subscription_eose_sent?(%__MODULE__{} = state, subscription_id) do
+    case Map.get(state.subscriptions, subscription_id) do
+      %{eose_sent?: true} -> true
+      _other -> false
+    end
+  end
+
+  defp mark_subscription_eose_sent(%__MODULE__{} = state, subscription_id) do
+    case Map.get(state.subscriptions, subscription_id) do
+      nil ->
+        state
+
+      subscription ->
+        put_subscription(state, subscription_id, Map.put(subscription, :eose_sent?, true))
+    end
+  end
+
+  defp drain_initial_stream_frames(%__MODULE__{} = state, ref, subscription_id) do
+    do_drain_initial_stream_frames(state, ref, subscription_id, [])
+  end
+
+  defp do_drain_initial_stream_frames(state, ref, subscription_id, acc) do
+    receive do
+      {:parrhesia, :event, ^ref, ^subscription_id, event} ->
+        frame = {:text, Protocol.encode_relay({:event, subscription_id, event})}
+        do_drain_initial_stream_frames(state, ref, subscription_id, [frame | acc])
+
+      {:parrhesia, :eose, ^ref, ^subscription_id} ->
+        next_state = mark_subscription_eose_sent(state, subscription_id)
+        frame = {:text, Protocol.encode_relay({:eose, subscription_id})}
+        {Enum.reverse([frame | acc]), next_state}
+
+      {:parrhesia, :closed, ^ref, ^subscription_id, reason} ->
+        next_state = drop_subscription(state, subscription_id)
+
+        frame =
+          {:text, Protocol.encode_relay({:closed, subscription_id, stream_closed_reason(reason)})}
+
+        {Enum.reverse([frame | acc]), next_state}
+    after
+      0 ->
+        {Enum.reverse(acc), state}
+    end
+  end
+
+  defp stream_closed_reason(reason) when is_binary(reason), do: reason
+  defp stream_closed_reason(reason), do: inspect(reason)
 
   defp subscription_index(opts) when is_list(opts) do
     opts
