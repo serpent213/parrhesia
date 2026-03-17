@@ -12,9 +12,7 @@ defmodule Parrhesia.Web.ConnectionTest do
   alias Parrhesia.Web.Connection
 
   setup do
-    ensure_repo_started()
     :ok = Sandbox.checkout(Repo)
-    ensure_stream_runtime_started()
     :ok
   end
 
@@ -874,32 +872,6 @@ defmodule Parrhesia.Web.ConnectionTest do
   defp connection_state(opts \\ []) do
     {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
     state
-  end
-
-  defp ensure_stream_runtime_started do
-    if is_nil(Process.whereis(Parrhesia.Subscriptions.Supervisor)) do
-      start_supervised!({Parrhesia.Subscriptions.Supervisor, []})
-    end
-
-    if is_nil(Process.whereis(Parrhesia.Subscriptions.Index)) do
-      start_supervised!({Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index})
-    end
-
-    if is_nil(Process.whereis(Parrhesia.API.Stream.Registry)) do
-      start_supervised!({Registry, keys: :unique, name: Parrhesia.API.Stream.Registry})
-    end
-
-    if is_nil(Process.whereis(Parrhesia.API.Stream.Supervisor)) do
-      start_supervised!(
-        {DynamicSupervisor, strategy: :one_for_one, name: Parrhesia.API.Stream.Supervisor}
-      )
-    end
-  end
-
-  defp ensure_repo_started do
-    if is_nil(Process.whereis(Repo)) do
-      start_supervised!(Repo)
-    end
   end
 
   defp listener(overrides) do
