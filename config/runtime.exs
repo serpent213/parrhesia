@@ -48,6 +48,25 @@ csv_env = fn name, default ->
   end
 end
 
+json_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    "" ->
+      default
+
+    value ->
+      case JSON.decode(value) do
+        {:ok, decoded} ->
+          decoded
+
+        {:error, reason} ->
+          raise "environment variable #{name} must contain valid JSON: #{inspect(reason)}"
+      end
+  end
+end
+
 infinity_or_int_env = fn name, default ->
   case System.get_env(name) do
     nil ->
@@ -124,6 +143,7 @@ if config_env() == :prod do
   listeners_defaults = Application.get_env(:parrhesia, :listeners, %{})
   retention_defaults = Application.get_env(:parrhesia, :retention, [])
   features_defaults = Application.get_env(:parrhesia, :features, [])
+  acl_defaults = Application.get_env(:parrhesia, :acl, [])
 
   default_pool_size = Keyword.get(repo_defaults, :pool_size, 32)
   default_queue_target = Keyword.get(repo_defaults, :queue_target, 1_000)
@@ -568,6 +588,13 @@ if config_env() == :prod do
 
   config :parrhesia,
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
+    acl: [
+      protected_filters:
+        json_env.(
+          "PARRHESIA_ACL_PROTECTED_FILTERS",
+          Keyword.get(acl_defaults, :protected_filters, [])
+        )
+    ],
     identity: [
       path: string_env.("PARRHESIA_IDENTITY_PATH", nil),
       private_key: string_env.("PARRHESIA_IDENTITY_PRIVATE_KEY", nil)

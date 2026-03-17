@@ -4,7 +4,7 @@ defmodule Parrhesia.MixProject do
   def project do
     [
       app: :parrhesia,
-      version: "0.4.0",
+      version: "0.5.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -36,6 +36,7 @@ defmodule Parrhesia.MixProject do
       # Runtime: storage adapter (Postgres first)
       {:ecto_sql, "~> 3.12"},
       {:postgrex, ">= 0.0.0"},
+      {:req, "~> 0.5"},
 
       # Runtime: telemetry + prometheus exporter (/metrics)
       {:telemetry_metrics, "~> 1.0"},

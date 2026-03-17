@@ -1,0 +1,92 @@
+services:
+  db-a:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parrhesia_a
+      POSTGRES_USER: parrhesia
+      POSTGRES_PASSWORD: parrhesia
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - postgres-a-data:/var/lib/postgresql/data
+
+  db-b:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parrhesia_b
+      POSTGRES_USER: parrhesia
+      POSTGRES_PASSWORD: parrhesia
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - postgres-b-data:/var/lib/postgresql/data
+
+  migrate-a:
+    image: ${PARRHESIA_IMAGE:-parrhesia:latest}
+    restart: "no"
+    depends_on:
+      db-a:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://parrhesia:parrhesia@db-a:5432/parrhesia_a
+      POOL_SIZE: ${POOL_SIZE:-20}
+      PARRHESIA_ACL_PROTECTED_FILTERS: ${PARRHESIA_ACL_PROTECTED_FILTERS}
+    command: ["eval", "Parrhesia.Release.migrate()"]
+
+  migrate-b:
+    image: ${PARRHESIA_IMAGE:-parrhesia:latest}
+    restart: "no"
+    depends_on:
+      db-b:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://parrhesia:parrhesia@db-b:5432/parrhesia_b
+      POOL_SIZE: ${POOL_SIZE:-20}
+      PARRHESIA_ACL_PROTECTED_FILTERS: ${PARRHESIA_ACL_PROTECTED_FILTERS}
+    command: ["eval", "Parrhesia.Release.migrate()"]
+
+  parrhesia-a:
+    image: ${PARRHESIA_IMAGE:-parrhesia:latest}
+    restart: unless-stopped
+    depends_on:
+      db-a:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://parrhesia:parrhesia@db-a:5432/parrhesia_a
+      POOL_SIZE: ${POOL_SIZE:-20}
+      PORT: 4413
+      PARRHESIA_RELAY_URL: ${PARRHESIA_NODE_A_RELAY_URL:-ws://parrhesia-a:4413/relay}
+      PARRHESIA_ACL_PROTECTED_FILTERS: ${PARRHESIA_ACL_PROTECTED_FILTERS}
+      PARRHESIA_IDENTITY_PATH: /tmp/parrhesia-a/server_identity.json
+      PARRHESIA_SYNC_PATH: /tmp/parrhesia-a/sync_servers.json
+    ports:
+      - "${PARRHESIA_NODE_A_HOST_PORT:-45131}:4413"
+
+  parrhesia-b:
+    image: ${PARRHESIA_IMAGE:-parrhesia:latest}
+    restart: unless-stopped
+    depends_on:
+      db-b:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://parrhesia:parrhesia@db-b:5432/parrhesia_b
+      POOL_SIZE: ${POOL_SIZE:-20}
+      PORT: 4413
+      PARRHESIA_RELAY_URL: ${PARRHESIA_NODE_B_RELAY_URL:-ws://parrhesia-b:4413/relay}
+      PARRHESIA_ACL_PROTECTED_FILTERS: ${PARRHESIA_ACL_PROTECTED_FILTERS}
+      PARRHESIA_IDENTITY_PATH: /tmp/parrhesia-b/server_identity.json
+      PARRHESIA_SYNC_PATH: /tmp/parrhesia-b/sync_servers.json
+    ports:
+      - "${PARRHESIA_NODE_B_HOST_PORT:-45132}:4413"
+
+volumes:
+  postgres-a-data:
+  postgres-b-data:

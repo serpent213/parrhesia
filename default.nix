@@ -10,7 +10,7 @@
   vips,
 }: let
   pname = "parrhesia";
-  version = "0.4.0";
+  version = "0.5.0";
 
   beamPackages = beam.packages.erlang_28.extend (
     final: _prev: {
@@ -48,7 +48,7 @@
       beamPackages.fetchMixDeps {
         pname = "${pname}-mix-deps";
         inherit version src;
-        hash = "sha256-I09Q2PG22lOrZjjXoq8Py3P3o5dgaz9LhKJSmP+/r6k=";
+        hash = "sha256-D69wuFnIChQzm1PmpIW+X/1sPpsIcDHe4V5fKmFeJ3k=";
       }
     else null;
 

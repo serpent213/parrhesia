@@ -12,6 +12,7 @@ defmodule Parrhesia.Web.ConnectionTest do
   alias Parrhesia.Web.Connection
 
   setup do
+    ensure_repo_started()
     :ok = Sandbox.checkout(Repo)
     ensure_stream_runtime_started()
     :ok
@@ -892,6 +893,12 @@ defmodule Parrhesia.Web.ConnectionTest do
       start_supervised!(
         {DynamicSupervisor, strategy: :one_for_one, name: Parrhesia.API.Stream.Supervisor}
       )
+    end
+  end
+
+  defp ensure_repo_started do
+    if is_nil(Process.whereis(Repo)) do
+      start_supervised!(Repo)
     end
   end
 

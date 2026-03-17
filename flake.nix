@@ -45,7 +45,7 @@
 
             config = {
               Entrypoint = ["${parrhesia}/bin/parrhesia"];
-              Cmd = ["foreground"];
+              Cmd = ["start"];
               ExposedPorts = {
                 "4413/tcp" = {};
               };
