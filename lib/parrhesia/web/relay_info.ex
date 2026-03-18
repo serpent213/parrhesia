@@ -4,21 +4,27 @@ defmodule Parrhesia.Web.RelayInfo do
   """
 
   alias Parrhesia.API.Identity
+  alias Parrhesia.Metadata
   alias Parrhesia.NIP43
   alias Parrhesia.Web.Listener
 
   @spec document(Listener.t()) :: map()
   def document(listener) do
-    %{
-      "name" => "Parrhesia",
+    document = %{
+      "name" => Metadata.name(),
       "description" => "Nostr/Marmot relay",
       "pubkey" => relay_pubkey(),
       "self" => relay_pubkey(),
       "supported_nips" => supported_nips(),
       "software" => "https://git.teralink.net/self/parrhesia",
-      "version" => Application.spec(:parrhesia, :vsn) |> to_string(),
       "limitation" => limitations(listener)
     }
+
+    if Metadata.hide_version?() do
+      document
+    else
+      Map.put(document, "version", Metadata.version())
+    end
   end
 
   defp supported_nips do

@@ -1,6 +1,7 @@
 defmodule Parrhesia.Sync.RelayInfoClient do
   @moduledoc false
 
+  alias Parrhesia.HTTP
   alias Parrhesia.Sync.TLS
 
   @spec verify_remote_identity(map(), keyword()) :: :ok | {:error, term()}
@@ -18,7 +19,7 @@ defmodule Parrhesia.Sync.RelayInfoClient do
   end
 
   defp default_request(url, opts) do
-    case Req.get(
+    case HTTP.get(
            url: url,
            headers: [{"accept", "application/nostr+json"}],
            decode_body: false,

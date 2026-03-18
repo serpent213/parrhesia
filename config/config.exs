@@ -1,8 +1,19 @@
 import Config
 
+project_version =
+  case Mix.Project.config()[:version] do
+    version when is_binary(version) -> version
+    version -> to_string(version)
+  end
+
 config :postgrex, :json_library, JSON
 
 config :parrhesia,
+  metadata: [
+    name: "Parrhesia",
+    version: project_version,
+    hide_version?: true
+  ],
   database: [
     separate_read_pool?: config_env() != :test
   ],

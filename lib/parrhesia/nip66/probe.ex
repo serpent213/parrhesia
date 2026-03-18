@@ -1,6 +1,7 @@
 defmodule Parrhesia.NIP66.Probe do
   @moduledoc false
 
+  alias Parrhesia.HTTP
   alias Parrhesia.Sync.Transport.WebSockexClient
 
   @type result :: %{
@@ -145,7 +146,7 @@ defmodule Parrhesia.NIP66.Probe do
   defp fetch_nip11(relay_url, timeout_ms) do
     started_at = System.monotonic_time()
 
-    case Req.get(
+    case HTTP.get(
            url: relay_info_url(relay_url),
            headers: [{"accept", "application/nostr+json"}],
            decode_body: false,

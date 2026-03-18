@@ -132,6 +132,7 @@ if config_env() == :prod do
   repo_defaults = Application.get_env(:parrhesia, Parrhesia.Repo, [])
   read_repo_defaults = Application.get_env(:parrhesia, Parrhesia.ReadRepo, [])
   relay_url_default = Application.get_env(:parrhesia, :relay_url)
+  metadata_defaults = Application.get_env(:parrhesia, :metadata, [])
 
   moderation_cache_enabled_default =
     Application.get_env(:parrhesia, :moderation_cache_enabled, true)
@@ -646,6 +647,15 @@ if config_env() == :prod do
 
   config :parrhesia,
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
+    metadata: [
+      name: Keyword.get(metadata_defaults, :name, "Parrhesia"),
+      version: Keyword.get(metadata_defaults, :version, "0.0.0"),
+      hide_version?:
+        bool_env.(
+          "PARRHESIA_METADATA_HIDE_VERSION",
+          Keyword.get(metadata_defaults, :hide_version?, true)
+        )
+    ],
     acl: [
       protected_filters:
         json_env.(

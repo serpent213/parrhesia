@@ -135,7 +135,7 @@ In `prod`, these environment variables are used:
 - `DATABASE_URL` (**required**), e.g. `ecto://USER:PASS@HOST/parrhesia_prod`
 - `POOL_SIZE` (optional, default `32`)
 - `PORT` (optional, default `4413`)
-- `PARRHESIA_*` runtime overrides for relay config, identity, sync, ACL, limits, policies, listeners, retention, and features
+- `PARRHESIA_*` runtime overrides for relay config, metadata, identity, sync, ACL, limits, policies, listeners, retention, and features
 - `PARRHESIA_EXTRA_CONFIG` (optional path to an extra runtime config file)
 
 `config/runtime.exs` reads these values at runtime in production releases.
@@ -145,6 +145,7 @@ In `prod`, these environment variables are used:
 For runtime overrides, use the `PARRHESIA_...` prefix:
 
 - `PARRHESIA_RELAY_URL`
+- `PARRHESIA_METADATA_HIDE_VERSION`
 - `PARRHESIA_IDENTITY_*`
 - `PARRHESIA_SYNC_*`
 - `PARRHESIA_ACL_*`
@@ -181,6 +182,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
 | `:relay_url` | `PARRHESIA_RELAY_URL` | `ws://localhost:4413/relay` | Advertised relay URL and auth relay tag target |
+| `:metadata.hide_version?` | `PARRHESIA_METADATA_HIDE_VERSION` | `true` | Hides the relay version from outbound `User-Agent` and NIP-11 when enabled |
 | `:acl.protected_filters` | `PARRHESIA_ACL_PROTECTED_FILTERS` | `[]` | JSON-encoded protected filter list for sync ACL checks |
 | `:identity.path` | `PARRHESIA_IDENTITY_PATH` | `nil` | Optional path for persisted relay identity material |
 | `:identity.private_key` | `PARRHESIA_IDENTITY_PRIVATE_KEY` | `nil` | Optional inline relay private key |
