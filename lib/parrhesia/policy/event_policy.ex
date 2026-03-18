@@ -686,18 +686,28 @@ defmodule Parrhesia.Policy.EventPolicy do
         _tag -> false
       end)
 
-    if protected? do
-      pubkey = Map.get(event, "pubkey")
+    cond do
+      not protected? ->
+        :ok
 
-      cond do
-        MapSet.size(authenticated_pubkeys) == 0 -> {:error, :protected_event_requires_auth}
-        MapSet.member?(authenticated_pubkeys, pubkey) -> :ok
-        true -> {:error, :protected_event_pubkey_mismatch}
-      end
-    else
-      :ok
+      nip43_relay_access_kind?(Map.get(event, "kind")) ->
+        :ok
+
+      true ->
+        pubkey = Map.get(event, "pubkey")
+
+        cond do
+          MapSet.size(authenticated_pubkeys) == 0 -> {:error, :protected_event_requires_auth}
+          MapSet.member?(authenticated_pubkeys, pubkey) -> :ok
+          true -> {:error, :protected_event_pubkey_mismatch}
+        end
     end
   end
+
+  defp nip43_relay_access_kind?(kind) when kind in [8_000, 8_001, 13_534, 28_934, 28_935, 28_936],
+    do: true
+
+  defp nip43_relay_access_kind?(_kind), do: false
 
   defp config_bool([scope, key], default) do
     case Application.get_env(:parrhesia, scope, []) |> Keyword.get(key, default) do

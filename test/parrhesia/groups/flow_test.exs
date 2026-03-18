@@ -4,24 +4,45 @@ defmodule Parrhesia.Groups.FlowTest do
   alias Parrhesia.Groups.Flow
   alias Parrhesia.Storage
 
-  test "handles membership request kinds by upserting group memberships" do
+  test "handles join requests by upserting relay memberships" do
     event = %{
-      "kind" => 8_000,
+      "kind" => 28_934,
       "pubkey" => String.duplicate("a", 64),
-      "tags" => [["h", "group-1"]]
+      "tags" => [["-"], ["claim", "invite-code"]],
+      "id" => "join-1"
     }
 
     assert :ok = Flow.handle_event(event)
 
-    assert {:ok, membership} =
-             Storage.groups().get_membership(%{}, "group-1", String.duplicate("a", 64))
+    assert {:ok, membership} = Flow.get_membership(String.duplicate("a", 64))
 
-    assert membership.role == "requested"
+    assert membership.role == "member"
+    assert membership.metadata["source_kind"] == 28_934
   end
 
-  test "marks configured membership and relay kinds as group related" do
-    assert Flow.group_related_kind?(8_000)
-    assert Flow.group_related_kind?(13_534)
-    refute Flow.group_related_kind?(1)
+  test "membership snapshot replaces the stored relay memberships" do
+    assert {:ok, _membership} =
+             Storage.groups().put_membership(%{}, %{
+               group_id: "__relay_access__",
+               pubkey: String.duplicate("a", 64),
+               role: "member"
+             })
+
+    snapshot = %{
+      "kind" => 13_534,
+      "tags" => [["-"], ["member", String.duplicate("b", 64)]],
+      "id" => "snapshot-1"
+    }
+
+    assert :ok = Flow.handle_event(snapshot)
+
+    assert {:ok, memberships} = Flow.list_memberships()
+    assert Enum.map(memberships, & &1.pubkey) == [String.duplicate("b", 64)]
+  end
+
+  test "marks configured relay access kinds as handled" do
+    assert Flow.relay_access_kind?(28_934)
+    assert Flow.relay_access_kind?(13_534)
+    refute Flow.relay_access_kind?(1)
   end
 end

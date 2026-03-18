@@ -32,6 +32,8 @@ Current `supported_nips` list:
 
 `1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 66, 70, 77, 86, 98`
 
+`43` is advertised when the built-in NIP-43 relay access flow is enabled. Parrhesia generates relay-signed `28935` invite responses on `REQ`, validates join and leave requests locally, and publishes the resulting signed `8000`, `8001`, and `13534` relay membership events into its own local event store.
+
 `66` is advertised when the built-in NIP-66 publisher is enabled and has at least one relay target. The default config enables it for the `public` relay URL. Parrhesia probes those target relays, collects the resulting NIP-11 / websocket liveness data, and then publishes the signed `10166` and `30166` events locally on this relay.
 
 ## Requirements
@@ -183,6 +185,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:identity.private_key` | `PARRHESIA_IDENTITY_PRIVATE_KEY` | `nil` | Optional inline relay private key |
 | `:moderation_cache_enabled` | `PARRHESIA_MODERATION_CACHE_ENABLED` | `true` | Toggle moderation cache |
 | `:enable_expiration_worker` | `PARRHESIA_ENABLE_EXPIRATION_WORKER` | `true` | Toggle background expiration worker |
+| `:nip43` | config-file driven | see table below | Built-in NIP-43 relay access invite / membership flow |
 | `:nip66` | config-file driven | see table below | Built-in NIP-66 discovery / monitor publisher |
 | `:sync.path` | `PARRHESIA_SYNC_PATH` | `nil` | Optional path to sync peer config |
 | `:sync.start_workers?` | `PARRHESIA_SYNC_START_WORKERS` | `true` | Start outbound sync workers on boot |
@@ -265,6 +268,16 @@ Every listener supports this config-file schema:
 | `:targets` | `-` | `[]` | Optional explicit relay targets to probe; when empty, Parrhesia uses `:relay_url` for the `public` listener |
 
 NIP-66 targets are probe sources, not publish destinations. Parrhesia connects to each target relay, collects the configured liveness / discovery data, and stores the resulting signed `10166` / `30166` events in its own local event store so clients can query them here.
+
+#### `:nip43`
+
+| Atom key | ENV | Default | Notes |
+| --- | --- | --- | --- |
+| `:enabled` | `-` | `true` | Enables the built-in NIP-43 relay access flow and advertises `43` in NIP-11 |
+| `:invite_ttl_seconds` | `-` | `900` | Expiration window for generated invite claim strings returned by `REQ` filters targeting kind `28935` |
+| `:request_max_age_seconds` | `-` | `300` | Maximum allowed age for inbound join (`28934`) and leave (`28936`) requests |
+
+Parrhesia treats NIP-43 invite requests as synthetic relay output, not stored client input. A `REQ` for kind `28935` causes the relay to generate a fresh relay-signed invite event on the fly. Clients then submit that claim back in a protected kind `28934` join request. When a join or leave request is accepted, Parrhesia updates its local relay membership state and publishes the corresponding relay-signed `8000` / `8001` delta plus the latest `13534` membership snapshot locally.
 
 #### `:limits`
 

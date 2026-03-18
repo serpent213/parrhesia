@@ -4,6 +4,7 @@ defmodule Parrhesia.Web.RelayInfo do
   """
 
   alias Parrhesia.API.Identity
+  alias Parrhesia.NIP43
   alias Parrhesia.Web.Listener
 
   @spec document(Listener.t()) :: map()
@@ -21,13 +22,20 @@ defmodule Parrhesia.Web.RelayInfo do
   end
 
   defp supported_nips do
-    base = [1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 70]
+    base = [1, 9, 11, 13, 17, 40, 42, 44, 45, 50, 59, 62, 70]
+
+    with_nip43 =
+      if NIP43.enabled?() do
+        base ++ [43]
+      else
+        base
+      end
 
     with_nip66 =
       if Parrhesia.NIP66.enabled?() do
-        base ++ [66]
+        with_nip43 ++ [66]
       else
-        base
+        with_nip43
       end
 
     with_negentropy =

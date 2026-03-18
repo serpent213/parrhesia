@@ -7,7 +7,7 @@ defmodule Parrhesia.API.Events do
   alias Parrhesia.API.RequestContext
   alias Parrhesia.Fanout.Dispatcher
   alias Parrhesia.Fanout.MultiNode
-  alias Parrhesia.Groups.Flow
+  alias Parrhesia.NIP43
   alias Parrhesia.Policy.EventPolicy
   alias Parrhesia.Protocol
   alias Parrhesia.Protocol.Filter
@@ -40,13 +40,19 @@ defmodule Parrhesia.API.Events do
          :ok <- validate_event_payload_size(event, max_event_bytes(opts)),
          :ok <- Protocol.validate_event(event),
          :ok <- EventPolicy.authorize_write(event, context.authenticated_pubkeys, context),
-         :ok <- maybe_process_group_event(event),
+         {:ok, publish_state} <- NIP43.prepare_publish(event, nip43_opts(opts, context)),
          {:ok, _stored, message} <- persist_event(event) do
       Telemetry.emit(
         [:parrhesia, :ingest, :stop],
         %{duration: System.monotonic_time() - started_at},
         telemetry_metadata_for_event(event)
       )
+
+      message =
+        case NIP43.finalize_publish(event, publish_state, nip43_opts(opts, context)) do
+          {:ok, override} when is_binary(override) -> override
+          :ok -> message
+        end
 
       Dispatcher.dispatch(event)
       maybe_publish_multi_node(event)
@@ -85,6 +91,8 @@ defmodule Parrhesia.API.Events do
          :ok <- maybe_validate_filters(filters, opts),
          :ok <- maybe_authorize_read(filters, context, opts),
          {:ok, events} <- Storage.events().query(%{}, filters, storage_query_opts(context, opts)) do
+      events = NIP43.dynamic_events(filters, nip43_opts(opts, context)) ++ events
+
       Telemetry.emit(
         [:parrhesia, :query, :stop],
         %{duration: System.monotonic_time() - started_at},
@@ -108,6 +116,7 @@ defmodule Parrhesia.API.Events do
          :ok <- maybe_authorize_read(filters, context, opts),
          {:ok, count} <-
            Storage.events().count(%{}, filters, requester_pubkeys: requester_pubkeys(context)),
+         count <- count + NIP43.dynamic_count(filters, nip43_opts(opts, context)),
          {:ok, result} <- maybe_build_count_result(filters, count, Keyword.get(opts, :options)) do
       Telemetry.emit(
         [:parrhesia, :query, :stop],
@@ -182,14 +191,6 @@ defmodule Parrhesia.API.Events do
     |> then(&"#{&1}:#{count}")
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode64()
-  end
-
-  defp maybe_process_group_event(event) do
-    if Flow.group_related_kind?(Map.get(event, "kind")) do
-      Flow.handle_event(event)
-    else
-      :ok
-    end
   end
 
   defp persist_event(event) do
@@ -280,6 +281,11 @@ defmodule Parrhesia.API.Events do
       %RequestContext{} = context -> {:ok, context}
       _other -> {:error, :invalid_context}
     end
+  end
+
+  defp nip43_opts(opts, %RequestContext{} = context) do
+    [context: context, relay_url: Application.get_env(:parrhesia, :relay_url)]
+    |> Kernel.++(Keyword.take(opts, [:path, :private_key, :configured_private_key]))
   end
 
   defp error_message_for_publish_failure(:duplicate_event),

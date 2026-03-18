@@ -5,6 +5,11 @@ config :postgrex, :json_library, JSON
 config :parrhesia,
   moderation_cache_enabled: true,
   relay_url: "ws://localhost:4413/relay",
+  nip43: [
+    enabled: true,
+    invite_ttl_seconds: 900,
+    request_max_age_seconds: 300
+  ],
   nip66: [
     enabled: true,
     publish_interval_seconds: 900,

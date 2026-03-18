@@ -7,6 +7,7 @@ defmodule Parrhesia.Protocol.EventValidator do
   @max_kind 65_535
   @default_max_event_future_skew_seconds 900
   @default_max_tags_per_event 256
+  @default_nip43_request_max_age_seconds 300
   @supported_mls_ciphersuites MapSet.new(~w[0x0001 0x0002 0x0003 0x0004 0x0005 0x0006 0x0007])
   @required_mls_extensions MapSet.new(["0xf2ee", "0x000a"])
   @supported_keypackage_ref_sizes [32, 48, 64]
@@ -53,6 +54,15 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :invalid_nip66_frequency_tag
           | :invalid_nip66_timeout_tag
           | :invalid_nip66_check_tag
+          | :missing_nip43_protected_tag
+          | :missing_nip43_claim_tag
+          | :invalid_nip43_claim_tag
+          | :missing_nip43_member_tag
+          | :invalid_nip43_member_tag
+          | :missing_nip43_pubkey_tag
+          | :invalid_nip43_pubkey_tag
+          | :stale_nip43_join_request
+          | :stale_nip43_leave_request
 
   @spec validate(map()) :: :ok | {:error, error_reason()}
   def validate(event) when is_map(event) do
@@ -149,7 +159,23 @@ defmodule Parrhesia.Protocol.EventValidator do
       "invalid: kind 10166 must include a single [\"frequency\", <seconds>] tag",
     invalid_nip66_timeout_tag:
       "invalid: kind 10166 timeout tags must be [\"timeout\", <check>, <ms>]",
-    invalid_nip66_check_tag: "invalid: kind 10166 c tags must contain lowercase check names"
+    invalid_nip66_check_tag: "invalid: kind 10166 c tags must contain lowercase check names",
+    missing_nip43_protected_tag:
+      "invalid: NIP-43 events must include a NIP-70 protected [\"-\"] tag",
+    missing_nip43_claim_tag:
+      "invalid: kinds 28934 and 28935 must include a single [\"claim\", <invite code>] tag",
+    invalid_nip43_claim_tag:
+      "invalid: kinds 28934 and 28935 must include a single [\"claim\", <invite code>] tag",
+    missing_nip43_member_tag:
+      "invalid: kind 13534 must include at least one [\"member\", <hex pubkey>] tag",
+    invalid_nip43_member_tag:
+      "invalid: kind 13534 member tags must contain lowercase hex pubkeys",
+    missing_nip43_pubkey_tag:
+      "invalid: kinds 8000 and 8001 must include a single [\"p\", <hex pubkey>] tag",
+    invalid_nip43_pubkey_tag:
+      "invalid: kinds 8000 and 8001 must include a single [\"p\", <hex pubkey>] tag",
+    stale_nip43_join_request: "invalid: kind 28934 created_at must be recent",
+    stale_nip43_leave_request: "invalid: kind 28936 created_at must be recent"
   }
 
   @spec error_message(error_reason()) :: String.t()
@@ -276,6 +302,21 @@ defmodule Parrhesia.Protocol.EventValidator do
 
   defp validate_kind_specific(%{"kind" => 10_166} = event),
     do: validate_nip66_monitor_announcement(event)
+
+  defp validate_kind_specific(%{"kind" => 13_534} = event),
+    do: validate_nip43_membership_list(event)
+
+  defp validate_kind_specific(%{"kind" => kind} = event) when kind in [8_000, 8_001],
+    do: validate_nip43_membership_delta(event)
+
+  defp validate_kind_specific(%{"kind" => 28_934} = event),
+    do: validate_nip43_join_request(event)
+
+  defp validate_kind_specific(%{"kind" => 28_935} = event),
+    do: validate_nip43_invite_response(event)
+
+  defp validate_kind_specific(%{"kind" => 28_936} = event),
+    do: validate_nip43_leave_request(event)
 
   defp validate_kind_specific(_event), do: :ok
 
@@ -454,6 +495,80 @@ defmodule Parrhesia.Protocol.EventValidator do
     end
   end
 
+  defp validate_nip43_membership_list(event) do
+    tags = Map.get(event, "tags", [])
+
+    case validate_protected_tag(tags) do
+      :ok -> validate_optional_repeated_pubkey_tag(tags, "member", :invalid_nip43_member_tag)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_nip43_membership_delta(event) do
+    tags = Map.get(event, "tags", [])
+
+    case validate_protected_tag(tags) do
+      :ok ->
+        validate_single_pubkey_tag(
+          tags,
+          "p",
+          :missing_nip43_pubkey_tag,
+          :invalid_nip43_pubkey_tag
+        )
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_nip43_join_request(event) do
+    tags = Map.get(event, "tags", [])
+
+    case validate_protected_tag(tags) do
+      :ok ->
+        with :ok <-
+               validate_single_string_tag_with_predicate(
+                 tags,
+                 "claim",
+                 :missing_nip43_claim_tag,
+                 :invalid_nip43_claim_tag,
+                 &non_empty_string?/1
+               ) do
+          validate_recent_created_at(event, :stale_nip43_join_request)
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_nip43_invite_response(event) do
+    tags = Map.get(event, "tags", [])
+
+    case validate_protected_tag(tags) do
+      :ok ->
+        validate_single_string_tag_with_predicate(
+          tags,
+          "claim",
+          :missing_nip43_claim_tag,
+          :invalid_nip43_claim_tag,
+          &non_empty_string?/1
+        )
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_nip43_leave_request(event) do
+    tags = Map.get(event, "tags", [])
+
+    case validate_protected_tag(tags) do
+      :ok -> validate_recent_created_at(event, :stale_nip43_leave_request)
+      {:error, _reason} = error -> error
+    end
+  end
+
   defp validate_non_empty_base64_content(event),
     do: validate_non_empty_base64_content(event, :invalid_marmot_keypackage_content)
 
@@ -626,6 +741,55 @@ defmodule Parrhesia.Protocol.EventValidator do
     end)
   end
 
+  defp validate_protected_tag(tags) do
+    if Enum.any?(tags, &match?(["-"], &1)) do
+      :ok
+    else
+      {:error, :missing_nip43_protected_tag}
+    end
+  end
+
+  defp validate_single_pubkey_tag(tags, tag_name, missing_error, invalid_error) do
+    case fetch_single_tag(tags, tag_name, missing_error) do
+      {:ok, [^tag_name, value]} ->
+        if lowercase_hex?(value, 32) do
+          :ok
+        else
+          {:error, invalid_error}
+        end
+
+      {:ok, _invalid_tag_shape} ->
+        {:error, invalid_error}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_optional_repeated_pubkey_tag(tags, tag_name, invalid_error) do
+    matching_tags = Enum.filter(tags, &match_tag_name?(&1, tag_name))
+
+    if Enum.all?(matching_tags, fn
+         [^tag_name, pubkey | _rest] -> lowercase_hex?(pubkey, 32)
+         _other -> false
+       end) do
+      :ok
+    else
+      {:error, invalid_error}
+    end
+  end
+
+  defp validate_recent_created_at(%{"created_at" => created_at}, error_reason)
+       when is_integer(created_at) do
+    if created_at >= System.system_time(:second) - nip43_request_max_age_seconds() do
+      :ok
+    else
+      {:error, error_reason}
+    end
+  end
+
+  defp validate_recent_created_at(_event, error_reason), do: {:error, error_reason}
+
   defp fetch_single_tag(tags, tag_name, missing_error) do
     case Enum.filter(tags, &match_tag_name?(&1, tag_name)) do
       [tag] -> {:ok, tag}
@@ -753,5 +917,11 @@ defmodule Parrhesia.Protocol.EventValidator do
       value when is_integer(value) and value > 0 -> value
       _other -> @default_max_tags_per_event
     end
+  end
+
+  defp nip43_request_max_age_seconds do
+    :parrhesia
+    |> Application.get_env(:nip43, [])
+    |> Keyword.get(:request_max_age_seconds, @default_nip43_request_max_age_seconds)
   end
 end
