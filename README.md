@@ -2,7 +2,12 @@
 
 <img alt="Parrhesia Logo" src="./docs/logo.svg" width="150" align="right">
 
-Parrhesia is a Nostr relay server written in Elixir/OTP with PostgreSQL storage.
+Parrhesia is a Nostr relay server written in Elixir/OTP.
+
+Supported storage backends:
+
+- PostgreSQL, which is the primary and production-oriented backend
+- in-memory storage, which is useful for tests, local experiments, and benchmarks
 
 **ALPHA CONDITION – BREAKING CHANGES MIGHT HAPPEN!**
 
@@ -118,6 +123,9 @@ Before a Nostr client can publish its first event successfully, make sure these 
 1. PostgreSQL is reachable from Parrhesia.
    Set `DATABASE_URL` and create/migrate the database with `Parrhesia.Release.migrate()` or `mix ecto.migrate`.
 
+   PostgreSQL is the supported production datastore. The in-memory backend is intended for
+   non-persistent runs such as tests and benchmarks.
+
 2. Parrhesia listeners are configured for your deployment.
    The default config exposes a `public` listener on plain HTTP port `4413`, and a reverse proxy can terminate TLS and forward WebSocket traffic to `/relay`. Additional listeners can be defined in `config/*.exs`.
 
@@ -153,6 +161,8 @@ For runtime overrides, use the `PARRHESIA_...` prefix:
 - `PARRHESIA_PUBLIC_MAX_CONNECTIONS`
 - `PARRHESIA_MODERATION_CACHE_ENABLED`
 - `PARRHESIA_ENABLE_EXPIRATION_WORKER`
+- `PARRHESIA_ENABLE_PARTITION_RETENTION_WORKER`
+- `PARRHESIA_STORAGE_BACKEND`
 - `PARRHESIA_LIMITS_*`
 - `PARRHESIA_POLICIES_*`
 - `PARRHESIA_METRICS_*`
@@ -496,7 +506,9 @@ Notes:
 
 ## Benchmark
 
-The benchmark compares Parrhesia against [`strfry`](https://github.com/hoytech/strfry) and [`nostr-rs-relay`](https://sr.ht/~gheartsfield/nostr-rs-relay/) using [`nostr-bench`](https://github.com/rnostr/nostr-bench).
+The benchmark compares two Parrhesia profiles, one backed by PostgreSQL and one backed by the in-memory adapter, against [`strfry`](https://github.com/hoytech/strfry) and [`nostr-rs-relay`](https://sr.ht/~gheartsfield/nostr-rs-relay/) using [`nostr-bench`](https://github.com/rnostr/nostr-bench). Benchmark runs also lift Parrhesia's relay-side limits by default so the benchmark client, not server guardrails, is the main bottleneck.
+
+`mix bench` is a sequential mixed-workload benchmark, not an isolated per-endpoint microbenchmark. Each relay instance runs `connect`, then `echo`, then `event`, then `req` against the same live process, so later phases measure against state and load created by earlier phases.
 
 Run it with:
 

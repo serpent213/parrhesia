@@ -18,6 +18,7 @@ config :parrhesia,
     separate_read_pool?: config_env() != :test
   ],
   moderation_cache_enabled: true,
+  enable_partition_retention_worker: true,
   relay_url: "ws://localhost:4413/relay",
   nip43: [
     enabled: true,
@@ -127,7 +128,9 @@ config :parrhesia,
     marmot_push_notifications: false
   ],
   storage: [
+    backend: :postgres,
     events: Parrhesia.Storage.Adapters.Postgres.Events,
+    acl: Parrhesia.Storage.Adapters.Postgres.ACL,
     moderation: Parrhesia.Storage.Adapters.Postgres.Moderation,
     groups: Parrhesia.Storage.Adapters.Postgres.Groups,
     admin: Parrhesia.Storage.Adapters.Postgres.Admin

@@ -1,6 +1,7 @@
 defmodule Parrhesia.StorageTest do
   use Parrhesia.IntegrationCase, async: false
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Storage
 
   test "resolves default storage modules" do
@@ -25,5 +26,24 @@ defmodule Parrhesia.StorageTest do
                  fn ->
                    Storage.events()
                  end
+  end
+
+  test "postgres repos are disabled for non-postgres storage backends" do
+    [{:config, previous}] = :ets.lookup(Parrhesia.Config, :config)
+
+    updated_storage =
+      previous
+      |> Map.get(:storage, [])
+      |> Keyword.put(:backend, :memory)
+
+    :ets.insert(Parrhesia.Config, {:config, Map.put(previous, :storage, updated_storage)})
+
+    on_exit(fn ->
+      :ets.insert(Parrhesia.Config, {:config, previous})
+    end)
+
+    refute PostgresRepos.postgres_enabled?()
+    refute PostgresRepos.separate_read_pool_enabled?()
+    assert PostgresRepos.started_repos() == []
   end
 end

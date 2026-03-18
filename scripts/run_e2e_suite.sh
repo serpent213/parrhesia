@@ -19,6 +19,8 @@ if [[ "$MIX_ENV" != "test" && "$MIX_ENV" != "prod" ]]; then
 fi
 export MIX_ENV
 
+SKIP_ECTO="${PARRHESIA_E2E_SKIP_ECTO:-0}"
+
 SUITE_SLUG="$(printf '%s' "$SUITE_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_')"
 SUITE_UPPER="$(printf '%s' "$SUITE_SLUG" | tr '[:lower:]' '[:upper:]')"
 PORT_ENV_VAR="PARRHESIA_${SUITE_UPPER}_E2E_RELAY_PORT"
@@ -56,14 +58,16 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   fi
 fi
 
-if [[ "$MIX_ENV" == "test" ]]; then
-  PARRHESIA_TEST_HTTP_PORT=0 mix ecto.drop --quiet --force || true
-  PARRHESIA_TEST_HTTP_PORT=0 mix ecto.create --quiet
-  PARRHESIA_TEST_HTTP_PORT=0 mix ecto.migrate --quiet
-else
-  mix ecto.drop --quiet --force || true
-  mix ecto.create --quiet
-  mix ecto.migrate --quiet
+if [[ "$SKIP_ECTO" != "1" ]]; then
+  if [[ "$MIX_ENV" == "test" ]]; then
+    PARRHESIA_TEST_HTTP_PORT=0 mix ecto.drop --quiet --force || true
+    PARRHESIA_TEST_HTTP_PORT=0 mix ecto.create --quiet
+    PARRHESIA_TEST_HTTP_PORT=0 mix ecto.migrate --quiet
+  else
+    mix ecto.drop --quiet --force || true
+    mix ecto.create --quiet
+    mix ecto.migrate --quiet
+  fi
 fi
 
 SERVER_LOG="${ROOT_DIR}/.${SUITE_SLUG}-e2e-server.log"
@@ -75,7 +79,7 @@ cleanup() {
     wait "$SERVER_PID" 2>/dev/null || true
   fi
 
-  if [[ "${PARRHESIA_E2E_DROP_DB_ON_EXIT:-0}" == "1" ]]; then
+  if [[ "$SKIP_ECTO" != "1" && "${PARRHESIA_E2E_DROP_DB_ON_EXIT:-0}" == "1" ]]; then
     if [[ "$MIX_ENV" == "test" ]]; then
       PARRHESIA_TEST_HTTP_PORT=0 mix ecto.drop --quiet --force || true
     else

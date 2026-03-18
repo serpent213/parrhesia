@@ -13,12 +13,20 @@ defmodule Parrhesia.Storage.Supervisor do
 
   @impl true
   def init(_init_arg) do
-    children =
+    children = moderation_cache_children() ++ PostgresRepos.started_repos()
+
+    Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  defp moderation_cache_children do
+    if PostgresRepos.postgres_enabled?() and
+         Application.get_env(:parrhesia, :moderation_cache_enabled, true) do
       [
         {Parrhesia.Storage.Adapters.Postgres.ModerationCache,
          name: Parrhesia.Storage.Adapters.Postgres.ModerationCache}
-      ] ++ PostgresRepos.started_repos()
-
-    Supervisor.init(children, strategy: :one_for_one)
+      ]
+    else
+      []
+    end
   end
 end

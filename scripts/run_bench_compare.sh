@@ -10,9 +10,10 @@ usage:
   ./scripts/run_bench_compare.sh
 
 Runs the same nostr-bench suite against:
-  1) Parrhesia (temporary prod relay via run_e2e_suite.sh)
-  2) strfry (ephemeral instance)         — optional, skipped if not in PATH
-  3) nostr-rs-relay (ephemeral sqlite instance) — optional, skipped if not in PATH
+  1) Parrhesia (Postgres, temporary prod relay via run_e2e_suite.sh)
+  2) Parrhesia (in-memory storage, temporary prod relay via run_e2e_suite.sh)
+  3) strfry (ephemeral instance)         — optional, skipped if not in PATH
+  4) nostr-rs-relay (ephemeral sqlite instance) — optional, skipped if not in PATH
 
 Environment:
   PARRHESIA_BENCH_RUNS               Number of comparison runs (default: 2)
@@ -247,11 +248,19 @@ echo "  ${NOSTR_BENCH_VERSION}"
 echo
 
 for run in $(seq 1 "$RUNS"); do
-  echo "[run ${run}/${RUNS}] Parrhesia"
+  echo "[run ${run}/${RUNS}] Parrhesia (Postgres)"
   parrhesia_log="$WORK_DIR/parrhesia_${run}.log"
   if ! ./scripts/run_nostr_bench.sh all >"$parrhesia_log" 2>&1; then
     echo "Parrhesia benchmark failed. Log: $parrhesia_log" >&2
     tail -n 120 "$parrhesia_log" >&2 || true
+    exit 1
+  fi
+
+  echo "[run ${run}/${RUNS}] Parrhesia (Memory)"
+  parrhesia_memory_log="$WORK_DIR/parrhesia_memory_${run}.log"
+  if ! PARRHESIA_BENCH_STORAGE_BACKEND=memory ./scripts/run_nostr_bench.sh all >"$parrhesia_memory_log" 2>&1; then
+    echo "Parrhesia memory benchmark failed. Log: $parrhesia_memory_log" >&2
+    tail -n 120 "$parrhesia_memory_log" >&2 || true
     exit 1
   fi
 
@@ -364,6 +373,7 @@ function loadRuns(prefix) {
 }
 
 const parrhesiaRuns = loadRuns("parrhesia");
+const parrhesiaMemoryRuns = loadRuns("parrhesia_memory");
 const strfryRuns = hasStrfry ? loadRuns("strfry") : [];
 const nostrRsRuns = hasNostrRs ? loadRuns("nostr_rs_relay") : [];
 
@@ -382,7 +392,10 @@ function summarise(allRuns) {
   return out;
 }
 
-const summary = { parrhesia: summarise(parrhesiaRuns) };
+const summary = {
+  parrhesia: summarise(parrhesiaRuns),
+  parrhesiaMemory: summarise(parrhesiaMemoryRuns),
+};
 if (hasStrfry) summary.strfry = summarise(strfryRuns);
 if (hasNostrRs) summary.nostrRsRelay = summarise(nostrRsRuns);
 
@@ -404,16 +417,22 @@ const metricLabels = [
   ["req throughput (MiB/s) ↑", "reqSizeMiBS"],
 ];
 
-const headers = ["metric", "parrhesia"];
+const headers = ["metric", "parrhesia-pg", "parrhesia-memory"];
 if (hasStrfry) headers.push("strfry");
 if (hasNostrRs) headers.push("nostr-rs-relay");
+headers.push("memory/parrhesia");
 if (hasStrfry) headers.push("strfry/parrhesia");
 if (hasNostrRs) headers.push("nostr-rs/parrhesia");
 
 const rows = metricLabels.map(([label, key]) => {
-  const row = [label, toFixed(summary.parrhesia[key])];
+  const row = [
+    label,
+    toFixed(summary.parrhesia[key]),
+    toFixed(summary.parrhesiaMemory[key]),
+  ];
   if (hasStrfry) row.push(toFixed(summary.strfry[key]));
   if (hasNostrRs) row.push(toFixed(summary.nostrRsRelay[key]));
+  row.push(ratioVsParrhesia("parrhesiaMemory", key));
   if (hasStrfry) row.push(ratioVsParrhesia("strfry", key));
   if (hasNostrRs) row.push(ratioVsParrhesia("nostrRsRelay", key));
   return row;
@@ -444,8 +463,10 @@ if (hasStrfry || hasNostrRs) {
 console.log("Run details:");
 for (let i = 0; i < runs; i += 1) {
   const p = parrhesiaRuns[i];
+  const pm = parrhesiaMemoryRuns[i];
   let line = `  run ${i + 1}: ` +
-    `parrhesia(echo_tps=${toFixed(p.echoTps, 0)}, event_tps=${toFixed(p.eventTps, 0)}, req_tps=${toFixed(p.reqTps, 0)}, connect_avg_ms=${toFixed(p.connectAvgMs, 0)})`;
+    `parrhesia-pg(echo_tps=${toFixed(p.echoTps, 0)}, event_tps=${toFixed(p.eventTps, 0)}, req_tps=${toFixed(p.reqTps, 0)}, connect_avg_ms=${toFixed(p.connectAvgMs, 0)})` +
+    ` | parrhesia-memory(echo_tps=${toFixed(pm.echoTps, 0)}, event_tps=${toFixed(pm.eventTps, 0)}, req_tps=${toFixed(pm.reqTps, 0)}, connect_avg_ms=${toFixed(pm.connectAvgMs, 0)})`;
   if (hasStrfry) {
     const s = strfryRuns[i];
     line += ` | strfry(echo_tps=${toFixed(s.echoTps, 0)}, event_tps=${toFixed(s.eventTps, 0)}, req_tps=${toFixed(s.reqTps, 0)}, connect_avg_ms=${toFixed(s.connectAvgMs, 0)})`;

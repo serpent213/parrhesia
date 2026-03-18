@@ -25,9 +25,13 @@ defmodule Parrhesia.Tasks.Supervisor do
   end
 
   defp partition_retention_children do
-    [
-      {Parrhesia.Tasks.PartitionRetentionWorker, name: Parrhesia.Tasks.PartitionRetentionWorker}
-    ]
+    if Application.get_env(:parrhesia, :enable_partition_retention_worker, true) do
+      [
+        {Parrhesia.Tasks.PartitionRetentionWorker, name: Parrhesia.Tasks.PartitionRetentionWorker}
+      ]
+    else
+      []
+    end
   end
 
   defp nip66_children do

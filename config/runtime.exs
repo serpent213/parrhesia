@@ -35,6 +35,20 @@ bool_env = fn name, default ->
   end
 end
 
+storage_backend_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      case String.downcase(String.trim(value)) do
+        "postgres" -> :postgres
+        "memory" -> :memory
+        _other -> raise "environment variable #{name} must be one of: postgres, memory"
+      end
+  end
+end
+
 csv_env = fn name, default ->
   case System.get_env(name) do
     nil ->
@@ -125,20 +139,21 @@ ipv4_env = fn name, default ->
 end
 
 if config_env() == :prod do
-  database_url =
-    System.get_env("DATABASE_URL") ||
-      raise "environment variable DATABASE_URL is missing. Example: ecto://USER:PASS@HOST/DATABASE"
-
   repo_defaults = Application.get_env(:parrhesia, Parrhesia.Repo, [])
   read_repo_defaults = Application.get_env(:parrhesia, Parrhesia.ReadRepo, [])
   relay_url_default = Application.get_env(:parrhesia, :relay_url)
   metadata_defaults = Application.get_env(:parrhesia, :metadata, [])
+  database_defaults = Application.get_env(:parrhesia, :database, [])
+  storage_defaults = Application.get_env(:parrhesia, :storage, [])
 
   moderation_cache_enabled_default =
     Application.get_env(:parrhesia, :moderation_cache_enabled, true)
 
   enable_expiration_worker_default =
     Application.get_env(:parrhesia, :enable_expiration_worker, true)
+
+  enable_partition_retention_worker_default =
+    Application.get_env(:parrhesia, :enable_partition_retention_worker, true)
 
   limits_defaults = Application.get_env(:parrhesia, :limits, [])
   policies_defaults = Application.get_env(:parrhesia, :policies, [])
@@ -155,6 +170,29 @@ if config_env() == :prod do
 
   default_read_queue_interval =
     Keyword.get(read_repo_defaults, :queue_interval, default_queue_interval)
+
+  default_storage_backend =
+    storage_defaults
+    |> Keyword.get(:backend, :postgres)
+    |> case do
+      :postgres -> :postgres
+      :memory -> :memory
+      other -> raise "unsupported storage backend default: #{inspect(other)}"
+    end
+
+  storage_backend = storage_backend_env.("PARRHESIA_STORAGE_BACKEND", default_storage_backend)
+  postgres_backend? = storage_backend == :postgres
+
+  separate_read_pool? =
+    postgres_backend? and Keyword.get(database_defaults, :separate_read_pool?, true)
+
+  database_url =
+    if postgres_backend? do
+      System.get_env("DATABASE_URL") ||
+        raise "environment variable DATABASE_URL is missing. Example: ecto://USER:PASS@HOST/DATABASE"
+    else
+      nil
+    end
 
   pool_size = int_env.("POOL_SIZE", default_pool_size)
   queue_target = int_env.("DB_QUEUE_TARGET_MS", default_queue_target)
@@ -633,19 +671,47 @@ if config_env() == :prod do
       )
   ]
 
-  config :parrhesia, Parrhesia.Repo,
-    url: database_url,
-    pool_size: pool_size,
-    queue_target: queue_target,
-    queue_interval: queue_interval
+  storage =
+    case storage_backend do
+      :postgres ->
+        [
+          backend: :postgres,
+          events: Parrhesia.Storage.Adapters.Postgres.Events,
+          acl: Parrhesia.Storage.Adapters.Postgres.ACL,
+          moderation: Parrhesia.Storage.Adapters.Postgres.Moderation,
+          groups: Parrhesia.Storage.Adapters.Postgres.Groups,
+          admin: Parrhesia.Storage.Adapters.Postgres.Admin
+        ]
 
-  config :parrhesia, Parrhesia.ReadRepo,
-    url: database_url,
-    pool_size: read_pool_size,
-    queue_target: read_queue_target,
-    queue_interval: read_queue_interval
+      :memory ->
+        [
+          backend: :memory,
+          events: Parrhesia.Storage.Adapters.Memory.Events,
+          acl: Parrhesia.Storage.Adapters.Memory.ACL,
+          moderation: Parrhesia.Storage.Adapters.Memory.Moderation,
+          groups: Parrhesia.Storage.Adapters.Memory.Groups,
+          admin: Parrhesia.Storage.Adapters.Memory.Admin
+        ]
+    end
+
+  if postgres_backend? do
+    config :parrhesia, Parrhesia.Repo,
+      url: database_url,
+      pool_size: pool_size,
+      queue_target: queue_target,
+      queue_interval: queue_interval
+
+    config :parrhesia, Parrhesia.ReadRepo,
+      url: database_url,
+      pool_size: read_pool_size,
+      queue_target: read_queue_target,
+      queue_interval: read_queue_interval
+  end
 
   config :parrhesia,
+    database: [
+      separate_read_pool?: separate_read_pool?
+    ],
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),
     metadata: [
       name: Keyword.get(metadata_defaults, :name, "Parrhesia"),
@@ -679,11 +745,17 @@ if config_env() == :prod do
       bool_env.("PARRHESIA_MODERATION_CACHE_ENABLED", moderation_cache_enabled_default),
     enable_expiration_worker:
       bool_env.("PARRHESIA_ENABLE_EXPIRATION_WORKER", enable_expiration_worker_default),
+    enable_partition_retention_worker:
+      bool_env.(
+        "PARRHESIA_ENABLE_PARTITION_RETENTION_WORKER",
+        enable_partition_retention_worker_default
+      ),
     listeners: listeners,
     limits: limits,
     policies: policies,
     retention: retention,
-    features: features
+    features: features,
+    storage: storage
 
   case System.get_env("PARRHESIA_EXTRA_CONFIG") do
     nil -> :ok
