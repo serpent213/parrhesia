@@ -7,6 +7,10 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
   @events_table :parrhesia_memory_events
   @events_by_time_table :parrhesia_memory_events_by_time
   @events_by_tag_table :parrhesia_memory_events_by_tag
+  @events_by_pubkey_table :parrhesia_memory_events_by_pubkey
+  @events_by_kind_table :parrhesia_memory_events_by_kind
+  @events_by_pubkey_kind_table :parrhesia_memory_events_by_pubkey_kind
+  @events_by_address_table :parrhesia_memory_events_by_address
 
   @initial_state %{
     bans: %{pubkeys: MapSet.new(), events: MapSet.new(), ips: MapSet.new()},
@@ -19,7 +23,14 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
   }
 
   def ensure_started do
-    ensure_agent_started()
+    with :ok <- ensure_agent_started() do
+      Agent.get(@name, fn state ->
+        ensure_tables_started()
+        state
+      end)
+
+      :ok
+    end
   end
 
   def put_event(event_id, event) when is_binary(event_id) and is_map(event) do
@@ -28,6 +39,7 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
     if :ets.insert_new(@events_table, {event_id, event, false}) do
       true = :ets.insert(@events_by_time_table, {{sort_key(event), event_id}, event_id})
       index_event_tags(event_id, event)
+      index_event_secondary_keys(event_id, event)
       :ok
     else
       {:error, :duplicate_event}
@@ -51,6 +63,7 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
         true = :ets.insert(@events_table, {event_id, event, true})
         true = :ets.delete(@events_by_time_table, {sort_key(event), event_id})
         unindex_event_tags(event_id, event)
+        unindex_event_secondary_keys(event_id, event)
         :ok
 
       {:ok, _event, true} ->
@@ -86,9 +99,43 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
     :ok = ensure_started()
 
     tag_values
-    |> Enum.flat_map(&tagged_events_for_value(tag_name, &1))
-    |> Enum.uniq_by(& &1["id"])
-    |> Enum.sort(&chronological_sorter/2)
+    |> Enum.flat_map(&indexed_events_for_value(@events_by_tag_table, {tag_name, &1}))
+    |> sort_and_deduplicate_events()
+  end
+
+  def events_by_pubkeys(pubkeys) when is_list(pubkeys) do
+    :ok = ensure_started()
+
+    pubkeys
+    |> Enum.flat_map(&indexed_events_for_value(@events_by_pubkey_table, &1))
+    |> sort_and_deduplicate_events()
+  end
+
+  def events_by_kinds(kinds) when is_list(kinds) do
+    :ok = ensure_started()
+
+    kinds
+    |> Enum.flat_map(&indexed_events_for_value(@events_by_kind_table, &1))
+    |> sort_and_deduplicate_events()
+  end
+
+  def events_by_pubkeys_and_kinds(pubkeys, kinds) when is_list(pubkeys) and is_list(kinds) do
+    :ok = ensure_started()
+
+    pubkeys
+    |> Enum.flat_map(fn pubkey ->
+      kinds
+      |> Enum.flat_map(&indexed_events_for_value(@events_by_pubkey_kind_table, {pubkey, &1}))
+    end)
+    |> sort_and_deduplicate_events()
+  end
+
+  def events_by_addresses(addresses) when is_list(addresses) do
+    :ok = ensure_started()
+
+    addresses
+    |> Enum.flat_map(&indexed_events_for_value(@events_by_address_table, &1))
+    |> sort_and_deduplicate_events()
   end
 
   defp reduce_events_newest_from(:"$end_of_table", acc, _fun), do: acc
@@ -152,7 +199,13 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
   end
 
   defp init_state do
-    :ets.new(@events_table, [
+    ensure_tables_started()
+
+    @initial_state
+  end
+
+  defp ensure_tables_started do
+    ensure_table(@events_table, [
       :named_table,
       :public,
       :set,
@@ -160,7 +213,7 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
       write_concurrency: true
     ])
 
-    :ets.new(@events_by_time_table, [
+    ensure_table(@events_by_time_table, [
       :named_table,
       :public,
       :ordered_set,
@@ -168,7 +221,7 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
       write_concurrency: true
     ])
 
-    :ets.new(@events_by_tag_table, [
+    ensure_table(@events_by_tag_table, [
       :named_table,
       :public,
       :bag,
@@ -176,7 +229,44 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
       write_concurrency: true
     ])
 
-    @initial_state
+    ensure_table(@events_by_pubkey_table, [
+      :named_table,
+      :public,
+      :bag,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    ensure_table(@events_by_kind_table, [
+      :named_table,
+      :public,
+      :bag,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    ensure_table(@events_by_pubkey_kind_table, [
+      :named_table,
+      :public,
+      :bag,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    ensure_table(@events_by_address_table, [
+      :named_table,
+      :public,
+      :bag,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+  end
+
+  defp ensure_table(name, options) do
+    case :ets.whereis(name) do
+      :undefined -> :ets.new(name, options)
+      _table -> :ok
+    end
   end
 
   defp lookup_event(event_id) do
@@ -184,21 +274,6 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
       [{^event_id, event, deleted?}] -> {:ok, event, deleted?}
       [] -> :error
     end
-  end
-
-  defp tagged_events_for_value(_tag_name, tag_value) when not is_binary(tag_value), do: []
-
-  defp tagged_events_for_value(tag_name, tag_value) do
-    tag_key = {tag_name, tag_value}
-
-    @events_by_tag_table
-    |> :ets.lookup(tag_key)
-    |> Enum.reduce([], fn {^tag_key, _created_sort_key, event_id}, acc ->
-      case lookup_event(event_id) do
-        {:ok, event, false} -> [event | acc]
-        _other -> acc
-      end
-    end)
   end
 
   defp index_event_tags(event_id, event) do
@@ -209,10 +284,26 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
     end)
   end
 
+  defp index_event_secondary_keys(event_id, event) do
+    event
+    |> secondary_index_entries(event_id)
+    |> Enum.each(fn {table, entry} ->
+      true = :ets.insert(table, entry)
+    end)
+  end
+
   defp unindex_event_tags(event_id, event) do
     event
     |> event_tag_index_entries(event_id)
     |> Enum.each(&:ets.delete_object(@events_by_tag_table, &1))
+  end
+
+  defp unindex_event_secondary_keys(event_id, event) do
+    event
+    |> secondary_index_entries(event_id)
+    |> Enum.each(fn {table, entry} ->
+      :ets.delete_object(table, entry)
+    end)
   end
 
   defp event_tag_index_entries(event, event_id) do
@@ -227,6 +318,70 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
       _tag ->
         []
     end)
+  end
+
+  defp secondary_index_entries(event, event_id) do
+    created_sort_key = sort_key(event)
+    pubkey = Map.get(event, "pubkey")
+    kind = Map.get(event, "kind")
+
+    []
+    |> maybe_put_secondary_entry(@events_by_pubkey_table, pubkey, created_sort_key, event_id)
+    |> maybe_put_secondary_entry(@events_by_kind_table, kind, created_sort_key, event_id)
+    |> maybe_put_pubkey_kind_entry(pubkey, kind, created_sort_key, event_id)
+    |> maybe_put_address_entry(event, pubkey, kind, event_id)
+  end
+
+  defp maybe_put_secondary_entry(entries, _table, key, _created_sort_key, _event_id)
+       when is_nil(key),
+       do: entries
+
+  defp maybe_put_secondary_entry(entries, table, key, created_sort_key, event_id) do
+    [{table, {key, created_sort_key, event_id}} | entries]
+  end
+
+  defp maybe_put_pubkey_kind_entry(entries, pubkey, kind, created_sort_key, event_id)
+       when is_binary(pubkey) and is_integer(kind) do
+    [{@events_by_pubkey_kind_table, {{pubkey, kind}, created_sort_key, event_id}} | entries]
+  end
+
+  defp maybe_put_pubkey_kind_entry(entries, _pubkey, _kind, _created_sort_key, _event_id),
+    do: entries
+
+  defp maybe_put_address_entry(entries, event, pubkey, kind, event_id)
+       when is_binary(pubkey) and is_integer(kind) and kind >= 30_000 and kind < 40_000 do
+    d_tag =
+      event
+      |> Map.get("tags", [])
+      |> Enum.find_value("", fn
+        ["d", value | _rest] -> value
+        _tag -> nil
+      end)
+
+    [{@events_by_address_table, {{kind, pubkey, d_tag}, sort_key(event), event_id}} | entries]
+  end
+
+  defp maybe_put_address_entry(entries, _event, _pubkey, _kind, _event_id), do: entries
+
+  defp indexed_events_for_value(_table, value)
+       when not is_binary(value) and not is_integer(value) and not is_tuple(value),
+       do: []
+
+  defp indexed_events_for_value(table, value) do
+    table
+    |> :ets.lookup(value)
+    |> Enum.reduce([], fn {^value, _created_sort_key, event_id}, acc ->
+      case lookup_event(event_id) do
+        {:ok, event, false} -> [event | acc]
+        _other -> acc
+      end
+    end)
+  end
+
+  defp sort_and_deduplicate_events(events) do
+    events
+    |> Enum.uniq_by(& &1["id"])
+    |> Enum.sort(&chronological_sorter/2)
   end
 
   defp chronological_sorter(left, right) do

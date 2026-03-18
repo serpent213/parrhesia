@@ -179,4 +179,127 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
 
     assert Enum.map(results, & &1["id"]) == [newest["id"], middle["id"]]
   end
+
+  test "memory adapter counts and returns refs without duplicate overlaps across indexed filters" do
+    author = String.duplicate("9", 64)
+    tag = "shared"
+
+    older =
+      %{
+        "id" => String.duplicate("a", 64),
+        "pubkey" => author,
+        "created_at" => 1_700_000_200,
+        "kind" => 1,
+        "tags" => [["t", tag]],
+        "content" => "older"
+      }
+
+    newer =
+      %{
+        "id" => String.duplicate("b", 64),
+        "pubkey" => author,
+        "created_at" => 1_700_000_201,
+        "kind" => 1,
+        "tags" => [["t", tag]],
+        "content" => "newer"
+      }
+
+    unrelated =
+      %{
+        "id" => String.duplicate("c", 64),
+        "pubkey" => String.duplicate("d", 64),
+        "created_at" => 1_700_000_202,
+        "kind" => 2,
+        "tags" => [["t", "other"]],
+        "content" => "unrelated"
+      }
+
+    assert {:ok, _event} = Events.put_event(%{}, older)
+    assert {:ok, _event} = Events.put_event(%{}, newer)
+    assert {:ok, _event} = Events.put_event(%{}, unrelated)
+
+    filters = [
+      %{"authors" => [author], "kinds" => [1]},
+      %{"#t" => [tag]}
+    ]
+
+    assert {:ok, 2} = Events.count(%{}, filters, [])
+
+    assert {:ok, refs} = Events.query_event_refs(%{}, filters, [])
+
+    assert Enum.map(refs, &Base.encode16(&1.id, case: :lower)) == [older["id"], newer["id"]]
+  end
+
+  test "memory adapter uses indexes for vanish and keeps unrelated events" do
+    author = String.duplicate("e", 64)
+    other = String.duplicate("f", 64)
+
+    own_event =
+      %{
+        "id" => String.duplicate("1", 64),
+        "pubkey" => author,
+        "created_at" => 1_700_000_300,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "own-event"
+      }
+
+    giftwrap_event =
+      %{
+        "id" => String.duplicate("2", 64),
+        "pubkey" => other,
+        "created_at" => 1_700_000_301,
+        "kind" => 1059,
+        "tags" => [["p", author]],
+        "content" => "giftwrap"
+      }
+
+    other_event =
+      %{
+        "id" => String.duplicate("3", 64),
+        "pubkey" => other,
+        "created_at" => 1_700_000_302,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "other"
+      }
+
+    assert {:ok, _event} = Events.put_event(%{}, own_event)
+    assert {:ok, _event} = Events.put_event(%{}, giftwrap_event)
+    assert {:ok, _event} = Events.put_event(%{}, other_event)
+
+    assert {:ok, 2} =
+             Events.vanish(%{}, %{"pubkey" => author, "created_at" => 1_700_000_400})
+
+    assert {:ok, nil} = Events.get_event(%{}, own_event["id"])
+    assert {:ok, nil} = Events.get_event(%{}, giftwrap_event["id"])
+    assert {:ok, remaining} = Events.get_event(%{}, other_event["id"])
+    assert remaining["id"] == other_event["id"]
+  end
+
+  test "memory admin keeps a bounded newest-first audit log" do
+    Enum.each(1..1_005, fn index ->
+      assert :ok =
+               Admin.append_audit_log(%{}, %{
+                 method: if(rem(index, 2) == 0, do: "stats", else: "ping"),
+                 actor_pubkey: if(rem(index, 3) == 0, do: "actor-a", else: "actor-b"),
+                 params: %{index: index}
+               })
+    end)
+
+    assert {:ok, latest_logs} = Admin.list_audit_logs(%{}, limit: 3)
+    assert length(latest_logs) == 3
+    assert Enum.map(latest_logs, & &1.params.index) == [1005, 1004, 1003]
+
+    assert {:ok, actor_logs} = Admin.list_audit_logs(%{}, actor_pubkey: "actor-a", limit: 2)
+    assert Enum.all?(actor_logs, &(&1.actor_pubkey == "actor-a"))
+
+    assert {:ok, stats_logs} = Admin.list_audit_logs(%{}, method: :stats, limit: 2)
+    assert Enum.all?(stats_logs, &(&1.method == "stats"))
+
+    assert {:ok, retained_logs} = Admin.list_audit_logs(%{}, limit: 2_000)
+    assert length(retained_logs) == 1_000
+    assert Enum.any?(retained_logs, &(&1.params.index == 1005))
+    refute Enum.any?(retained_logs, &(&1.params.index == 1))
+  end
 end
