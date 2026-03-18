@@ -9,6 +9,11 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.Events
+  @trigram_fallback_max_single_term_length 4
+  @trigram_fallback_pattern ~r/[^\p{L}\p{N}\s"]/u
+  @fts_match_fragment "to_tsvector('simple', ?) @@ websearch_to_tsquery('simple', ?)"
+  @fts_rank_fragment "ts_rank_cd(to_tsvector('simple', ?), websearch_to_tsquery('simple', ?))"
+  @trigram_rank_fragment "word_similarity(lower(?), lower(?))"
 
   @type normalized_event :: %{
           id: binary(),
@@ -85,7 +90,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
           |> Repo.all()
         end)
         |> deduplicate_events()
-        |> sort_persisted_events()
+        |> sort_persisted_events(filters)
         |> maybe_apply_query_limit(opts)
 
       {:ok, Enum.map(persisted_events, &to_nostr_event/1)}
@@ -607,11 +612,12 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp event_query_for_filter(filter, now, opts) do
+    search_plan = search_plan(Map.get(filter, "search"))
     {base_query, remaining_tag_filters} = event_source_query(filter, now)
 
     base_query
-    |> apply_common_event_filters(filter, remaining_tag_filters, opts)
-    |> order_by([event: event], desc: event.created_at, asc: event.id)
+    |> apply_common_event_filters(filter, remaining_tag_filters, opts, search_plan)
+    |> maybe_order_by_search_rank(search_plan)
     |> select([event: event], %{
       id: event.id,
       pubkey: event.pubkey,
@@ -621,14 +627,16 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
       content: event.content,
       sig: event.sig
     })
+    |> maybe_select_search_score(search_plan)
     |> maybe_limit_query(effective_filter_limit(filter, opts))
   end
 
   defp event_id_query_for_filter(filter, now, opts) do
+    search_plan = search_plan(Map.get(filter, "search"))
     {base_query, remaining_tag_filters} = event_source_query(filter, now)
 
     base_query
-    |> apply_common_event_filters(filter, remaining_tag_filters, opts)
+    |> apply_common_event_filters(filter, remaining_tag_filters, opts, search_plan)
     |> select([event: event], event.id)
   end
 
@@ -647,10 +655,11 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp event_ref_query_for_filter(filter, now, opts) do
+    search_plan = search_plan(Map.get(filter, "search"))
     {base_query, remaining_tag_filters} = event_source_query(filter, now)
 
     base_query
-    |> apply_common_event_filters(filter, remaining_tag_filters, opts)
+    |> apply_common_event_filters(filter, remaining_tag_filters, opts, search_plan)
     |> order_by([event: event], asc: event.created_at, asc: event.id)
     |> select([event: event], %{
       created_at: event.created_at,
@@ -744,14 +753,14 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
     end
   end
 
-  defp apply_common_event_filters(query, filter, remaining_tag_filters, opts) do
+  defp apply_common_event_filters(query, filter, remaining_tag_filters, opts, search_plan) do
     query
     |> maybe_filter_ids(Map.get(filter, "ids"))
     |> maybe_filter_authors(Map.get(filter, "authors"))
     |> maybe_filter_kinds(Map.get(filter, "kinds"))
     |> maybe_filter_since(Map.get(filter, "since"))
     |> maybe_filter_until(Map.get(filter, "until"))
-    |> maybe_filter_search(Map.get(filter, "search"))
+    |> maybe_filter_search(search_plan)
     |> filter_by_tag_filters(remaining_tag_filters)
     |> maybe_restrict_giftwrap_access(filter, opts)
   end
@@ -792,12 +801,18 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp maybe_filter_search(query, nil), do: query
 
-  defp maybe_filter_search(query, search) when is_binary(search) and search != "" do
+  defp maybe_filter_search(query, %{mode: :fts, query: search}) do
+    where(
+      query,
+      [event: event],
+      fragment(@fts_match_fragment, event.content, ^search)
+    )
+  end
+
+  defp maybe_filter_search(query, %{mode: :trigram, query: search}) do
     escaped_search = escape_like_pattern(search)
     where(query, [event: event], ilike(event.content, ^"%#{escaped_search}%"))
   end
-
-  defp maybe_filter_search(query, _search), do: query
 
   defp escape_like_pattern(search) do
     search
@@ -886,20 +901,90 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   defp maybe_limit_query(query, nil), do: query
   defp maybe_limit_query(query, limit), do: limit(query, ^limit)
 
+  defp maybe_order_by_search_rank(query, nil) do
+    order_by(query, [event: event], desc: event.created_at, asc: event.id)
+  end
+
+  defp maybe_order_by_search_rank(query, %{mode: :fts, query: search}) do
+    order_by(
+      query,
+      [event: event],
+      desc: fragment(@fts_rank_fragment, event.content, ^search),
+      desc: event.created_at,
+      asc: event.id
+    )
+  end
+
+  defp maybe_order_by_search_rank(query, %{mode: :trigram, query: search}) do
+    order_by(
+      query,
+      [event: event],
+      desc: fragment(@trigram_rank_fragment, ^search, event.content),
+      desc: event.created_at,
+      asc: event.id
+    )
+  end
+
+  defp maybe_select_search_score(query, nil), do: query
+
+  defp maybe_select_search_score(query, %{mode: :fts, query: search}) do
+    select_merge(
+      query,
+      [event: event],
+      %{search_score: fragment(@fts_rank_fragment, event.content, ^search)}
+    )
+  end
+
+  defp maybe_select_search_score(query, %{mode: :trigram, query: search}) do
+    select_merge(
+      query,
+      [event: event],
+      %{search_score: fragment(@trigram_rank_fragment, ^search, event.content)}
+    )
+  end
+
+  defp search_plan(nil), do: nil
+
+  defp search_plan(search) when is_binary(search) do
+    normalized_search = String.trim(search)
+
+    cond do
+      normalized_search == "" ->
+        nil
+
+      trigram_fallback_search?(normalized_search) ->
+        %{mode: :trigram, query: normalized_search}
+
+      true ->
+        %{mode: :fts, query: normalized_search}
+    end
+  end
+
+  defp trigram_fallback_search?(search) do
+    String.match?(search, @trigram_fallback_pattern) or short_single_term_search?(search)
+  end
+
+  defp short_single_term_search?(search) do
+    case String.split(search, ~r/\s+/, trim: true) do
+      [term] -> String.length(term) <= @trigram_fallback_max_single_term_length
+      _other -> false
+    end
+  end
+
   defp deduplicate_events(events) do
     events
-    |> Enum.reduce(%{}, fn event, acc -> Map.put_new(acc, event.id, event) end)
+    |> Enum.reduce(%{}, fn event, acc ->
+      Map.update(acc, event.id, event, fn existing -> preferred_event(existing, event) end)
+    end)
     |> Map.values()
   end
 
-  defp sort_persisted_events(events) do
-    Enum.sort(events, fn left, right ->
-      cond do
-        left.created_at > right.created_at -> true
-        left.created_at < right.created_at -> false
-        true -> left.id < right.id
-      end
-    end)
+  defp sort_persisted_events(events, filters) do
+    if Enum.any?(filters, &search_filter?/1) do
+      Enum.sort(events, &search_result_sorter/2)
+    else
+      Enum.sort(events, &chronological_sorter/2)
+    end
   end
 
   defp maybe_apply_query_limit(events, opts) do
@@ -919,6 +1004,50 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
       "content" => persisted_event.content,
       "sig" => Base.encode16(persisted_event.sig, case: :lower)
     }
+  end
+
+  defp preferred_event(existing, candidate) do
+    if search_result_sorter(candidate, existing) do
+      candidate
+    else
+      existing
+    end
+  end
+
+  defp search_filter?(filter) do
+    filter
+    |> Map.get("search")
+    |> search_plan()
+    |> Kernel.!=(nil)
+  end
+
+  defp search_result_sorter(left, right) do
+    left_score = search_score(left)
+    right_score = search_score(right)
+
+    cond do
+      left_score > right_score -> true
+      left_score < right_score -> false
+      true -> chronological_sorter(left, right)
+    end
+  end
+
+  defp chronological_sorter(left, right) do
+    cond do
+      left.created_at > right.created_at -> true
+      left.created_at < right.created_at -> false
+      true -> left.id < right.id
+    end
+  end
+
+  defp search_score(event) do
+    event
+    |> Map.get(:search_score, 0.0)
+    |> case do
+      score when is_float(score) -> score
+      score when is_integer(score) -> score / 1
+      _other -> 0.0
+    end
   end
 
   defp normalize_persisted_tags(tags) when is_list(tags), do: tags

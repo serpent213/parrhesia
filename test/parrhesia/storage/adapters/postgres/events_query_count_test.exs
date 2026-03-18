@@ -264,6 +264,48 @@ defmodule Parrhesia.Storage.Adapters.Postgres.EventsQueryCountTest do
     assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
   end
 
+  test "search ranks FTS matches by relevance and applies limit after ranking" do
+    stronger_match =
+      persist_event(%{
+        "kind" => 1,
+        "created_at" => 1_700_000_210,
+        "content" => "relay relay relay search ranking"
+      })
+
+    _newer_weaker_match =
+      persist_event(%{
+        "kind" => 1,
+        "created_at" => 1_700_000_211,
+        "content" => "relay only"
+      })
+
+    filters = [%{"kinds" => [1], "search" => "relay", "limit" => 1}]
+
+    assert {:ok, [result]} = Events.query(%{}, filters, [])
+    assert result["id"] == stronger_match["id"]
+    assert {:ok, 2} = Events.count(%{}, filters, [])
+  end
+
+  test "search falls back to trigram matching for short prefixes" do
+    matching =
+      persist_event(%{
+        "kind" => 1,
+        "content" => "alpha relay note"
+      })
+
+    _other =
+      persist_event(%{
+        "kind" => 1,
+        "content" => "omega relay note"
+      })
+
+    filters = [%{"kinds" => [1], "search" => "alph"}]
+
+    assert {:ok, [result]} = Events.query(%{}, filters, [])
+    assert result["id"] == matching["id"]
+    assert {:ok, 1} = Events.count(%{}, filters, [])
+  end
+
   test "search treats % and _ as literals" do
     matching =
       persist_event(%{

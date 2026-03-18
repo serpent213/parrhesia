@@ -34,6 +34,8 @@ Current `supported_nips` list:
 
 `43` is advertised when the built-in NIP-43 relay access flow is enabled. Parrhesia generates relay-signed `28935` invite responses on `REQ`, validates join and leave requests locally, and publishes the resulting signed `8000`, `8001`, and `13534` relay membership events into its own local event store.
 
+`50` uses ranked PostgreSQL full-text search over event `content` by default. Parrhesia applies the filter `limit` after ordering by match quality, and falls back to trigram-backed substring matching for short or symbol-heavy queries such as search-as-you-type prefixes, domains, and punctuation-rich tokens.
+
 `66` is advertised when the built-in NIP-66 publisher is enabled and has at least one relay target. The default config enables it for the `public` relay URL. Parrhesia probes those target relays, collects the resulting NIP-11 / websocket liveness data, and then publishes the signed `10166` and `30166` events locally on this relay.
 
 ## Requirements
