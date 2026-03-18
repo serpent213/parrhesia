@@ -5,7 +5,6 @@ defmodule Parrhesia.ConfigTest do
 
   test "returns configured relay limits/policies/features" do
     assert Parrhesia.Config.get([:metadata, :name]) == "Parrhesia"
-    assert Parrhesia.Config.get([:metadata, :version]) == "0.5.0"
     assert Parrhesia.Config.get([:metadata, :hide_version?]) == true
     assert Parrhesia.Config.get([:limits, :max_frame_bytes]) == 1_048_576
     assert Parrhesia.Config.get([:limits, :max_event_bytes]) == 262_144

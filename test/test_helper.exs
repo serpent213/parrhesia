@@ -24,4 +24,24 @@ exclude_tags =
    end, []}
 )
 
+# Suppress Req retry warnings (e.g. transient socket closures during tests).
+# These are expected when tests tear down HTTP connections mid-flight.
+:logger.add_primary_filter(
+  :suppress_req_retry,
+  {fn
+     %{msg: {:string, chars}}, _extra ->
+       str = IO.chardata_to_string(chars)
+
+       if :string.find(str, "retry:") != :nomatch or
+            :string.find(str, "Req.TransportError") != :nomatch do
+         :stop
+       else
+         :ignore
+       end
+
+     _event, _extra ->
+       :ignore
+   end, []}
+)
+
 ExUnit.start(exclude: exclude_tags)

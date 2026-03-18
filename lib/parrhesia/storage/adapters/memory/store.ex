@@ -22,16 +22,7 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
     audit_logs: []
   }
 
-  def ensure_started do
-    with :ok <- ensure_agent_started() do
-      Agent.get(@name, fn state ->
-        ensure_tables_started()
-        state
-      end)
-
-      :ok
-    end
-  end
+  def ensure_started, do: start_store()
 
   def put_event(event_id, event) when is_binary(event_id) and is_map(event) do
     :ok = ensure_started()
@@ -180,14 +171,6 @@ defmodule Parrhesia.Storage.Adapters.Memory.Store do
   def get_and_update(fun) do
     :ok = ensure_started()
     Agent.get_and_update(@name, fun)
-  end
-
-  defp ensure_agent_started do
-    if Process.whereis(@name) do
-      :ok
-    else
-      start_store()
-    end
   end
 
   defp start_store do

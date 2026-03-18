@@ -454,7 +454,7 @@ For systemd/process managers, run the release command with `start`.
 Build:
 
 ```bash
-nix-build
+nix build
 ```
 
 Run the built release from `./result/bin/parrhesia` (release command interface).

@@ -25,7 +25,7 @@ jobs:
             otp: "27.2"
             elixir: "1.18.2"
             main: false
-          - name: Test (OTP 28.4 / Elixir 1.19.4 + Marmot E2E)
+          - name: Test (OTP 28.4 / Elixir 1.19.4 + E2E)
             otp: "28.4"
             elixir: "1.19.4"
             main: true

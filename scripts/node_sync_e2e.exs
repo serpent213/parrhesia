@@ -724,7 +724,11 @@ defmodule NodeSyncE2E.Runner do
     %{
       "created_at" => System.system_time(:second),
       "kind" => 27_235,
-      "tags" => [["method", method], ["u", url]],
+      "tags" => [
+        ["method", method],
+        ["u", url],
+        ["nonce", "#{System.unique_integer([:positive, :monotonic])}"]
+      ],
       "content" => ""
     }
   end
