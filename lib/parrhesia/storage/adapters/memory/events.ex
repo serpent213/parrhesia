@@ -12,54 +12,52 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
   def put_event(_context, event) do
     event_id = Map.fetch!(event, "id")
 
-    result =
-      Store.get_and_update(fn state ->
-        if Map.has_key?(state.events, event_id) do
-          {{:error, :duplicate_event}, state}
-        else
-          next_state = put_in(state.events[event_id], event)
-          {{:ok, event}, next_state}
-        end
-      end)
-
-    result
+    case Store.put_event(event_id, event) do
+      :ok -> {:ok, event}
+      {:error, :duplicate_event} -> {:error, :duplicate_event}
+    end
   end
 
   @impl true
   def get_event(_context, event_id) do
-    deleted? = Store.get(fn state -> MapSet.member?(state.deleted, event_id) end)
-
-    if deleted? do
-      {:ok, nil}
-    else
-      {:ok, Store.get(fn state -> Map.get(state.events, event_id) end)}
+    case Store.get_event(event_id) do
+      {:ok, _event, true} -> {:ok, nil}
+      {:ok, event, false} -> {:ok, event}
+      :error -> {:ok, nil}
     end
   end
 
   @impl true
   def query(_context, filters, opts) do
     with :ok <- Filter.validate_filters(filters) do
-      state = Store.get(& &1)
       requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
 
       events =
-        state.events
-        |> Map.values()
-        |> Enum.filter(fn event ->
-          not MapSet.member?(state.deleted, event["id"]) and
-            Filter.matches_any?(event, filters) and
-            giftwrap_visible_to_requester?(event, requester_pubkeys)
-        end)
+        filters
+        |> Enum.flat_map(&matching_events_for_filter(&1, requester_pubkeys, opts))
+        |> deduplicate_events()
+        |> sort_events()
+        |> maybe_apply_query_limit(opts)
 
       {:ok, events}
     end
   end
 
   @impl true
-  def query_event_refs(context, filters, opts) do
-    with {:ok, events} <- query(context, filters, opts) do
+  def query_event_refs(_context, filters, opts) do
+    with :ok <- Filter.validate_filters(filters) do
+      requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
+
       refs =
-        events
+        filters
+        |> Enum.flat_map(
+          &matching_events_for_filter(
+            &1,
+            requester_pubkeys,
+            Keyword.put(opts, :apply_filter_limits?, false)
+          )
+        )
+        |> deduplicate_events()
         |> Enum.map(fn event ->
           %{
             created_at: Map.fetch!(event, "created_at"),
@@ -74,9 +72,23 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
   end
 
   @impl true
-  def count(context, filters, opts) do
-    with {:ok, events} <- query(context, filters, opts) do
-      {:ok, length(events)}
+  def count(_context, filters, opts) do
+    with :ok <- Filter.validate_filters(filters) do
+      requester_pubkeys = Keyword.get(opts, :requester_pubkeys, [])
+
+      count =
+        filters
+        |> Enum.flat_map(
+          &matching_events_for_filter(
+            &1,
+            requester_pubkeys,
+            Keyword.put(opts, :apply_filter_limits?, false)
+          )
+        )
+        |> deduplicate_events()
+        |> length()
+
+      {:ok, count}
     end
   end
 
@@ -107,22 +119,17 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
       end)
 
     coordinate_delete_ids =
-      Store.get(fn state ->
-        state.events
-        |> Map.values()
-        |> Enum.filter(fn candidate ->
-          matches_delete_coordinate?(candidate, delete_coordinates, deleter_pubkey)
-        end)
-        |> Enum.map(& &1["id"])
+      Store.reduce_events([], fn candidate, acc ->
+        if matches_delete_coordinate?(candidate, delete_coordinates, deleter_pubkey) do
+          [candidate["id"] | acc]
+        else
+          acc
+        end
       end)
 
     all_delete_ids = Enum.uniq(delete_event_ids ++ coordinate_delete_ids)
 
-    Store.update(fn state ->
-      Enum.reduce(all_delete_ids, state, fn event_id, acc ->
-        update_in(acc.deleted, &MapSet.put(&1, event_id))
-      end)
-    end)
+    Enum.each(all_delete_ids, &Store.mark_deleted/1)
 
     {:ok, length(all_delete_ids)}
   end
@@ -132,18 +139,15 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
     pubkey = Map.get(event, "pubkey")
 
     deleted_ids =
-      Store.get(fn state ->
-        state.events
-        |> Map.values()
-        |> Enum.filter(fn candidate -> candidate["pubkey"] == pubkey end)
-        |> Enum.map(& &1["id"])
+      Store.reduce_events([], fn candidate, acc ->
+        if candidate["pubkey"] == pubkey do
+          [candidate["id"] | acc]
+        else
+          acc
+        end
       end)
 
-    Store.update(fn state ->
-      Enum.reduce(deleted_ids, state, fn event_id, acc ->
-        update_in(acc.deleted, &MapSet.put(&1, event_id))
-      end)
-    end)
+    Enum.each(deleted_ids, &Store.mark_deleted/1)
 
     {:ok, length(deleted_ids)}
   end
@@ -222,6 +226,165 @@ defmodule Parrhesia.Storage.Adapters.Memory.Events do
     case Keyword.get(opts, :limit) do
       limit when is_integer(limit) and limit > 0 -> Enum.take(refs, limit)
       _other -> refs
+    end
+  end
+
+  defp matching_events_for_filter(filter, requester_pubkeys, opts) do
+    cond do
+      Map.has_key?(filter, "ids") ->
+        direct_id_lookup_events(filter, requester_pubkeys, opts)
+
+      is_tuple(indexed_tag_filter(filter)) ->
+        indexed_tag_lookup_events(filter, requester_pubkeys, opts)
+
+      true ->
+        scan_filter_matches(filter, requester_pubkeys, opts)
+    end
+  end
+
+  defp direct_id_lookup_events(filter, requester_pubkeys, opts) do
+    filter
+    |> Map.get("ids", [])
+    |> Enum.reduce([], fn event_id, acc ->
+      maybe_prepend_direct_lookup_match(acc, event_id, filter, requester_pubkeys)
+    end)
+    |> deduplicate_events()
+    |> sort_events()
+    |> maybe_take_filter_limit(filter, opts)
+  end
+
+  defp scan_filter_matches(filter, requester_pubkeys, opts) do
+    limit =
+      if Keyword.get(opts, :apply_filter_limits?, true) do
+        effective_filter_limit(filter, opts)
+      else
+        nil
+      end
+
+    {matches, _count} =
+      Store.reduce_events_newest(
+        {[], 0},
+        &reduce_scan_match(&1, &2, filter, requester_pubkeys, limit)
+      )
+
+    matches
+    |> Enum.reverse()
+    |> sort_events()
+  end
+
+  defp indexed_tag_lookup_events(filter, requester_pubkeys, opts) do
+    {tag_name, tag_values} = indexed_tag_filter(filter)
+    indexed_tag_values = effective_indexed_tag_values(filter, tag_values)
+
+    tag_name
+    |> Store.tagged_events(indexed_tag_values)
+    |> Enum.filter(&filter_match_visible?(&1, filter, requester_pubkeys))
+    |> maybe_take_filter_limit(filter, opts)
+  end
+
+  defp indexed_tag_filter(filter) do
+    filter
+    |> Enum.filter(fn
+      {"#" <> _tag_name, values} when is_list(values) -> values != []
+      _entry -> false
+    end)
+    |> Enum.sort_by(fn {key, _values} -> key end)
+    |> List.first()
+    |> case do
+      {"#" <> tag_name, values} -> {tag_name, values}
+      nil -> nil
+    end
+  end
+
+  defp effective_indexed_tag_values(filter, tag_values) do
+    case Map.get(filter, "limit") do
+      limit when is_integer(limit) and limit == 1 ->
+        Enum.take(tag_values, 1)
+
+      _other ->
+        tag_values
+    end
+  end
+
+  defp filter_match_visible?(event, filter, requester_pubkeys) do
+    Filter.matches_filter?(event, filter) and
+      giftwrap_visible_to_requester?(event, requester_pubkeys)
+  end
+
+  defp maybe_prepend_direct_lookup_match(acc, event_id, filter, requester_pubkeys) do
+    case Store.get_event(event_id) do
+      {:ok, event, false} ->
+        if filter_match_visible?(event, filter, requester_pubkeys) do
+          [event | acc]
+        else
+          acc
+        end
+
+      _other ->
+        acc
+    end
+  end
+
+  defp reduce_scan_match(event, {acc, count}, filter, requester_pubkeys, limit) do
+    if filter_match_visible?(event, filter, requester_pubkeys) do
+      maybe_halt_scan([event | acc], count + 1, limit)
+    else
+      {acc, count}
+    end
+  end
+
+  defp maybe_halt_scan(acc, count, limit) when is_integer(limit) and count >= limit do
+    {:halt, {acc, count}}
+  end
+
+  defp maybe_halt_scan(acc, count, _limit), do: {acc, count}
+
+  defp deduplicate_events(events) do
+    events
+    |> Enum.reduce(%{}, fn event, acc -> Map.put(acc, event["id"], event) end)
+    |> Map.values()
+  end
+
+  defp sort_events(events) do
+    Enum.sort(events, &chronological_sorter/2)
+  end
+
+  defp chronological_sorter(left, right) do
+    cond do
+      left["created_at"] > right["created_at"] -> true
+      left["created_at"] < right["created_at"] -> false
+      true -> left["id"] < right["id"]
+    end
+  end
+
+  defp maybe_apply_query_limit(events, opts) do
+    case Keyword.get(opts, :limit) do
+      limit when is_integer(limit) and limit > 0 -> Enum.take(events, limit)
+      _other -> events
+    end
+  end
+
+  defp maybe_take_filter_limit(events, filter, opts) do
+    case effective_filter_limit(filter, opts) do
+      limit when is_integer(limit) and limit > 0 -> Enum.take(events, limit)
+      _other -> events
+    end
+  end
+
+  defp effective_filter_limit(filter, opts) do
+    max_filter_limit = Keyword.get(opts, :max_filter_limit)
+
+    case Map.get(filter, "limit") do
+      limit
+      when is_integer(limit) and limit > 0 and is_integer(max_filter_limit) and
+             max_filter_limit > 0 ->
+        min(limit, max_filter_limit)
+
+      limit when is_integer(limit) and limit > 0 ->
+        limit
+
+      _other ->
+        nil
     end
   end
 end

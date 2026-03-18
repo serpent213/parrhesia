@@ -70,4 +70,113 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
     assert {:ok, []} = Events.query(%{}, filters, requester_pubkeys: [])
     assert {:ok, 0} = Events.count(%{}, filters, requester_pubkeys: [])
   end
+
+  test "memory adapter applies filter limits in descending chronological order" do
+    now = 1_700_000_000
+    author = String.duplicate("d", 64)
+
+    older =
+      %{
+        "id" => String.duplicate("1", 64),
+        "pubkey" => author,
+        "created_at" => now,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "older"
+      }
+
+    tie_loser =
+      %{
+        "id" => String.duplicate("3", 64),
+        "pubkey" => author,
+        "created_at" => now + 1,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "tie-loser"
+      }
+
+    tie_winner =
+      %{
+        "id" => String.duplicate("2", 64),
+        "pubkey" => author,
+        "created_at" => now + 1,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "tie-winner"
+      }
+
+    newest =
+      %{
+        "id" => String.duplicate("4", 64),
+        "pubkey" => author,
+        "created_at" => now + 2,
+        "kind" => 1,
+        "tags" => [],
+        "content" => "newest"
+      }
+
+    assert {:ok, _event} = Events.put_event(%{}, older)
+    assert {:ok, _event} = Events.put_event(%{}, tie_loser)
+    assert {:ok, _event} = Events.put_event(%{}, tie_winner)
+    assert {:ok, _event} = Events.put_event(%{}, newest)
+
+    assert {:ok, results} =
+             Events.query(%{}, [%{"authors" => [author], "kinds" => [1], "limit" => 2}], [])
+
+    assert Enum.map(results, & &1["id"]) == [newest["id"], tie_winner["id"]]
+  end
+
+  test "memory adapter serves tag-filter queries from newest matching events" do
+    now = 1_700_000_100
+    author = String.duplicate("e", 64)
+
+    off_topic =
+      %{
+        "id" => String.duplicate("5", 64),
+        "pubkey" => author,
+        "created_at" => now + 3,
+        "kind" => 1,
+        "tags" => [["t", "other"]],
+        "content" => "off-topic"
+      }
+
+    oldest =
+      %{
+        "id" => String.duplicate("6", 64),
+        "pubkey" => author,
+        "created_at" => now,
+        "kind" => 1,
+        "tags" => [["t", "bench"]],
+        "content" => "oldest"
+      }
+
+    middle =
+      %{
+        "id" => String.duplicate("7", 64),
+        "pubkey" => author,
+        "created_at" => now + 1,
+        "kind" => 1,
+        "tags" => [["t", "bench"]],
+        "content" => "middle"
+      }
+
+    newest =
+      %{
+        "id" => String.duplicate("8", 64),
+        "pubkey" => author,
+        "created_at" => now + 2,
+        "kind" => 1,
+        "tags" => [["t", "bench"]],
+        "content" => "newest"
+      }
+
+    assert {:ok, _event} = Events.put_event(%{}, off_topic)
+    assert {:ok, _event} = Events.put_event(%{}, oldest)
+    assert {:ok, _event} = Events.put_event(%{}, middle)
+    assert {:ok, _event} = Events.put_event(%{}, newest)
+
+    assert {:ok, results} = Events.query(%{}, [%{"#t" => ["bench"], "limit" => 2}], [])
+
+    assert Enum.map(results, & &1["id"]) == [newest["id"], middle["id"]]
+  end
 end
