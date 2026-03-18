@@ -70,7 +70,7 @@ const fs = require("node:fs");
 
 const [, , jsonOut, timestamp, machineId, gitTag, gitCommit, runsStr, historyFile] = process.argv;
 
-const servers = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
+const { versions, ...servers } = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
 
 const entry = {
   timestamp,
@@ -78,6 +78,7 @@ const entry = {
   git_tag: gitTag,
   git_commit: gitCommit,
   runs: Number(runsStr),
+  versions: versions || {},
   servers,
 };
 
@@ -127,19 +128,6 @@ const presentBaselines = baselineServerNames.filter(srv =>
   deduped.some(e => e.servers[srv])
 );
 
-// Compute averages for baseline servers (constant horizontal lines)
-const baselineAvg = {};
-for (const srv of presentBaselines) {
-  const vals = deduped.filter(e => e.servers[srv]).map(e => e.servers[srv]);
-  baselineAvg[srv] = {};
-  for (const metric of Object.keys(vals[0])) {
-    const valid = vals.map(v => v[metric]).filter(Number.isFinite);
-    baselineAvg[srv][metric] = valid.length > 0
-      ? valid.reduce((a, b) => a + b, 0) / valid.length
-      : NaN;
-  }
-}
-
 // Metrics to chart
 const chartMetrics = [
   { key: "event_tps",      label: "Event Throughput (TPS) — higher is better",    file: "event_tps.tsv",      ylabel: "TPS" },
@@ -161,7 +149,7 @@ for (const cm of chartMetrics) {
       e.servers["parrhesia-memory"]?.[cm.key] ?? "NaN",
     ];
     for (const srv of presentBaselines) {
-      row.push(baselineAvg[srv]?.[cm.key] ?? "NaN");
+      row.push(e.servers[srv]?.[cm.key] ?? "NaN");
     }
     rows.push(row.join("\t"));
   }
@@ -171,7 +159,7 @@ for (const cm of chartMetrics) {
 
 // Generate gnuplot plot commands (handles variable column counts)
 const serverLabels = ["parrhesia-pg", "parrhesia-memory"];
-for (const srv of presentBaselines) serverLabels.push(srv + " (avg)");
+for (const srv of presentBaselines) serverLabels.push(srv);
 
 const plotLines = [];
 for (const cm of chartMetrics) {
@@ -219,7 +207,7 @@ const fs = require("node:fs");
 
 const [, , jsonOut, readmePath] = process.argv;
 
-const servers = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
+const { versions, ...servers } = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
 const readme = fs.readFileSync(readmePath, "utf8");
 
 const pg = servers["parrhesia-pg"];

@@ -298,7 +298,8 @@ for run in $(seq 1 "$RUNS"); do
 
 done
 
-node - "$WORK_DIR" "$RUNS" "$HAS_STRFRY" "$HAS_NOSTR_RS" <<'NODE'
+node - "$WORK_DIR" "$RUNS" "$HAS_STRFRY" "$HAS_NOSTR_RS" \
+     "$PARRHESIA_VERSION" "$STRFRY_VERSION" "$NOSTR_RS_RELAY_VERSION" "$NOSTR_BENCH_VERSION" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -306,6 +307,10 @@ const workDir = process.argv[2];
 const runs = Number(process.argv[3]);
 const hasStrfry = process.argv[4] === "1";
 const hasNostrRs = process.argv[5] === "1";
+const parrhesiaVersion = process.argv[6] || "";
+const strfryVersion = process.argv[7] || "";
+const nostrRsRelayVersion = process.argv[8] || "";
+const nostrBenchVersion = process.argv[9] || "";
 
 function parseLog(filePath) {
   const content = fs.readFileSync(filePath, "utf8");
@@ -501,6 +506,12 @@ if (process.env.BENCH_JSON_OUT) {
       req_mibs: s.reqSizeMiBS,
     };
   }
+
+  const versions = { parrhesia: parrhesiaVersion };
+  if (hasStrfry && strfryVersion) versions.strfry = strfryVersion;
+  if (hasNostrRs && nostrRsRelayVersion) versions["nostr-rs-relay"] = nostrRsRelayVersion;
+  if (nostrBenchVersion) versions["nostr-bench"] = nostrBenchVersion;
+  jsonSummary.versions = versions;
 
   fs.writeFileSync(
     process.env.BENCH_JSON_OUT,

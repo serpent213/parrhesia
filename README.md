@@ -550,16 +550,16 @@ mix bench
 
 Current comparison results from [BENCHMARK.md](./BENCHMARK.md):
 
-| metric | parrhesia-pg | parrhesia-mem | nostr-rs-relay | mem/pg | nostr-rs/pg |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| connect avg latency (ms) ↓ | 9.33 | 7.67 | 7.00 | **0.82x** | **0.75x** |
-| connect max latency (ms) ↓ | 12.33 | 9.67 | 10.33 | **0.78x** | **0.84x** |
-| echo throughput (TPS) ↑ | 64030.33 | 93656.33 | 140767.00 | **1.46x** | **2.20x** |
-| echo throughput (MiB/s) ↑ | 35.07 | 51.27 | 77.07 | **1.46x** | **2.20x** |
-| event throughput (TPS) ↑ | 5015.33 | 1505.33 | 2293.67 | 0.30x | 0.46x |
-| event throughput (MiB/s) ↑ | 3.40 | 1.00 | 1.50 | 0.29x | 0.44x |
-| req throughput (TPS) ↑ | 6416.33 | 14566.67 | 3035.67 | **2.27x** | 0.47x |
-| req throughput (MiB/s) ↑ | 42.43 | 94.23 | 19.23 | **2.22x** | 0.45x |
+| metric | parrhesia-pg | parrhesia-mem | strfry | nostr-rs-relay | mem/pg | strfry/pg | nostr-rs/pg |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| connect avg latency (ms) ↓ | 26.67 | 14.67 | 3.00 | 2.00 | **0.55x** | **0.11x** | **0.07x** |
+| connect max latency (ms) ↓ | 45.33 | 24.33 | 4.67 | 3.33 | **0.54x** | **0.10x** | **0.07x** |
+| echo throughput (TPS) ↑ | 68100.33 | 55978.00 | 67718.33 | 166178.00 | 0.82x | 0.99x | **2.44x** |
+| echo throughput (MiB/s) ↑ | 37.23 | 30.63 | 37.87 | 91.03 | 0.82x | **1.02x** | **2.44x** |
+| event throughput (TPS) ↑ | 1647.33 | 882.00 | 3548.33 | 787.00 | 0.54x | **2.15x** | 0.48x |
+| event throughput (MiB/s) ↑ | 1.07 | 0.57 | 2.30 | 0.50 | 0.53x | **2.16x** | 0.47x |
+| req throughput (TPS) ↑ | 3576.67 | 6888.00 | 1808.00 | 860.67 | **1.93x** | 0.51x | 0.24x |
+| req throughput (MiB/s) ↑ | 18.83 | 36.07 | 11.70 | 2.40 | **1.92x** | 0.62x | 0.13x |
 
 Higher is better for `↑` metrics. Lower is better for `↓` metrics.
 
