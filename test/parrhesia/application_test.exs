@@ -20,6 +20,7 @@ defmodule Parrhesia.ApplicationTest do
            end)
 
     assert is_pid(Process.whereis(Parrhesia.Auth.Challenges))
+    assert is_pid(Process.whereis(Parrhesia.Auth.Nip98ReplayCache))
     assert is_pid(Process.whereis(Parrhesia.API.Identity.Manager))
     assert is_pid(Process.whereis(Parrhesia.API.Sync.Manager))
 

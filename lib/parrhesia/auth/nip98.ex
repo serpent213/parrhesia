@@ -3,6 +3,7 @@ defmodule Parrhesia.Auth.Nip98 do
   Minimal NIP-98 HTTP auth validation.
   """
 
+  alias Parrhesia.Auth.Nip98ReplayCache
   alias Parrhesia.Protocol.EventValidator
 
   @max_age_seconds 60
@@ -23,7 +24,8 @@ defmodule Parrhesia.Auth.Nip98 do
     with {:ok, event_json} <- decode_base64(encoded_event),
          {:ok, event} <- JSON.decode(event_json),
          :ok <- validate_event_shape(event, opts),
-         :ok <- validate_http_binding(event, method, url) do
+         :ok <- validate_http_binding(event, method, url),
+         :ok <- consume_replay_token(event, opts) do
       {:ok, event}
     else
       {:error, reason} -> {:error, reason}
@@ -95,4 +97,14 @@ defmodule Parrhesia.Auth.Nip98 do
       true -> :ok
     end
   end
+
+  defp consume_replay_token(%{"id" => event_id, "created_at" => created_at}, opts)
+       when is_binary(event_id) and is_integer(created_at) do
+    case Keyword.get(opts, :replay_cache, Nip98ReplayCache) do
+      nil -> :ok
+      replay_cache -> Nip98ReplayCache.consume(replay_cache, event_id, created_at, opts)
+    end
+  end
+
+  defp consume_replay_token(_event, _opts), do: {:error, :invalid_event}
 end

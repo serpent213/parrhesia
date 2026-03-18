@@ -13,6 +13,7 @@ defmodule Parrhesia.Auth.Supervisor do
   def init(_init_arg) do
     children = [
       {Parrhesia.Auth.Challenges, name: Parrhesia.Auth.Challenges},
+      {Parrhesia.Auth.Nip98ReplayCache, name: Parrhesia.Auth.Nip98ReplayCache},
       {Parrhesia.API.Identity.Manager, []}
     ]
 

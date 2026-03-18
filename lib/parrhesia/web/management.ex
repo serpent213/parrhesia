@@ -35,6 +35,9 @@ defmodule Parrhesia.Web.Management do
       {:error, :stale_event} ->
         send_json(conn, 401, %{"ok" => false, "error" => "stale-auth-event"})
 
+      {:error, :replayed_auth_event} ->
+        send_json(conn, 401, %{"ok" => false, "error" => "replayed-auth-event"})
+
       {:error, :invalid_method_tag} ->
         send_json(conn, 401, %{"ok" => false, "error" => "auth-method-tag-mismatch"})
 

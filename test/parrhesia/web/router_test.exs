@@ -198,14 +198,11 @@ defmodule Parrhesia.Web.RouterTest do
 
   test "POST /management accepts valid NIP-98 header" do
     management_url = "http://www.example.com/management"
-    auth_event = nip98_event("POST", management_url)
-
-    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
 
     conn =
       conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert conn.status == 200
@@ -244,8 +241,6 @@ defmodule Parrhesia.Web.RouterTest do
 
   test "POST /management supports ACL methods" do
     management_url = "http://www.example.com/management"
-    auth_event = nip98_event("POST", management_url)
-    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
 
     grant_conn =
       conn(
@@ -262,7 +257,7 @@ defmodule Parrhesia.Web.RouterTest do
         })
       )
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert grant_conn.status == 200
@@ -277,7 +272,7 @@ defmodule Parrhesia.Web.RouterTest do
         })
       )
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert list_conn.status == 200
@@ -299,8 +294,6 @@ defmodule Parrhesia.Web.RouterTest do
 
   test "POST /management supports identity methods" do
     management_url = "http://www.example.com/management"
-    auth_event = nip98_event("POST", management_url)
-    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
 
     conn =
       conn(
@@ -312,7 +305,7 @@ defmodule Parrhesia.Web.RouterTest do
         })
       )
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert conn.status == 200
@@ -330,8 +323,6 @@ defmodule Parrhesia.Web.RouterTest do
 
   test "POST /management stats and health include sync summary" do
     management_url = "http://www.example.com/management"
-    auth_event = nip98_event("POST", management_url)
-    authorization = "Nostr " <> Base.encode64(JSON.encode!(auth_event))
     initial_total = Sync.sync_stats() |> elem(1) |> Map.fetch!("servers_total")
     server_id = "router-sync-#{System.unique_integer([:positive, :monotonic])}"
 
@@ -366,7 +357,7 @@ defmodule Parrhesia.Web.RouterTest do
         })
       )
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert stats_conn.status == 200
@@ -390,7 +381,7 @@ defmodule Parrhesia.Web.RouterTest do
         })
       )
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", authorization)
+      |> put_req_header("authorization", nip98_authorization("POST", management_url))
       |> Router.call([])
 
     assert health_conn.status == 200
@@ -415,6 +406,32 @@ defmodule Parrhesia.Web.RouterTest do
     assert conn.status == 404
   end
 
+  test "POST /management rejects replayed NIP-98 headers" do
+    management_url = "http://www.example.com/management"
+    authorization = nip98_authorization("POST", management_url)
+
+    first_conn =
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert first_conn.status == 200
+
+    second_conn =
+      conn(:post, "/management", JSON.encode!(%{"method" => "ping", "params" => %{}}))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", authorization)
+      |> Router.call([])
+
+    assert second_conn.status == 401
+
+    assert JSON.decode!(second_conn.resp_body) == %{
+             "ok" => false,
+             "error" => "replayed-auth-event"
+           }
+  end
+
   defp nip98_event(method, url) do
     now = System.system_time(:second)
 
@@ -423,11 +440,15 @@ defmodule Parrhesia.Web.RouterTest do
       "created_at" => now,
       "kind" => 27_235,
       "tags" => [["method", method], ["u", url]],
-      "content" => "",
+      "content" => "token-#{System.unique_integer([:positive, :monotonic])}",
       "sig" => String.duplicate("b", 128)
     }
 
     Map.put(base, "id", EventValidator.compute_id(base))
+  end
+
+  defp nip98_authorization(method, url) do
+    "Nostr " <> Base.encode64(JSON.encode!(nip98_event(method, url)))
   end
 
   defp listener(overrides) do

@@ -36,6 +36,31 @@ defmodule Parrhesia.Auth.Nip98Test do
              Nip98.validate_authorization_header(header, "POST", url, max_age_seconds: 180)
   end
 
+  test "rejects replayed authorization headers" do
+    url = "http://example.com/management"
+    event = nip98_event("POST", url)
+    header = "Nostr " <> Base.encode64(JSON.encode!(event))
+
+    replay_cache =
+      start_supervised!({Parrhesia.Auth.Nip98ReplayCache, name: nil})
+
+    assert {:ok, _event} =
+             Nip98.validate_authorization_header(
+               header,
+               "POST",
+               url,
+               replay_cache: replay_cache
+             )
+
+    assert {:error, :replayed_auth_event} =
+             Nip98.validate_authorization_header(
+               header,
+               "POST",
+               url,
+               replay_cache: replay_cache
+             )
+  end
+
   defp nip98_event(method, url, overrides \\ %{}) do
     now = System.system_time(:second)
 
@@ -44,7 +69,7 @@ defmodule Parrhesia.Auth.Nip98Test do
       "created_at" => now,
       "kind" => 27_235,
       "tags" => [["method", method], ["u", url]],
-      "content" => "",
+      "content" => "token-#{System.unique_integer([:positive, :monotonic])}",
       "sig" => String.duplicate("b", 128)
     }
 
