@@ -29,6 +29,7 @@ defmodule Parrhesia.TestSupport.Runtime do
   defp required_processes do
     [
       Parrhesia.Supervisor,
+      Parrhesia.ConnectionStats,
       Parrhesia.Config,
       Parrhesia.Subscriptions.Supervisor,
       Parrhesia.API.Stream.Supervisor,

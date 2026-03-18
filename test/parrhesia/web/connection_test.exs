@@ -1003,6 +1003,7 @@ defmodule Parrhesia.Web.ConnectionTest do
       opts
       |> Keyword.put_new(:subscription_index, nil)
       |> Keyword.put_new(:trap_exit?, false)
+      |> Keyword.put_new(:track_population?, false)
 
     {:ok, state} = Connection.init(opts)
     state

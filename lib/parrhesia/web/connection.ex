@@ -9,6 +9,7 @@ defmodule Parrhesia.Web.Connection do
   alias Parrhesia.API.RequestContext
   alias Parrhesia.API.Stream
   alias Parrhesia.Auth.Challenges
+  alias Parrhesia.ConnectionStats
   alias Parrhesia.Negentropy.Sessions
   alias Parrhesia.Policy.ConnectionPolicy
   alias Parrhesia.Policy.EventPolicy
@@ -70,7 +71,8 @@ defmodule Parrhesia.Web.Connection do
             event_ingest_window_seconds: @default_event_ingest_window_seconds,
             event_ingest_window_started_at_ms: 0,
             event_ingest_count: 0,
-            auth_max_age_seconds: @default_auth_max_age_seconds
+            auth_max_age_seconds: @default_auth_max_age_seconds,
+            track_population?: true
 
   @type overflow_strategy :: :close | :drop_oldest | :drop_newest
 
@@ -106,7 +108,8 @@ defmodule Parrhesia.Web.Connection do
           event_ingest_window_seconds: pos_integer(),
           event_ingest_window_started_at_ms: integer(),
           event_ingest_count: non_neg_integer(),
-          auth_max_age_seconds: pos_integer()
+          auth_max_age_seconds: pos_integer(),
+          track_population?: boolean()
         }
 
   @impl true
@@ -134,9 +137,11 @@ defmodule Parrhesia.Web.Connection do
       max_event_ingest_per_window: max_event_ingest_per_window(opts),
       event_ingest_window_seconds: event_ingest_window_seconds(opts),
       event_ingest_window_started_at_ms: System.monotonic_time(:millisecond),
-      auth_max_age_seconds: auth_max_age_seconds(opts)
+      auth_max_age_seconds: auth_max_age_seconds(opts),
+      track_population?: track_population?(opts)
     }
 
+    :ok = maybe_track_connection_open(state)
     Telemetry.emit_process_mailbox_depth(:connection)
     {:ok, state}
   end
@@ -303,6 +308,8 @@ defmodule Parrhesia.Web.Connection do
 
   @impl true
   def terminate(_reason, %__MODULE__{} = state) do
+    :ok = maybe_track_subscription_delta(state, -map_size(state.subscriptions))
+    :ok = maybe_track_connection_close(state)
     :ok = maybe_unsubscribe_all_stream_subscriptions(state)
     :ok = maybe_remove_index_owner(state)
     :ok = maybe_clear_auth_challenge(state)
@@ -311,17 +318,21 @@ defmodule Parrhesia.Web.Connection do
 
   defp handle_event_ingest(%__MODULE__{} = state, event) do
     event_id = Map.get(event, "id", "")
+    traffic_class = traffic_class_for_event(event)
 
     case maybe_allow_event_ingest(state) do
       {:ok, next_state} ->
         maybe_publish_ingested_event(next_state, state, event, event_id)
 
       {:error, reason} ->
+        maybe_emit_rate_limit_hit(reason, traffic_class)
         ingest_error_response(state, event_id, reason)
     end
   end
 
   defp maybe_publish_ingested_event(next_state, state, event, event_id) do
+    traffic_class = traffic_class_for_event(event)
+
     with :ok <-
            maybe_allow_remote_ip_event_ingest(
              next_state.remote_ip,
@@ -332,6 +343,7 @@ defmodule Parrhesia.Web.Connection do
       publish_event_response(next_state, event)
     else
       {:error, reason} ->
+        maybe_emit_rate_limit_hit(reason, traffic_class)
         ingest_error_response(state, event_id, reason)
     end
   end
@@ -437,6 +449,8 @@ defmodule Parrhesia.Web.Connection do
         )
 
       {:error, :subscription_limit_reached} ->
+        maybe_emit_rate_limit_hit(:subscription_limit_reached)
+
         response =
           Protocol.encode_relay({
             :closed,
@@ -990,21 +1004,37 @@ defmodule Parrhesia.Web.Connection do
     telemetry_metadata = telemetry_metadata_for_fanout_events(fanout_events)
 
     case enqueue_fanout_events(state, fanout_events) do
-      {:ok, next_state} ->
+      {:ok, next_state, stats} ->
         Telemetry.emit(
           [:parrhesia, :fanout, :stop],
-          %{duration: System.monotonic_time() - started_at},
+          %{
+            duration: System.monotonic_time() - started_at,
+            considered: stats.considered,
+            enqueued: stats.enqueued
+          },
           telemetry_metadata
         )
 
         {:ok, maybe_schedule_drain(next_state)}
 
-      {:close, next_state} ->
+      {:close, next_state, stats} ->
         Telemetry.emit(
           [:parrhesia, :connection, :outbound_queue, :overflow],
           %{count: 1},
           telemetry_metadata
         )
+
+        Telemetry.emit(
+          [:parrhesia, :fanout, :stop],
+          %{
+            duration: System.monotonic_time() - started_at,
+            considered: stats.considered,
+            enqueued: stats.enqueued
+          },
+          telemetry_metadata
+        )
+
+        maybe_emit_rate_limit_hit(:outbound_queue_overflow, telemetry_metadata.traffic_class)
 
         close_with_outbound_overflow(next_state)
     end
@@ -1023,15 +1053,27 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp enqueue_fanout_events(state, fanout_events) do
-    Enum.reduce_while(fanout_events, {:ok, state}, fn
-      {subscription_id, event}, {:ok, acc} when is_binary(subscription_id) and is_map(event) ->
+    initial_stats = %{considered: 0, enqueued: 0}
+
+    Enum.reduce_while(fanout_events, {:ok, state, initial_stats}, fn
+      {subscription_id, event}, {:ok, acc, stats}
+      when is_binary(subscription_id) and is_map(event) ->
         case maybe_enqueue_fanout_event(acc, subscription_id, event) do
-          {:ok, next_acc} -> {:cont, {:ok, next_acc}}
-          {:close, next_acc} -> {:halt, {:close, next_acc}}
+          {:ok, next_acc, enqueued?} ->
+            next_stats = %{
+              considered: stats.considered + 1,
+              enqueued: stats.enqueued + if(enqueued?, do: 1, else: 0)
+            }
+
+            {:cont, {:ok, next_acc, next_stats}}
+
+          {:close, next_acc} ->
+            next_stats = %{stats | considered: stats.considered + 1}
+            {:halt, {:close, next_acc, next_stats}}
         end
 
-      _invalid_event, {:ok, acc} ->
-        {:cont, {:ok, acc}}
+      _invalid_event, {:ok, acc, stats} ->
+        {:cont, {:ok, acc, stats}}
     end)
   end
 
@@ -1039,7 +1081,7 @@ defmodule Parrhesia.Web.Connection do
     if subscription_matches?(state, subscription_id, event) do
       enqueue_outbound(state, {subscription_id, event}, traffic_class_for_event(event))
     else
-      {:ok, state}
+      {:ok, state, false}
     end
   end
 
@@ -1065,15 +1107,17 @@ defmodule Parrhesia.Web.Connection do
       }
 
     emit_outbound_queue_depth(next_state, %{traffic_class: traffic_class})
-    {:ok, next_state}
+    {:ok, next_state, true}
   end
 
   defp enqueue_outbound(
          %__MODULE__{outbound_overflow_strategy: :drop_newest} = state,
          _queue_entry,
          _traffic_class
-       ),
-       do: {:ok, state}
+       ) do
+    emit_outbound_queue_drop(:drop_newest)
+    {:ok, state, false}
+  end
 
   defp enqueue_outbound(
          %__MODULE__{outbound_overflow_strategy: :drop_oldest} = state,
@@ -1086,7 +1130,8 @@ defmodule Parrhesia.Web.Connection do
     next_state = %__MODULE__{state | outbound_queue: next_queue, outbound_queue_size: next_size}
 
     emit_outbound_queue_depth(next_state, %{traffic_class: traffic_class})
-    {:ok, next_state}
+    emit_outbound_queue_drop(:drop_oldest)
+    {:ok, next_state, true}
   end
 
   defp enqueue_outbound(
@@ -1123,6 +1168,7 @@ defmodule Parrhesia.Web.Connection do
       }
       |> maybe_schedule_drain()
 
+    emit_outbound_queue_drain(length(frames))
     emit_outbound_queue_depth(next_state)
 
     {Enum.reverse(frames), next_state}
@@ -1140,6 +1186,7 @@ defmodule Parrhesia.Web.Connection do
           drain_scheduled?: false
       }
 
+    emit_outbound_queue_drain(length(frames))
     emit_outbound_queue_depth(next_state)
 
     {Enum.reverse(frames), next_state}
@@ -1227,12 +1274,26 @@ defmodule Parrhesia.Web.Connection do
 
   defp put_subscription(%__MODULE__{} = state, subscription_id, subscription) do
     subscriptions = Map.put(state.subscriptions, subscription_id, subscription)
-    %__MODULE__{state | subscriptions: subscriptions}
+    next_state = %__MODULE__{state | subscriptions: subscriptions}
+
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      next_state
+    else
+      :ok = maybe_track_subscription_delta(next_state, 1)
+      next_state
+    end
   end
 
   defp drop_subscription(%__MODULE__{} = state, subscription_id) do
     subscriptions = Map.delete(state.subscriptions, subscription_id)
-    %__MODULE__{state | subscriptions: subscriptions}
+    next_state = %__MODULE__{state | subscriptions: subscriptions}
+
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      :ok = maybe_track_subscription_delta(next_state, -1)
+      next_state
+    else
+      next_state
+    end
   end
 
   defp drop_queued_subscription_events(
@@ -1708,6 +1769,10 @@ defmodule Parrhesia.Web.Connection do
     |> Keyword.get(:auth_max_age_seconds, @default_auth_max_age_seconds)
   end
 
+  defp track_population?(opts) when is_list(opts), do: Keyword.get(opts, :track_population?, true)
+  defp track_population?(opts) when is_map(opts), do: Map.get(opts, :track_population?, true)
+  defp track_population?(_opts), do: true
+
   defp maybe_configure_exit_trapping(opts) do
     if trap_exit?(opts) do
       Process.flag(:trap_exit, true)
@@ -1788,5 +1853,73 @@ defmodule Parrhesia.Web.Connection do
   catch
     :exit, {:noproc, _details} -> :ok
     :exit, {:normal, _details} -> :ok
+  end
+
+  defp maybe_track_connection_open(%__MODULE__{track_population?: false}), do: :ok
+
+  defp maybe_track_connection_open(%__MODULE__{} = state) do
+    ConnectionStats.connection_open(listener_id(state))
+  end
+
+  defp maybe_track_connection_close(%__MODULE__{track_population?: false}), do: :ok
+
+  defp maybe_track_connection_close(%__MODULE__{} = state) do
+    ConnectionStats.connection_close(listener_id(state))
+  end
+
+  defp maybe_track_subscription_delta(_state, 0), do: :ok
+  defp maybe_track_subscription_delta(%__MODULE__{track_population?: false}, _delta), do: :ok
+
+  defp maybe_track_subscription_delta(%__MODULE__{} = state, delta) do
+    ConnectionStats.subscriptions_change(listener_id(state), delta)
+  end
+
+  defp listener_id(%__MODULE__{listener: %{id: id}}), do: id
+  defp listener_id(_state), do: :unknown
+
+  defp emit_outbound_queue_drain(0), do: :ok
+
+  defp emit_outbound_queue_drain(count) when is_integer(count) and count > 0 do
+    Telemetry.emit([:parrhesia, :connection, :outbound_queue, :drain], %{count: count}, %{})
+  end
+
+  defp emit_outbound_queue_drop(strategy) do
+    Telemetry.emit(
+      [:parrhesia, :connection, :outbound_queue, :drop],
+      %{count: 1},
+      %{strategy: strategy}
+    )
+  end
+
+  defp maybe_emit_rate_limit_hit(reason, traffic_class \\ :generic)
+
+  defp maybe_emit_rate_limit_hit(:event_rate_limited, traffic_class) do
+    emit_rate_limit_hit(:event_ingest_per_connection, traffic_class)
+  end
+
+  defp maybe_emit_rate_limit_hit(:ip_event_rate_limited, traffic_class) do
+    emit_rate_limit_hit(:event_ingest_per_ip, traffic_class)
+  end
+
+  defp maybe_emit_rate_limit_hit(:relay_event_rate_limited, traffic_class) do
+    emit_rate_limit_hit(:event_ingest_relay, traffic_class)
+  end
+
+  defp maybe_emit_rate_limit_hit(:subscription_limit_reached, traffic_class) do
+    emit_rate_limit_hit(:subscriptions_per_connection, traffic_class)
+  end
+
+  defp maybe_emit_rate_limit_hit(:outbound_queue_overflow, traffic_class) do
+    emit_rate_limit_hit(:outbound_queue, traffic_class)
+  end
+
+  defp maybe_emit_rate_limit_hit(_reason, _traffic_class), do: :ok
+
+  defp emit_rate_limit_hit(scope, traffic_class) do
+    Telemetry.emit(
+      [:parrhesia, :rate_limit, :hit],
+      %{count: 1},
+      %{scope: scope, traffic_class: traffic_class}
+    )
   end
 end

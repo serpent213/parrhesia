@@ -26,7 +26,7 @@ defmodule Parrhesia.FaultInjectionTest do
   end
 
   test "EVENT responds with error prefix when storage is unavailable" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
     event = valid_event()
 
     assert {:push, {:text, response}, _next_state} =
@@ -36,7 +36,7 @@ defmodule Parrhesia.FaultInjectionTest do
   end
 
   test "REQ closes with storage error when query fails" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
     payload = JSON.encode!(["REQ", "sub-db-down", %{"kinds" => [1]}])
 
     assert {:push, {:text, response}, ^state} =

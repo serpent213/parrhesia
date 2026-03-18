@@ -6,7 +6,7 @@ defmodule Parrhesia.Web.ConformanceTest do
   alias Parrhesia.Web.Connection
 
   test "REQ -> EOSE emitted once and CLOSE emits CLOSED" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     req_payload = JSON.encode!(["REQ", "sub-e2e", %{"kinds" => [1]}])
 
@@ -26,7 +26,7 @@ defmodule Parrhesia.Web.ConformanceTest do
   end
 
   test "EVENT accepted path returns canonical OK frame" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     event = valid_event()
 
@@ -37,7 +37,7 @@ defmodule Parrhesia.Web.ConformanceTest do
   end
 
   test "wrapped kind 1059 welcome delivery is recipient-gated" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
     recipient = String.duplicate("9", 64)
 
     wrapped_welcome =
@@ -90,7 +90,7 @@ defmodule Parrhesia.Web.ConformanceTest do
   end
 
   test "kind 445 commit ACK implies durable visibility before wrapped welcome ACK" do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     commit_event =
       valid_event(%{
@@ -161,7 +161,7 @@ defmodule Parrhesia.Web.ConformanceTest do
       Application.put_env(:parrhesia, :policies, previous_policies)
     end)
 
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     relay_list_event =
       valid_event(%{

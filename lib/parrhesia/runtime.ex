@@ -16,6 +16,7 @@ defmodule Parrhesia.Runtime do
   def children do
     [
       Parrhesia.Telemetry,
+      Parrhesia.ConnectionStats,
       Parrhesia.Config,
       Parrhesia.Web.EventIngestLimiter,
       Parrhesia.Web.IPEventIngestLimiter,

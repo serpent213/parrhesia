@@ -30,10 +30,19 @@ defmodule Parrhesia.Tasks.ExpirationWorker do
   def handle_info(:tick, state) do
     started_at = System.monotonic_time()
 
-    _result = Storage.events().purge_expired([])
+    purged_events =
+      case Storage.events().purge_expired([]) do
+        {:ok, count} when is_integer(count) and count >= 0 -> count
+        _other -> 0
+      end
 
     duration = System.monotonic_time() - started_at
-    Telemetry.emit([:parrhesia, :maintenance, :purge_expired, :stop], %{duration: duration}, %{})
+
+    Telemetry.emit(
+      [:parrhesia, :maintenance, :purge_expired, :stop],
+      %{duration: duration, purged_events: purged_events},
+      %{}
+    )
 
     schedule_tick(state.interval_ms)
     {:noreply, state}

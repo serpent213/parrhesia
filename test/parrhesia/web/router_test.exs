@@ -6,6 +6,8 @@ defmodule Parrhesia.Web.RouterTest do
 
   alias Parrhesia.API.Sync
   alias Parrhesia.Protocol.EventValidator
+  alias Parrhesia.Repo
+  alias Parrhesia.Telemetry
   alias Parrhesia.Web.Listener
   alias Parrhesia.Web.Router
 
@@ -49,6 +51,47 @@ defmodule Parrhesia.Web.RouterTest do
 
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+  end
+
+  test "GET /metrics includes exported relay counters and gauges" do
+    Telemetry.emit(
+      [:parrhesia, :ingest, :result],
+      %{count: 1},
+      %{traffic_class: :generic, outcome: :accepted, reason: :accepted}
+    )
+
+    Telemetry.emit(
+      [:parrhesia, :listener, :population],
+      %{connections: 2, subscriptions: 3},
+      %{listener_id: :public}
+    )
+
+    Telemetry.emit(
+      [:parrhesia, :rate_limit, :hit],
+      %{count: 1},
+      %{scope: :event_ingest_per_ip, traffic_class: :generic}
+    )
+
+    Telemetry.emit_vm_memory()
+    _ = Repo.query!("SELECT 1")
+
+    conn =
+      conn(:get, "/metrics")
+      |> route_conn(
+        listener(%{
+          features: %{metrics: %{enabled: true, access: %{private_networks_only: true}}}
+        })
+      )
+
+    assert conn.status == 200
+    assert String.contains?(conn.resp_body, "parrhesia_ingest_events_count")
+    assert String.contains?(conn.resp_body, "parrhesia_listener_connections_active")
+    assert String.contains?(conn.resp_body, "listener_id=\"public\"")
+    assert String.contains?(conn.resp_body, "parrhesia_rate_limit_hits_count")
+    assert String.contains?(conn.resp_body, "scope=\"event_ingest_per_ip\"")
+    assert String.contains?(conn.resp_body, "parrhesia_db_query_count")
+    assert String.contains?(conn.resp_body, "repo_role=\"write\"")
+    assert String.contains?(conn.resp_body, "parrhesia_vm_memory_binary_bytes")
   end
 
   test "GET /metrics denies public-network clients by default" do

@@ -251,7 +251,12 @@ defmodule Parrhesia.Web.ConnectionNIP43Test do
   end
 
   defp connection_state(opts \\ []) do
-    {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
+    opts =
+      opts
+      |> Keyword.put_new(:subscription_index, nil)
+      |> Keyword.put_new(:track_population?, false)
+
+    {:ok, state} = Connection.init(opts)
     state
   end
 

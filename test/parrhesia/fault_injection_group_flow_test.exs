@@ -28,7 +28,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
   test "kind 445 commit recovers cleanly after storage outage", %{
     previous_storage: previous_storage
   } do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     group_event =
       build_event(%{
@@ -62,7 +62,7 @@ defmodule Parrhesia.FaultInjectionGroupFlowTest do
   test "reordered group flow remains deterministic after outage recovery", %{
     previous_storage: previous_storage
   } do
-    {:ok, state} = Connection.init(subscription_index: nil)
+    {:ok, state} = Connection.init(subscription_index: nil, track_population?: false)
 
     group_id = String.duplicate("b", 64)
     now = System.system_time(:second)

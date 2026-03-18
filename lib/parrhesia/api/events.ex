@@ -35,6 +35,7 @@ defmodule Parrhesia.API.Events do
   def publish(event, opts) when is_map(event) and is_list(opts) do
     started_at = System.monotonic_time()
     event_id = Map.get(event, "id", "")
+    telemetry_metadata = telemetry_metadata_for_event(event)
 
     with {:ok, context} <- fetch_context(opts),
          :ok <- validate_event_payload_size(event, max_event_bytes(opts)),
@@ -45,8 +46,10 @@ defmodule Parrhesia.API.Events do
       Telemetry.emit(
         [:parrhesia, :ingest, :stop],
         %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_event(event)
+        telemetry_metadata
       )
+
+      emit_ingest_result(telemetry_metadata, :accepted, :accepted)
 
       message =
         case NIP43.finalize_publish(event, publish_state, nip43_opts(opts, context)) do
@@ -66,9 +69,12 @@ defmodule Parrhesia.API.Events do
        }}
     else
       {:error, :invalid_context} = error ->
+        emit_ingest_result(telemetry_metadata, :rejected, :invalid_context)
         error
 
       {:error, reason} ->
+        emit_ingest_result(telemetry_metadata, :rejected, reason)
+
         {:ok,
          %PublishResult{
            event_id: event_id,
@@ -86,6 +92,7 @@ defmodule Parrhesia.API.Events do
 
   def query(filters, opts) when is_list(filters) and is_list(opts) do
     started_at = System.monotonic_time()
+    telemetry_metadata = telemetry_metadata_for_filters(filters, :query)
 
     with {:ok, context} <- fetch_context(opts),
          :ok <- maybe_validate_filters(filters, opts),
@@ -95,11 +102,17 @@ defmodule Parrhesia.API.Events do
 
       Telemetry.emit(
         [:parrhesia, :query, :stop],
-        %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_filters(filters)
+        %{duration: System.monotonic_time() - started_at, result_count: length(events)},
+        telemetry_metadata
       )
 
+      emit_query_result(telemetry_metadata, :ok)
+
       {:ok, events}
+    else
+      {:error, reason} = error ->
+        emit_query_result(telemetry_metadata, :error, reason)
+        error
     end
   end
 
@@ -110,6 +123,7 @@ defmodule Parrhesia.API.Events do
 
   def count(filters, opts) when is_list(filters) and is_list(opts) do
     started_at = System.monotonic_time()
+    telemetry_metadata = telemetry_metadata_for_filters(filters, :count)
 
     with {:ok, context} <- fetch_context(opts),
          :ok <- maybe_validate_filters(filters, opts),
@@ -120,11 +134,17 @@ defmodule Parrhesia.API.Events do
          {:ok, result} <- maybe_build_count_result(filters, count, Keyword.get(opts, :options)) do
       Telemetry.emit(
         [:parrhesia, :query, :stop],
-        %{duration: System.monotonic_time() - started_at},
-        telemetry_metadata_for_filters(filters)
+        %{duration: System.monotonic_time() - started_at, result_count: count},
+        telemetry_metadata
       )
 
+      emit_query_result(telemetry_metadata, :ok)
+
       {:ok, result}
+    else
+      {:error, reason} = error ->
+        emit_query_result(telemetry_metadata, :error, reason)
+        error
     end
   end
 
@@ -242,8 +262,8 @@ defmodule Parrhesia.API.Events do
     %{traffic_class: traffic_class_for_event(event)}
   end
 
-  defp telemetry_metadata_for_filters(filters) do
-    %{traffic_class: traffic_class_for_filters(filters)}
+  defp telemetry_metadata_for_filters(filters, operation) do
+    %{traffic_class: traffic_class_for_filters(filters), operation: operation}
   end
 
   defp traffic_class_for_filters(filters) do
@@ -275,6 +295,30 @@ defmodule Parrhesia.API.Events do
   end
 
   defp traffic_class_for_event(_event), do: :generic
+
+  defp emit_ingest_result(metadata, outcome, reason) do
+    Telemetry.emit(
+      [:parrhesia, :ingest, :result],
+      %{count: 1},
+      Map.merge(metadata, %{outcome: outcome, reason: normalize_reason(reason)})
+    )
+  end
+
+  defp emit_query_result(metadata, outcome, reason \\ nil) do
+    Telemetry.emit(
+      [:parrhesia, :query, :result],
+      %{count: 1},
+      Map.merge(
+        metadata,
+        %{outcome: outcome, reason: normalize_reason(reason || outcome)}
+      )
+    )
+  end
+
+  defp normalize_reason(reason) when is_atom(reason), do: reason
+  defp normalize_reason(reason) when is_binary(reason), do: reason
+  defp normalize_reason(nil), do: :none
+  defp normalize_reason(_reason), do: :unknown
 
   defp fetch_context(opts) do
     case Keyword.get(opts, :context) do
