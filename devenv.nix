@@ -101,6 +101,8 @@ in {
         nostr-bench
         # Nostr reference servers
         nostr-rs-relay
+        # Benchmark graph
+        gnuplot
       ]
       ++ lib.optionals pkgs.stdenv.hostPlatform.isx86_64 [
         strfry

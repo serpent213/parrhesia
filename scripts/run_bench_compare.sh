@@ -477,4 +477,35 @@ for (let i = 0; i < runs; i += 1) {
   }
   console.log(line);
 }
+
+// Structured JSON output for automation (bench:update pipeline)
+if (process.env.BENCH_JSON_OUT) {
+  const jsonSummary = {};
+  const serverKeys = [
+    ["parrhesia-pg", "parrhesia"],
+    ["parrhesia-memory", "parrhesiaMemory"],
+  ];
+  if (hasStrfry) serverKeys.push(["strfry", "strfry"]);
+  if (hasNostrRs) serverKeys.push(["nostr-rs-relay", "nostrRsRelay"]);
+
+  for (const [outputKey, summaryKey] of serverKeys) {
+    const s = summary[summaryKey];
+    jsonSummary[outputKey] = {
+      connect_avg_ms: s.connectAvgMs,
+      connect_max_ms: s.connectMaxMs,
+      echo_tps: s.echoTps,
+      echo_mibs: s.echoSizeMiBS,
+      event_tps: s.eventTps,
+      event_mibs: s.eventSizeMiBS,
+      req_tps: s.reqTps,
+      req_mibs: s.reqSizeMiBS,
+    };
+  }
+
+  fs.writeFileSync(
+    process.env.BENCH_JSON_OUT,
+    JSON.stringify(jsonSummary, null, 2) + "\n",
+    "utf8"
+  );
+}
 NODE
