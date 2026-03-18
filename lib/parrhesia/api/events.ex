@@ -1,6 +1,17 @@
 defmodule Parrhesia.API.Events do
   @moduledoc """
   Canonical event publish, query, and count API.
+
+  This is the main in-process API for working with Nostr events. It applies the same core
+  validation and policy checks used by the relay edge, but without going through a socket or
+  HTTP transport.
+
+  All public functions expect `opts[:context]` to contain a `Parrhesia.API.RequestContext`.
+  That context drives authorization, caller attribution, and downstream policy behavior.
+
+  `publish/2` intentionally returns `{:ok, %PublishResult{accepted: false}}` for policy and
+  storage rejections so callers can mirror relay `OK` semantics without treating a rejected
+  event as a process error.
   """
 
   alias Parrhesia.API.Events.PublishResult
@@ -29,6 +40,24 @@ defmodule Parrhesia.API.Events do
                   449
                 ])
 
+  @doc """
+  Validates, authorizes, persists, and fans out an event.
+
+  Required options:
+
+  - `:context` - a `Parrhesia.API.RequestContext`
+
+  Supported options:
+
+  - `:max_event_bytes` - overrides the configured max encoded event size
+  - `:path`, `:private_key`, `:configured_private_key` - forwarded to the NIP-43 helper flow
+
+  Return semantics:
+
+  - `{:ok, %PublishResult{accepted: true}}` for accepted events
+  - `{:ok, %PublishResult{accepted: false}}` for rejected or duplicate events
+  - `{:error, :invalid_context}` only when the call itself is malformed
+  """
   @spec publish(map(), keyword()) :: {:ok, PublishResult.t()} | {:error, term()}
   def publish(event, opts \\ [])
 
@@ -87,6 +116,22 @@ defmodule Parrhesia.API.Events do
 
   def publish(_event, _opts), do: {:error, :invalid_event}
 
+  @doc """
+  Queries stored events plus any dynamic NIP-43 events visible to the caller.
+
+  Required options:
+
+  - `:context` - a `Parrhesia.API.RequestContext`
+
+  Supported options:
+
+  - `:max_filter_limit` - overrides the configured per-filter limit
+  - `:validate_filters?` - skips filter validation when `false`
+  - `:authorize_read?` - skips read policy checks when `false`
+
+  The skip flags are primarily for internal composition, such as `Parrhesia.API.Stream`.
+  External callers should normally leave them enabled.
+  """
   @spec query([map()], keyword()) :: {:ok, [map()]} | {:error, term()}
   def query(filters, opts \\ [])
 
@@ -118,6 +163,22 @@ defmodule Parrhesia.API.Events do
 
   def query(_filters, _opts), do: {:error, :invalid_filters}
 
+  @doc """
+  Counts events matching the given filters.
+
+  Required options:
+
+  - `:context` - a `Parrhesia.API.RequestContext`
+
+  Supported options:
+
+  - `:validate_filters?` - skips filter validation when `false`
+  - `:authorize_read?` - skips read policy checks when `false`
+  - `:options` - when set to a map, returns a NIP-45-style payload instead of a bare integer
+
+  When `opts[:options]` is a map, the result shape is `%{"count" => count, "approximate" => false}`.
+  If `opts[:options]["hll"]` is `true` and the feature is enabled, an `"hll"` field is included.
+  """
   @spec count([map()], keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
   def count(filters, opts \\ [])
 

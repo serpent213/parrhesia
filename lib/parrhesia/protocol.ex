@@ -1,6 +1,15 @@
 defmodule Parrhesia.Protocol do
   @moduledoc """
   Nostr protocol message decode/encode helpers.
+
+  This module is transport-oriented: it turns websocket payloads into structured tuples and
+  back again.
+
+  For programmatic API calls inside the application, prefer the `Parrhesia.API.*` modules.
+  In particular:
+
+  - `validate_event/1` returns user-facing error strings
+  - `Parrhesia.API.Auth.validate_event/1` returns machine-friendly validator atoms
   """
 
   alias Parrhesia.Protocol.EventValidator
@@ -41,6 +50,9 @@ defmodule Parrhesia.Protocol do
 
   @count_options_keys MapSet.new(["hll", "approximate"])
 
+  @doc """
+  Decodes a client websocket payload into a structured protocol tuple.
+  """
   @spec decode_client(binary()) :: {:ok, client_message()} | {:error, decode_error()}
   def decode_client(payload) when is_binary(payload) do
     with {:ok, decoded} <- decode_json(payload) do
@@ -48,6 +60,9 @@ defmodule Parrhesia.Protocol do
     end
   end
 
+  @doc """
+  Validates an event and returns relay-facing error strings.
+  """
   @spec validate_event(event()) :: :ok | {:error, String.t()}
   def validate_event(event) do
     case EventValidator.validate(event) do
@@ -56,6 +71,9 @@ defmodule Parrhesia.Protocol do
     end
   end
 
+  @doc """
+  Encodes a relay message tuple into the JSON frame sent to clients.
+  """
   @spec encode_relay(relay_message()) :: binary()
   def encode_relay(message) do
     message
@@ -63,6 +81,9 @@ defmodule Parrhesia.Protocol do
     |> JSON.encode!()
   end
 
+  @doc """
+  Converts a decode error into the relay notice string that should be sent to a client.
+  """
   @spec decode_error_notice(decode_error()) :: String.t()
   def decode_error_notice(reason) do
     case reason do

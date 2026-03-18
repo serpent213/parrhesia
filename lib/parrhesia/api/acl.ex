@@ -1,12 +1,37 @@
 defmodule Parrhesia.API.ACL do
   @moduledoc """
   Public ACL API and rule matching for protected sync traffic.
+
+  ACL checks are only applied when the requested subject overlaps with
+  `config :parrhesia, :acl, protected_filters: [...]`.
+
+  The intended flow is:
+
+  1. mark a subset of sync traffic as protected with `protected_filters`
+  2. persist pubkey-based grants with `grant/2`
+  3. call `check/3` during sync reads and writes
+
+  Unprotected subjects always return `:ok`.
   """
 
   alias Parrhesia.API.RequestContext
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Storage
 
+  @doc """
+  Persists an ACL rule.
+
+  A typical rule looks like:
+
+  ```elixir
+  %{
+    principal_type: :pubkey,
+    principal: "...64 hex chars...",
+    capability: :sync_read,
+    match: %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+  }
+  ```
+  """
   @spec grant(map(), keyword()) :: :ok | {:error, term()}
   def grant(rule, _opts \\ []) do
     with {:ok, _stored_rule} <- Storage.acl().put_rule(%{}, normalize_rule(rule)) do
@@ -14,16 +39,39 @@ defmodule Parrhesia.API.ACL do
     end
   end
 
+  @doc """
+  Deletes ACL rules matching the given selector.
+
+  The selector is passed through to the configured storage adapter, which typically accepts an
+  id-based selector such as `%{id: rule_id}`.
+  """
   @spec revoke(map(), keyword()) :: :ok | {:error, term()}
   def revoke(rule, _opts \\ []) do
     Storage.acl().delete_rule(%{}, normalize_delete_selector(rule))
   end
 
+  @doc """
+  Lists persisted ACL rules.
+
+  Supported filters are:
+
+  - `:principal_type`
+  - `:principal`
+  - `:capability`
+  """
   @spec list(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list(opts \\ []) do
     Storage.acl().list_rules(%{}, normalize_list_opts(opts))
   end
 
+  @doc """
+  Authorizes a protected sync read or write subject for the given request context.
+
+  Supported capabilities are `:sync_read` and `:sync_write`.
+
+  `opts[:context]` defaults to an empty `Parrhesia.API.RequestContext`, which means protected
+  subjects will fail with `{:error, :auth_required}` until authenticated pubkeys are present.
+  """
   @spec check(atom(), map(), keyword()) :: :ok | {:error, term()}
   def check(capability, subject, opts \\ [])
 
@@ -44,6 +92,9 @@ defmodule Parrhesia.API.ACL do
 
   def check(_capability, _subject, _opts), do: {:error, :invalid_acl_capability}
 
+  @doc """
+  Returns `true` when a filter overlaps the configured protected read surface.
+  """
   @spec protected_read?(map()) :: boolean()
   def protected_read?(filter) when is_map(filter) do
     case protected_filters() do
@@ -57,6 +108,9 @@ defmodule Parrhesia.API.ACL do
 
   def protected_read?(_filter), do: false
 
+  @doc """
+  Returns `true` when an event matches the configured protected write surface.
+  """
   @spec protected_write?(map()) :: boolean()
   def protected_write?(event) when is_map(event) do
     case protected_filters() do

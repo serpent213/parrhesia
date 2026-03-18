@@ -1,15 +1,40 @@
 defmodule Parrhesia.API.Identity do
   @moduledoc """
   Server-auth identity management.
+
+  Parrhesia uses a single server identity for flows that need the relay to sign events or
+  prove control of a pubkey.
+
+  Identity resolution follows this order:
+
+  1. `opts[:private_key]` or `opts[:configured_private_key]`
+  2. `Application.get_env(:parrhesia, :identity)`
+  3. the persisted file on disk
+
+  Supported options across this module:
+
+  - `:path` - overrides the identity file path
+  - `:private_key` / `:configured_private_key` - uses an explicit hex secret key
+
+  A configured private key is treated as read-only input and therefore cannot be rotated.
   """
 
   alias Parrhesia.API.Auth
 
+  @typedoc """
+  Public identity metadata returned to callers.
+  """
   @type identity_metadata :: %{
           pubkey: String.t(),
           source: :configured | :persisted | :generated | :imported
         }
 
+  @doc """
+  Returns the current server identity metadata.
+
+  This does not generate a new identity. If no configured or persisted identity exists, it
+  returns `{:error, :identity_not_found}`.
+  """
   @spec get(keyword()) :: {:ok, identity_metadata()} | {:error, term()}
   def get(opts \\ []) do
     with {:ok, identity} <- fetch_existing_identity(opts) do
@@ -17,6 +42,9 @@ defmodule Parrhesia.API.Identity do
     end
   end
 
+  @doc """
+  Returns the current identity, generating and persisting one when necessary.
+  """
   @spec ensure(keyword()) :: {:ok, identity_metadata()} | {:error, term()}
   def ensure(opts \\ []) do
     with {:ok, identity} <- ensure_identity(opts) do
@@ -24,6 +52,12 @@ defmodule Parrhesia.API.Identity do
     end
   end
 
+  @doc """
+  Imports an explicit secret key and persists it as the server identity.
+
+  The input map must contain `:secret_key` or `"secret_key"` as a 64-character lowercase or
+  uppercase hex string.
+  """
   @spec import(map(), keyword()) :: {:ok, identity_metadata()} | {:error, term()}
   def import(identity, opts \\ [])
 
@@ -37,6 +71,12 @@ defmodule Parrhesia.API.Identity do
 
   def import(_identity, _opts), do: {:error, :invalid_identity}
 
+  @doc """
+  Generates and persists a fresh server identity.
+
+  Rotation is rejected with `{:error, :configured_identity_cannot_rotate}` when the active
+  identity comes from configuration rather than the persisted file.
+  """
   @spec rotate(keyword()) :: {:ok, identity_metadata()} | {:error, term()}
   def rotate(opts \\ []) do
     with :ok <- ensure_rotation_allowed(opts),
@@ -46,6 +86,18 @@ defmodule Parrhesia.API.Identity do
     end
   end
 
+  @doc """
+  Signs an event with the current server identity.
+
+  The incoming event must already include the fields required to compute a Nostr id:
+
+  - `"created_at"`
+  - `"kind"`
+  - `"tags"`
+  - `"content"`
+
+  On success the returned event includes `"pubkey"`, `"id"`, and `"sig"`.
+  """
   @spec sign_event(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def sign_event(event, opts \\ [])
 
@@ -59,6 +111,9 @@ defmodule Parrhesia.API.Identity do
 
   def sign_event(_event, _opts), do: {:error, :invalid_event}
 
+  @doc """
+  Returns the default filesystem path for the persisted server identity.
+  """
   def default_path do
     Path.join([default_data_dir(), "server_identity.json"])
   end

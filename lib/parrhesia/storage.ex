@@ -4,6 +4,9 @@ defmodule Parrhesia.Storage do
 
   Domain/runtime code should resolve behavior modules through this module instead of
   depending on concrete adapter implementations directly.
+
+  Each accessor validates that the configured module is loaded and declares the expected
+  behaviour before returning it.
   """
 
   @default_modules [
@@ -14,18 +17,33 @@ defmodule Parrhesia.Storage do
     admin: Parrhesia.Storage.Adapters.Postgres.Admin
   ]
 
+  @doc """
+  Returns the configured events storage module.
+  """
   @spec events() :: module()
   def events, do: fetch_module!(:events, Parrhesia.Storage.Events)
 
+  @doc """
+  Returns the configured moderation storage module.
+  """
   @spec moderation() :: module()
   def moderation, do: fetch_module!(:moderation, Parrhesia.Storage.Moderation)
 
+  @doc """
+  Returns the configured ACL storage module.
+  """
   @spec acl() :: module()
   def acl, do: fetch_module!(:acl, Parrhesia.Storage.ACL)
 
+  @doc """
+  Returns the configured groups storage module.
+  """
   @spec groups() :: module()
   def groups, do: fetch_module!(:groups, Parrhesia.Storage.Groups)
 
+  @doc """
+  Returns the configured admin storage module.
+  """
   @spec admin() :: module()
   def admin, do: fetch_module!(:admin, Parrhesia.Storage.Admin)
 

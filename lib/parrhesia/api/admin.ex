@@ -1,6 +1,14 @@
 defmodule Parrhesia.API.Admin do
   @moduledoc """
   Public management API facade.
+
+  This module exposes the DX-friendly control plane for administrative tasks. It wraps
+  storage-backed management methods and a set of built-in helpers for ACL, identity, sync,
+  and listener management.
+
+  `execute/3` accepts the same method names used by NIP-86 style management endpoints, while
+  the dedicated functions (`stats/1`, `health/1`, `list_audit_logs/1`) are easier to call
+  from Elixir code.
   """
 
   alias Parrhesia.API.ACL
@@ -26,6 +34,22 @@ defmodule Parrhesia.API.Admin do
     sync_sync_now
   )
 
+  @doc """
+  Executes a management method by name.
+
+  Built-in methods include:
+
+  - `supportedmethods`
+  - `stats`
+  - `health`
+  - `list_audit_logs`
+  - `acl_grant`, `acl_revoke`, `acl_list`
+  - `identity_get`, `identity_ensure`, `identity_import`, `identity_rotate`
+  - `listener_reload`
+  - `sync_*`
+
+  Unknown methods are delegated to the configured `Parrhesia.Storage.Admin` implementation.
+  """
   @spec execute(String.t() | atom(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def execute(method, params, opts \\ [])
 
@@ -41,6 +65,9 @@ defmodule Parrhesia.API.Admin do
   def execute(method, _params, _opts),
     do: {:error, {:unsupported_method, normalize_method_name(method)}}
 
+  @doc """
+  Returns aggregate relay stats plus nested sync stats.
+  """
   @spec stats(keyword()) :: {:ok, map()} | {:error, term()}
   def stats(opts \\ []) do
     with {:ok, relay_stats} <- relay_stats(),
@@ -49,6 +76,12 @@ defmodule Parrhesia.API.Admin do
     end
   end
 
+  @doc """
+  Returns the overall management health payload.
+
+  The top-level `"status"` is currently derived from sync health, while relay-specific health
+  details remain delegated to storage-backed management methods.
+  """
   @spec health(keyword()) :: {:ok, map()} | {:error, term()}
   def health(opts \\ []) do
     with {:ok, sync_health} <- Sync.sync_health(opts) do
@@ -60,6 +93,12 @@ defmodule Parrhesia.API.Admin do
     end
   end
 
+  @doc """
+  Lists persisted audit log entries from the configured admin storage backend.
+
+  Supported options are storage-adapter specific. The built-in admin execution path forwards
+  `:limit`, `:method`, and `:actor_pubkey`.
+  """
   @spec list_audit_logs(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list_audit_logs(opts \\ []) do
     Storage.admin().list_audit_logs(%{}, opts)

@@ -1,6 +1,9 @@
 defmodule Parrhesia.Config do
   @moduledoc """
   Runtime configuration cache backed by ETS.
+
+  The application environment is copied into ETS at startup so hot-path reads do not need to
+  traverse the application environment repeatedly.
   """
 
   use GenServer
@@ -8,6 +11,9 @@ defmodule Parrhesia.Config do
   @table __MODULE__
   @root_key :config
 
+  @doc """
+  Starts the config cache server.
+  """
   def start_link(init_arg \\ []) do
     GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
   end
@@ -26,6 +32,9 @@ defmodule Parrhesia.Config do
     {:ok, %{}}
   end
 
+  @doc """
+  Returns the cached top-level Parrhesia application config.
+  """
   @spec all() :: map() | keyword()
   def all do
     case :ets.lookup(@table, @root_key) do
@@ -34,6 +43,11 @@ defmodule Parrhesia.Config do
     end
   end
 
+  @doc """
+  Reads a nested config value by path.
+
+  The path may traverse maps or keyword lists. Missing paths return `default`.
+  """
   @spec get([atom()], term()) :: term()
   def get(path, default \\ nil) when is_list(path) do
     case fetch(path) do

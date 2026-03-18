@@ -1,6 +1,15 @@
 defmodule Parrhesia.API.Stream do
   @moduledoc """
   In-process subscription API with relay-equivalent catch-up and live fanout semantics.
+
+  Subscriptions are process-local bridges. After subscribing, the caller receives messages in
+  the same order a relay client would expect:
+
+  - `{:parrhesia, :event, ref, subscription_id, event}` for catch-up and live events
+  - `{:parrhesia, :eose, ref, subscription_id}` after the initial replay finishes
+
+  This API requires a `Parrhesia.API.RequestContext` so read policies are applied exactly as
+  they would be for a transport-backed subscriber.
   """
 
   alias Parrhesia.API.Events
@@ -9,6 +18,16 @@ defmodule Parrhesia.API.Stream do
   alias Parrhesia.Policy.EventPolicy
   alias Parrhesia.Protocol.Filter
 
+  @doc """
+  Starts an in-process subscription for a subscriber pid.
+
+  `opts[:context]` must be a `Parrhesia.API.RequestContext`.
+
+  On success the returned reference is both:
+
+  - the subscription handle used by `unsubscribe/1`
+  - the value embedded in emitted subscriber messages
+  """
   @spec subscribe(pid(), String.t(), [map()], keyword()) :: {:ok, reference()} | {:error, term()}
   def subscribe(subscriber, subscription_id, filters, opts \\ [])
 
@@ -42,6 +61,11 @@ defmodule Parrhesia.API.Stream do
   def subscribe(_subscriber, _subscription_id, _filters, _opts),
     do: {:error, :invalid_subscription}
 
+  @doc """
+  Stops a subscription previously created with `subscribe/4`.
+
+  This function is idempotent. Unknown or already-stopped references return `:ok`.
+  """
   @spec unsubscribe(reference()) :: :ok
   def unsubscribe(ref) when is_reference(ref) do
     case Registry.lookup(Parrhesia.API.Stream.Registry, ref) do

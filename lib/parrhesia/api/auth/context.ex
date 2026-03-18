@@ -1,6 +1,10 @@
 defmodule Parrhesia.API.Auth.Context do
   @moduledoc """
   Authenticated request details returned by shared auth helpers.
+
+  This is the higher-level result returned by `Parrhesia.API.Auth.validate_nip98/3` and
+  `validate_nip98/4`. The nested `request_context` is ready to be passed into the rest of the
+  public API surface.
   """
 
   alias Parrhesia.API.RequestContext
