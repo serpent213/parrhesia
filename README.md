@@ -32,6 +32,8 @@ Current `supported_nips` list:
 
 `1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 66, 70, 77, 86, 98`
 
+`66` is advertised when the built-in NIP-66 publisher is enabled and has at least one relay target. The default config enables it for the `public` relay URL. Parrhesia probes those target relays, collects the resulting NIP-11 / websocket liveness data, and then publishes the signed `10166` and `30166` events locally on this relay.
+
 ## Requirements
 
 - Elixir `~> 1.19`
@@ -181,6 +183,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:identity.private_key` | `PARRHESIA_IDENTITY_PRIVATE_KEY` | `nil` | Optional inline relay private key |
 | `:moderation_cache_enabled` | `PARRHESIA_MODERATION_CACHE_ENABLED` | `true` | Toggle moderation cache |
 | `:enable_expiration_worker` | `PARRHESIA_ENABLE_EXPIRATION_WORKER` | `true` | Toggle background expiration worker |
+| `:nip66` | config-file driven | see table below | Built-in NIP-66 discovery / monitor publisher |
 | `:sync.path` | `PARRHESIA_SYNC_PATH` | `nil` | Optional path to sync peer config |
 | `:sync.start_workers?` | `PARRHESIA_SYNC_START_WORKERS` | `true` | Start outbound sync workers on boot |
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
@@ -249,6 +252,19 @@ Every listener supports this config-file schema:
 | `:baseline_acl.read` | `-` | `[]` | Static read deny/allow rules |
 | `:baseline_acl.write` | `-` | `[]` | Static write deny/allow rules |
 | `:bandit_options` | `-` | `[]` | Advanced Bandit / ThousandIsland passthrough |
+
+#### `:nip66`
+
+| Atom key | ENV | Default | Notes |
+| --- | --- | --- | --- |
+| `:enabled` | `-` | `true` | Enables the built-in NIP-66 publisher worker |
+| `:publish_interval_seconds` | `-` | `900` | Republish cadence for `10166` and `30166` events |
+| `:publish_monitor_announcement?` | `-` | `true` | Publish a `10166` monitor announcement alongside discovery events |
+| `:timeout_ms` | `-` | `5000` | Probe timeout for websocket and NIP-11 checks |
+| `:checks` | `-` | `[:open, :read, :nip11]` | Checks advertised in `10166` and run against each target relay during probing |
+| `:targets` | `-` | `[]` | Optional explicit relay targets to probe; when empty, Parrhesia uses `:relay_url` for the `public` listener |
+
+NIP-66 targets are probe sources, not publish destinations. Parrhesia connects to each target relay, collects the configured liveness / discovery data, and stores the resulting signed `10166` / `30166` events in its own local event store so clients can query them here.
 
 #### `:limits`
 

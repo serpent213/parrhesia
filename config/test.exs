@@ -27,6 +27,7 @@ config :parrhesia, :listeners,
 config :parrhesia,
   enable_expiration_worker: false,
   moderation_cache_enabled: false,
+  nip66: [enabled: false],
   identity: [
     path: Path.join(System.tmp_dir!(), "parrhesia_test_identity.json"),
     private_key: nil

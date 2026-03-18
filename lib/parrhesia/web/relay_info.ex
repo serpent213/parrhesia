@@ -12,6 +12,7 @@ defmodule Parrhesia.Web.RelayInfo do
       "name" => "Parrhesia",
       "description" => "Nostr/Marmot relay",
       "pubkey" => relay_pubkey(),
+      "self" => relay_pubkey(),
       "supported_nips" => supported_nips(),
       "software" => "https://git.teralink.net/self/parrhesia",
       "version" => Application.spec(:parrhesia, :vsn) |> to_string(),
@@ -20,13 +21,20 @@ defmodule Parrhesia.Web.RelayInfo do
   end
 
   defp supported_nips do
-    base = [1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 66, 70]
+    base = [1, 9, 11, 13, 17, 40, 42, 43, 44, 45, 50, 59, 62, 70]
+
+    with_nip66 =
+      if Parrhesia.NIP66.enabled?() do
+        base ++ [66]
+      else
+        base
+      end
 
     with_negentropy =
       if negentropy_enabled?() do
-        base ++ [77]
+        with_nip66 ++ [77]
       else
-        base
+        with_nip66
       end
 
     with_negentropy ++ [86, 98]
@@ -38,7 +46,12 @@ defmodule Parrhesia.Web.RelayInfo do
       "max_subscriptions" =>
         Parrhesia.Config.get([:limits, :max_subscriptions_per_connection], 32),
       "max_filters" => Parrhesia.Config.get([:limits, :max_filters_per_req], 16),
-      "auth_required" => Listener.relay_auth_required?(listener)
+      "max_limit" => Parrhesia.Config.get([:limits, :max_filter_limit], 500),
+      "max_event_tags" => Parrhesia.Config.get([:limits, :max_tags_per_event], 256),
+      "min_pow_difficulty" => Parrhesia.Config.get([:policies, :min_pow_difficulty], 0),
+      "auth_required" => Listener.relay_auth_required?(listener),
+      "payment_required" => false,
+      "restricted_writes" => restricted_writes?(listener)
     }
   end
 
@@ -53,5 +66,13 @@ defmodule Parrhesia.Web.RelayInfo do
       {:ok, %{pubkey: pubkey}} -> pubkey
       {:error, _reason} -> nil
     end
+  end
+
+  defp restricted_writes?(listener) do
+    listener.auth.nip42_required or
+      (listener.baseline_acl.write != [] and
+         Enum.any?(listener.baseline_acl.write, &(&1.action == :deny))) or
+      Parrhesia.Config.get([:policies, :auth_required_for_writes], false) or
+      Parrhesia.Config.get([:policies, :min_pow_difficulty], 0) > 0
   end
 end

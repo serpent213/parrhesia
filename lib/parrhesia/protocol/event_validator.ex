@@ -46,6 +46,13 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :missing_marmot_group_tag
           | :invalid_marmot_group_tag
           | :invalid_marmot_group_content
+          | :missing_nip66_d_tag
+          | :invalid_nip66_d_tag
+          | :invalid_nip66_discovery_tag
+          | :missing_nip66_frequency_tag
+          | :invalid_nip66_frequency_tag
+          | :invalid_nip66_timeout_tag
+          | :invalid_nip66_check_tag
 
   @spec validate(map()) :: :ok | {:error, error_reason()}
   def validate(event) when is_map(event) do
@@ -130,7 +137,19 @@ defmodule Parrhesia.Protocol.EventValidator do
     missing_marmot_group_tag: "invalid: kind 445 must include at least one h tag with a group id",
     invalid_marmot_group_tag:
       "invalid: kind 445 h tags must contain 32-byte lowercase hex group ids",
-    invalid_marmot_group_content: "invalid: kind 445 content must be non-empty base64"
+    invalid_marmot_group_content: "invalid: kind 445 content must be non-empty base64",
+    missing_nip66_d_tag:
+      "invalid: kind 30166 must include a single [\"d\", <normalized ws/wss url or relay pubkey>] tag",
+    invalid_nip66_d_tag:
+      "invalid: kind 30166 must include a single [\"d\", <normalized ws/wss url or relay pubkey>] tag",
+    invalid_nip66_discovery_tag: "invalid: kind 30166 includes malformed NIP-66 discovery tags",
+    missing_nip66_frequency_tag:
+      "invalid: kind 10166 must include a single [\"frequency\", <seconds>] tag",
+    invalid_nip66_frequency_tag:
+      "invalid: kind 10166 must include a single [\"frequency\", <seconds>] tag",
+    invalid_nip66_timeout_tag:
+      "invalid: kind 10166 timeout tags must be [\"timeout\", <check>, <ms>]",
+    invalid_nip66_check_tag: "invalid: kind 10166 c tags must contain lowercase check names"
   }
 
   @spec error_message(error_reason()) :: String.t()
@@ -252,6 +271,12 @@ defmodule Parrhesia.Protocol.EventValidator do
   defp validate_kind_specific(%{"kind" => 1059} = event),
     do: validate_giftwrap_event(event)
 
+  defp validate_kind_specific(%{"kind" => 30_166} = event),
+    do: validate_nip66_discovery_event(event)
+
+  defp validate_kind_specific(%{"kind" => 10_166} = event),
+    do: validate_nip66_monitor_announcement(event)
+
   defp validate_kind_specific(_event), do: :ok
 
   defp validate_marmot_keypackage_event(event) do
@@ -322,6 +347,110 @@ defmodule Parrhesia.Protocol.EventValidator do
 
     with :ok <- validate_non_empty_content(event, :invalid_giftwrap_content) do
       validate_giftwrap_recipient_tags(tags)
+    end
+  end
+
+  defp validate_nip66_discovery_event(event) do
+    tags = Map.get(event, "tags", [])
+
+    with :ok <- validate_nip66_d_tag(tags),
+         :ok <-
+           validate_optional_single_string_tag_with_predicate(
+             tags,
+             "n",
+             :invalid_nip66_discovery_tag,
+             &(&1 in ["clearnet", "tor", "i2p", "loki"])
+           ),
+         :ok <-
+           validate_optional_single_string_tag_with_predicate(
+             tags,
+             "T",
+             :invalid_nip66_discovery_tag,
+             &valid_pascal_case?/1
+           ),
+         :ok <-
+           validate_optional_single_string_tag_with_predicate(
+             tags,
+             "g",
+             :invalid_nip66_discovery_tag,
+             &non_empty_string?/1
+           ),
+         :ok <-
+           validate_optional_repeated_tag(
+             tags,
+             "N",
+             &positive_integer_string?/1,
+             :invalid_nip66_discovery_tag
+           ),
+         :ok <-
+           validate_optional_repeated_tag(
+             tags,
+             "R",
+             &valid_nip66_requirement_value?/1,
+             :invalid_nip66_discovery_tag
+           ),
+         :ok <-
+           validate_optional_repeated_tag(
+             tags,
+             "k",
+             &valid_nip66_kind_value?/1,
+             :invalid_nip66_discovery_tag
+           ),
+         :ok <-
+           validate_optional_repeated_tag(
+             tags,
+             "t",
+             &non_empty_string?/1,
+             :invalid_nip66_discovery_tag
+           ),
+         :ok <-
+           validate_optional_single_string_tag_with_predicate(
+             tags,
+             "rtt-open",
+             :invalid_nip66_discovery_tag,
+             &positive_integer_string?/1
+           ),
+         :ok <-
+           validate_optional_single_string_tag_with_predicate(
+             tags,
+             "rtt-read",
+             :invalid_nip66_discovery_tag,
+             &positive_integer_string?/1
+           ) do
+      validate_optional_single_string_tag_with_predicate(
+        tags,
+        "rtt-write",
+        :invalid_nip66_discovery_tag,
+        &positive_integer_string?/1
+      )
+    end
+  end
+
+  defp validate_nip66_monitor_announcement(event) do
+    tags = Map.get(event, "tags", [])
+
+    with :ok <-
+           validate_single_string_tag_with_predicate(
+             tags,
+             "frequency",
+             :missing_nip66_frequency_tag,
+             :invalid_nip66_frequency_tag,
+             &positive_integer_string?/1
+           ),
+         :ok <- validate_optional_repeated_timeout_tags(tags),
+         :ok <-
+           validate_optional_repeated_tag(
+             tags,
+             "c",
+             &valid_nip66_check_name?/1,
+             :invalid_nip66_check_tag
+           ) do
+      validate_optional_single_string_tag_with_predicate(
+        tags,
+        "g",
+        :invalid_nip66_discovery_tag,
+        &non_empty_string?/1
+      )
     end
   end
 
@@ -406,6 +535,25 @@ defmodule Parrhesia.Protocol.EventValidator do
     end
   end
 
+  defp validate_optional_single_string_tag_with_predicate(
+         tags,
+         tag_name,
+         invalid_error,
+         predicate
+       )
+       when is_function(predicate, 1) do
+    case Enum.filter(tags, &match_tag_name?(&1, tag_name)) do
+      [] ->
+        :ok
+
+      [[^tag_name, value]] ->
+        if predicate.(value), do: :ok, else: {:error, invalid_error}
+
+      _other ->
+        {:error, invalid_error}
+    end
+  end
+
   defp validate_mls_extensions_tag(tags) do
     with {:ok, ["mls_extensions" | extensions]} <-
            fetch_single_tag(tags, "mls_extensions", :missing_marmot_extensions_tag),
@@ -442,6 +590,40 @@ defmodule Parrhesia.Protocol.EventValidator do
       false -> {:error, :invalid_marmot_keypackage_ref_tag}
       {:error, _reason} = error -> error
     end
+  end
+
+  defp validate_nip66_d_tag(tags) do
+    with {:ok, ["d", value]} <- fetch_single_tag(tags, "d", :missing_nip66_d_tag),
+         true <- valid_websocket_url?(value) or lowercase_hex?(value, 32) do
+      :ok
+    else
+      {:ok, _invalid_tag_shape} -> {:error, :invalid_nip66_d_tag}
+      false -> {:error, :invalid_nip66_d_tag}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_optional_repeated_timeout_tags(tags) do
+    timeout_tags = Enum.filter(tags, &match_tag_name?(&1, "timeout"))
+
+    if Enum.all?(timeout_tags, &valid_nip66_timeout_tag?/1) do
+      :ok
+    else
+      {:error, :invalid_nip66_timeout_tag}
+    end
+  end
+
+  defp validate_optional_repeated_tag(tags, tag_name, predicate, invalid_error)
+       when is_function(predicate, 1) do
+    tags
+    |> Enum.filter(&match_tag_name?(&1, tag_name))
+    |> Enum.reduce_while(:ok, fn
+      [^tag_name, value], :ok ->
+        if predicate.(value), do: {:cont, :ok}, else: {:halt, {:error, invalid_error}}
+
+      _other, :ok ->
+        {:halt, {:error, invalid_error}}
+    end)
   end
 
   defp fetch_single_tag(tags, tag_name, missing_error) do
@@ -499,6 +681,49 @@ defmodule Parrhesia.Protocol.EventValidator do
   end
 
   defp valid_websocket_url?(_url), do: false
+
+  defp valid_nip66_timeout_tag?(["timeout", milliseconds]),
+    do: positive_integer_string?(milliseconds)
+
+  defp valid_nip66_timeout_tag?(["timeout", check, milliseconds]) do
+    valid_nip66_check_name?(check) and positive_integer_string?(milliseconds)
+  end
+
+  defp valid_nip66_timeout_tag?(_tag), do: false
+
+  defp valid_nip66_requirement_value?(value) when is_binary(value) do
+    normalized = String.trim_leading(value, "!")
+    normalized in ["auth", "writes", "pow", "payment"]
+  end
+
+  defp valid_nip66_requirement_value?(_value), do: false
+
+  defp valid_nip66_kind_value?(<<"!", rest::binary>>), do: positive_integer_string?(rest)
+  defp valid_nip66_kind_value?(value), do: positive_integer_string?(value)
+
+  defp valid_nip66_check_name?(value) when is_binary(value) do
+    String.match?(value, ~r/^[a-z0-9-]+$/)
+  end
+
+  defp valid_nip66_check_name?(_value), do: false
+
+  defp valid_pascal_case?(value) when is_binary(value) do
+    String.match?(value, ~r/^[A-Z][A-Za-z0-9]*$/)
+  end
+
+  defp valid_pascal_case?(_value), do: false
+
+  defp positive_integer_string?(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> true
+      _other -> false
+    end
+  end
+
+  defp positive_integer_string?(_value), do: false
+
+  defp non_empty_string?(value) when is_binary(value), do: value != ""
+  defp non_empty_string?(_value), do: false
 
   defp valid_keypackage_ref?(value) when is_binary(value) do
     Enum.any?(@supported_keypackage_ref_sizes, &lowercase_hex?(value, &1))

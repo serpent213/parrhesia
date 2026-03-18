@@ -11,7 +11,7 @@ defmodule Parrhesia.Tasks.Supervisor do
 
   @impl true
   def init(_init_arg) do
-    children = expiration_children() ++ partition_retention_children()
+    children = expiration_children() ++ partition_retention_children() ++ nip66_children()
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -28,5 +28,13 @@ defmodule Parrhesia.Tasks.Supervisor do
     [
       {Parrhesia.Tasks.PartitionRetentionWorker, name: Parrhesia.Tasks.PartitionRetentionWorker}
     ]
+  end
+
+  defp nip66_children do
+    if Parrhesia.NIP66.enabled?() do
+      [{Parrhesia.Tasks.Nip66Publisher, name: Parrhesia.Tasks.Nip66Publisher}]
+    else
+      []
+    end
   end
 end

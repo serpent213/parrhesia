@@ -5,6 +5,14 @@ config :postgrex, :json_library, JSON
 config :parrhesia,
   moderation_cache_enabled: true,
   relay_url: "ws://localhost:4413/relay",
+  nip66: [
+    enabled: true,
+    publish_interval_seconds: 900,
+    publish_monitor_announcement?: true,
+    timeout_ms: 5_000,
+    checks: [:open, :read, :nip11],
+    targets: []
+  ],
   identity: [
     path: nil,
     private_key: nil
