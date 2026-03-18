@@ -7,18 +7,25 @@ cd "$ROOT_DIR"
 usage() {
   cat <<'EOF'
 usage:
+  ./scripts/run_bench_update.sh [machine_id]
+
+Regenerates bench/chart.svg and updates the benchmark table in README.md
+from collected data in bench/history.jsonl.
+
+Arguments:
+  machine_id    Optional. Filter to a specific machine's data.
+                Default: current machine (hostname -s)
+                Use "all" to include all machines (will use latest entry per tag)
+
+Examples:
+  # Update chart for current machine
   ./scripts/run_bench_update.sh
 
-Runs the benchmark suite (3 runs by default), then:
-  1) Appends structured results to bench/history.jsonl
-  2) Generates bench/chart.svg via gnuplot
-  3) Updates the comparison table in README.md
+  # Update chart for specific machine
+  ./scripts/run_bench_update.sh my-server
 
-Environment:
-  PARRHESIA_BENCH_RUNS               Number of runs (default: 3)
-  PARRHESIA_BENCH_MACHINE_ID         Machine identifier (default: hostname -s)
-
-All PARRHESIA_BENCH_* knobs from run_bench_compare.sh are forwarded.
+  # Update chart using all machines (latest entry per tag wins)
+  ./scripts/run_bench_update.sh all
 EOF
 }
 
@@ -34,61 +41,20 @@ HISTORY_FILE="$BENCH_DIR/history.jsonl"
 CHART_FILE="$BENCH_DIR/chart.svg"
 GNUPLOT_TEMPLATE="$BENCH_DIR/chart.gnuplot"
 
-MACHINE_ID="${PARRHESIA_BENCH_MACHINE_ID:-$(hostname -s)}"
-GIT_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo 'untagged')"
-GIT_COMMIT="$(git rev-parse --short=7 HEAD)"
-TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-RUNS="${PARRHESIA_BENCH_RUNS:-3}"
+MACHINE_ID="${1:-$(hostname -s)}"
 
-mkdir -p "$BENCH_DIR"
+if [[ ! -f "$HISTORY_FILE" ]]; then
+  echo "Error: No history file found at $HISTORY_FILE" >&2
+  echo "Run ./scripts/run_bench_collect.sh first to collect benchmark data" >&2
+  exit 1
+fi
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-JSON_OUT="$WORK_DIR/bench_summary.json"
-RAW_OUTPUT="$WORK_DIR/bench_output.txt"
+# --- Generate chart ----------------------------------------------------------
 
-# --- Phase 1: Run benchmarks -------------------------------------------------
-
-echo "Running ${RUNS}-run benchmark suite..."
-
-PARRHESIA_BENCH_RUNS="$RUNS" \
-BENCH_JSON_OUT="$JSON_OUT" \
-  ./scripts/run_bench_compare.sh 2>&1 | tee "$RAW_OUTPUT"
-
-if [[ ! -f "$JSON_OUT" ]]; then
-  echo "Benchmark JSON output not found at $JSON_OUT" >&2
-  exit 1
-fi
-
-# --- Phase 2: Append to history ----------------------------------------------
-
-echo "Appending to history..."
-
-node - "$JSON_OUT" "$TIMESTAMP" "$MACHINE_ID" "$GIT_TAG" "$GIT_COMMIT" "$RUNS" "$HISTORY_FILE" <<'NODE'
-const fs = require("node:fs");
-
-const [, , jsonOut, timestamp, machineId, gitTag, gitCommit, runsStr, historyFile] = process.argv;
-
-const { versions, ...servers } = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
-
-const entry = {
-  timestamp,
-  machine_id: machineId,
-  git_tag: gitTag,
-  git_commit: gitCommit,
-  runs: Number(runsStr),
-  versions: versions || {},
-  servers,
-};
-
-fs.appendFileSync(historyFile, JSON.stringify(entry) + "\n", "utf8");
-console.log("  entry: " + gitTag + " (" + gitCommit + ") on " + machineId);
-NODE
-
-# --- Phase 3: Generate chart --------------------------------------------------
-
-echo "Generating chart..."
+echo "Generating chart for machine: $MACHINE_ID"
 
 node - "$HISTORY_FILE" "$MACHINE_ID" "$WORK_DIR" <<'NODE'
 const fs = require("node:fs");
@@ -106,21 +72,45 @@ const lines = fs.readFileSync(historyFile, "utf8")
   .filter(l => l.trim().length > 0)
   .map(l => JSON.parse(l));
 
-// Filter to current machine
-const entries = lines.filter(e => e.machine_id === machineId);
+// Filter to selected machine(s)
+let entries;
+if (machineId === "all") {
+  entries = lines;
+  console.log("  using all machines");
+} else {
+  entries = lines.filter(e => e.machine_id === machineId);
+  console.log("  filtered to machine: " + machineId);
+}
 
 if (entries.length === 0) {
   console.log("  no history entries for machine '" + machineId + "', skipping chart");
   process.exit(0);
 }
 
-// Sort chronologically, deduplicate by tag (latest wins)
+// Sort chronologically, deduplicate by tag (latest wins),
+// then order the resulting series by git tag.
 entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 const byTag = new Map();
 for (const e of entries) {
   byTag.set(e.git_tag, e);
 }
 const deduped = [...byTag.values()];
+
+function parseSemverTag(tag) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+deduped.sort((a, b) => {
+  const aTag = parseSemverTag(a.git_tag);
+  const bTag = parseSemverTag(b.git_tag);
+
+  if (aTag && bTag) {
+    return aTag[0] - bTag[0] || aTag[1] - bTag[1] || aTag[2] - bTag[2];
+  }
+
+  return a.git_tag.localeCompare(b.git_tag, undefined, { numeric: true });
+});
 
 // Determine which non-parrhesia servers are present
 const baselineServerNames = ["strfry", "nostr-rs-relay"];
@@ -196,24 +186,67 @@ if [[ -f "$WORK_DIR/plot_commands.gnuplot" ]]; then
   echo "  chart written to $CHART_FILE"
 else
   echo "  chart generation skipped (no data for this machine)"
+  exit 0
 fi
 
-# --- Phase 4: Update README.md -----------------------------------------------
+# --- Update README.md -------------------------------------------------------
 
-echo "Updating README.md..."
+echo "Updating README.md with latest benchmark..."
 
-node - "$JSON_OUT" "$ROOT_DIR/README.md" <<'NODE'
+# Find the most recent entry for this machine
+LATEST_ENTRY=$(node - "$HISTORY_FILE" "$MACHINE_ID" <<'NODE'
+const fs = require("node:fs");
+const [, , historyFile, machineId] = process.argv;
+
+const lines = fs.readFileSync(historyFile, "utf8")
+  .split("\n")
+  .filter(l => l.trim().length > 0)
+  .map(l => JSON.parse(l));
+
+let entries;
+if (machineId === "all") {
+  entries = lines;
+} else {
+  entries = lines.filter(e => e.machine_id === machineId);
+}
+
+if (entries.length === 0) {
+  console.error("No entries found for machine: " + machineId);
+  process.exit(1);
+}
+
+// Get latest entry
+entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+console.log(JSON.stringify(entries[0]));
+NODE
+)
+
+if [[ -z "$LATEST_ENTRY" ]]; then
+  echo "Warning: Could not find latest entry, skipping README update" >&2
+  exit 0
+fi
+
+node - "$LATEST_ENTRY" "$ROOT_DIR/README.md" <<'NODE'
 const fs = require("node:fs");
 
-const [, , jsonOut, readmePath] = process.argv;
+const [, , entryJson, readmePath] = process.argv;
 
-const { versions, ...servers } = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
-const readme = fs.readFileSync(readmePath, "utf8");
+const entry = JSON.parse(entryJson);
+const servers = entry.servers || {};
 
 const pg = servers["parrhesia-pg"];
 const mem = servers["parrhesia-memory"];
 const strfry = servers["strfry"];
 const nostrRs = servers["nostr-rs-relay"];
+
+if (!pg || !mem) {
+  const present = Object.keys(servers).sort().join(", ") || "(none)";
+  console.error(
+    "Latest benchmark entry must include parrhesia-pg and parrhesia-memory. Present servers: " +
+      present
+  );
+  process.exit(1);
+}
 
 function toFixed(v, d = 2) {
   return Number.isFinite(v) ? v.toFixed(d) : "n/a";
@@ -232,14 +265,14 @@ function boldIf(ratioStr, lowerIsBetter) {
 }
 
 const metricRows = [
-  ["connect avg latency (ms) \u2193", "connect_avg_ms", true],
-  ["connect max latency (ms) \u2193", "connect_max_ms", true],
-  ["echo throughput (TPS) \u2191",    "echo_tps",       false],
-  ["echo throughput (MiB/s) \u2191",  "echo_mibs",      false],
-  ["event throughput (TPS) \u2191",   "event_tps",      false],
-  ["event throughput (MiB/s) \u2191", "event_mibs",     false],
-  ["req throughput (TPS) \u2191",     "req_tps",        false],
-  ["req throughput (MiB/s) \u2191",   "req_mibs",       false],
+  ["connect avg latency (ms) ↓", "connect_avg_ms", true],
+  ["connect max latency (ms) ↓", "connect_max_ms", true],
+  ["echo throughput (TPS) ↑",    "echo_tps",       false],
+  ["echo throughput (MiB/s) ↑",  "echo_mibs",      false],
+  ["event throughput (TPS) ↑",   "event_tps",      false],
+  ["event throughput (MiB/s) ↑", "event_mibs",     false],
+  ["req throughput (TPS) ↑",     "req_tps",        false],
+  ["req throughput (MiB/s) ↑",   "req_mibs",       false],
 ];
 
 const hasStrfry = !!strfry;
@@ -275,6 +308,7 @@ const tableLines = [
 ];
 
 // Replace the first markdown table in the ## Benchmark section
+const readme = fs.readFileSync(readmePath, "utf8");
 const readmeLines = readme.split("\n");
 const benchIdx = readmeLines.findIndex(l => /^## Benchmark/.test(l));
 if (benchIdx === -1) {
@@ -309,8 +343,7 @@ NODE
 # --- Done ---------------------------------------------------------------------
 
 echo
-echo "Benchmark update complete. Files changed:"
-echo "  $HISTORY_FILE"
+echo "Benchmark rendering complete. Files updated:"
 echo "  $CHART_FILE"
 echo "  $ROOT_DIR/README.md"
 echo

@@ -26,7 +26,15 @@ defmodule Parrhesia.MixProject do
   defp elixirc_paths(_env), do: ["lib"]
 
   def cli do
-    [preferred_envs: [precommit: :test, bench: :test, "bench.update": :test]]
+    [
+      preferred_envs: [
+        precommit: :test,
+        bench: :test,
+        "bench.collect": :test,
+        "bench.update": :test,
+        "bench.at": :test
+      ]
+    ]
   end
 
   # Run "mix help deps" to learn about dependencies.
@@ -71,7 +79,9 @@ defmodule Parrhesia.MixProject do
       "test.node_sync_e2e": ["cmd ./scripts/run_node_sync_e2e.sh"],
       "test.node_sync_docker_e2e": ["cmd ./scripts/run_node_sync_docker_e2e.sh"],
       bench: ["cmd ./scripts/run_bench_compare.sh"],
+      "bench.collect": ["cmd ./scripts/run_bench_collect.sh"],
       "bench.update": ["cmd ./scripts/run_bench_update.sh"],
+      "bench.at": ["cmd ./scripts/run_bench_at_ref.sh"],
       # cov: ["cmd mix coveralls.lcov"],
       lint: ["format --check-formatted", "credo"],
       precommit: [

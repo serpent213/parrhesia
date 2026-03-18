@@ -67,7 +67,7 @@ cd "$WORKTREE_DIR"
 # Always copy latest benchmark scripts to ensure consistency
 echo "Copying latest benchmark infrastructure from current..."
 mkdir -p scripts bench
-cp "$ROOT_DIR/scripts/run_bench_update.sh" scripts/
+cp "$ROOT_DIR/scripts/run_bench_collect.sh" scripts/
 cp "$ROOT_DIR/scripts/run_bench_compare.sh" scripts/
 cp "$ROOT_DIR/scripts/run_nostr_bench.sh" scripts/
 if [[ -f "$ROOT_DIR/scripts/run_nostr_bench_strfry.sh" ]]; then
@@ -75,9 +75,6 @@ if [[ -f "$ROOT_DIR/scripts/run_nostr_bench_strfry.sh" ]]; then
 fi
 if [[ -f "$ROOT_DIR/scripts/run_nostr_bench_nostr_rs_relay.sh" ]]; then
   cp "$ROOT_DIR/scripts/run_nostr_bench_nostr_rs_relay.sh" scripts/
-fi
-if [[ -f "$ROOT_DIR/bench/chart.gnuplot" ]]; then
-  cp "$ROOT_DIR/bench/chart.gnuplot" bench/
 fi
 echo
 
@@ -90,11 +87,10 @@ echo
 
 RUNS="${PARRHESIA_BENCH_RUNS:-3}"
 
-# Run the benchmark update script which will append to history.jsonl
-# Allow it to fail (e.g., README update might fail on old versions) but continue
+# Run the benchmark collect script which will append to history.jsonl
 PARRHESIA_BENCH_RUNS="$RUNS" \
 PARRHESIA_BENCH_MACHINE_ID="${PARRHESIA_BENCH_MACHINE_ID:-}" \
-  ./scripts/run_bench_update.sh || echo "Benchmark script exited with error (may be expected for old versions)"
+  ./scripts/run_bench_collect.sh
 
 # --- Copy results back -------------------------------------------------------
 
