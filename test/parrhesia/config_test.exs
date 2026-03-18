@@ -10,6 +10,8 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:limits, :max_event_ingest_per_window]) == 120
     assert Parrhesia.Config.get([:limits, :max_tags_per_event]) == 256
     assert Parrhesia.Config.get([:limits, :max_tag_values_per_filter]) == 128
+    assert Parrhesia.Config.get([:limits, :ip_max_event_ingest_per_window]) == 1_000
+    assert Parrhesia.Config.get([:limits, :ip_event_ingest_window_seconds]) == 1
     assert Parrhesia.Config.get([:limits, :relay_max_event_ingest_per_window]) == 10_000
     assert Parrhesia.Config.get([:limits, :relay_event_ingest_window_seconds]) == 1
     assert Parrhesia.Config.get([:limits, :event_ingest_window_seconds]) == 1
@@ -21,6 +23,7 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:policies, :marmot_media_max_imeta_tags_per_event]) == 8
     assert Parrhesia.Config.get([:policies, :marmot_media_reject_mip04_v1]) == true
     assert Parrhesia.Config.get([:policies, :marmot_push_max_trigger_age_seconds]) == 120
+    assert Parrhesia.Config.get([:features, :verify_event_signatures_locked?]) == false
     assert Parrhesia.Config.get([:features, :verify_event_signatures]) == false
     assert Parrhesia.Config.get([:features, :nip_50_search]) == true
     assert Parrhesia.Config.get([:features, :marmot_push_notifications]) == false

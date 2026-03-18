@@ -49,6 +49,11 @@ defmodule Parrhesia.IntegrationCase do
             receive do
               :stop ->
                 Sandbox.checkin(Repo)
+
+                # Allow the pool to process the checkin before this process
+                # exits, so Postgrex does not see a dead client and log a
+                # spurious disconnect error.
+                Process.sleep(50)
             end
           end)
 

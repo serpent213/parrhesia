@@ -8,6 +8,12 @@ defmodule Parrhesia.Protocol.EventValidator do
   @default_max_event_future_skew_seconds 900
   @default_max_tags_per_event 256
   @default_nip43_request_max_age_seconds 300
+  @verify_event_signatures_locked Application.compile_env(
+                                    :parrhesia,
+                                    [:features, :verify_event_signatures_locked?],
+                                    false
+                                  )
+
   @supported_mls_ciphersuites MapSet.new(~w[0x0001 0x0002 0x0003 0x0004 0x0005 0x0006 0x0007])
   @required_mls_extensions MapSet.new(["0xf2ee", "0x000a"])
   @supported_keypackage_ref_sizes [32, 48, 64]
@@ -254,7 +260,7 @@ defmodule Parrhesia.Protocol.EventValidator do
   end
 
   defp validate_signature(event) do
-    if verify_event_signatures?() do
+    if @verify_event_signatures_locked or verify_event_signatures?() do
       verify_signature(event)
     else
       :ok

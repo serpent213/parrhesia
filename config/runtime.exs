@@ -184,6 +184,16 @@ if config_env() == :prod do
         "PARRHESIA_LIMITS_MAX_TAG_VALUES_PER_FILTER",
         Keyword.get(limits_defaults, :max_tag_values_per_filter, 128)
       ),
+    ip_max_event_ingest_per_window:
+      int_env.(
+        "PARRHESIA_LIMITS_IP_MAX_EVENT_INGEST_PER_WINDOW",
+        Keyword.get(limits_defaults, :ip_max_event_ingest_per_window, 1_000)
+      ),
+    ip_event_ingest_window_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_IP_EVENT_INGEST_WINDOW_SECONDS",
+        Keyword.get(limits_defaults, :ip_event_ingest_window_seconds, 1)
+      ),
     relay_max_event_ingest_per_window:
       int_env.(
         "PARRHESIA_LIMITS_RELAY_MAX_EVENT_INGEST_PER_WINDOW",
@@ -583,11 +593,14 @@ if config_env() == :prod do
   ]
 
   features = [
+    verify_event_signatures_locked?:
+      Keyword.get(features_defaults, :verify_event_signatures_locked?, false),
     verify_event_signatures:
-      bool_env.(
-        "PARRHESIA_FEATURES_VERIFY_EVENT_SIGNATURES",
+      if Keyword.get(features_defaults, :verify_event_signatures_locked?, false) do
+        true
+      else
         Keyword.get(features_defaults, :verify_event_signatures, true)
-      ),
+      end,
     nip_45_count:
       bool_env.(
         "PARRHESIA_FEATURES_NIP_45_COUNT",

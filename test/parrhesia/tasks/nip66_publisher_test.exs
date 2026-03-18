@@ -1,5 +1,5 @@
 defmodule Parrhesia.Tasks.Nip66PublisherTest do
-  use Parrhesia.IntegrationCase, async: false
+  use Parrhesia.IntegrationCase, async: false, sandbox: :shared
 
   alias Parrhesia.API.Events
   alias Parrhesia.API.Identity

@@ -225,6 +225,50 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "EVENT applies per-IP ingress throttling across connections" do
+    limiter =
+      start_supervised!(
+        {Parrhesia.Web.IPEventIngestLimiter,
+         name: nil, max_events_per_window: 1, window_seconds: 60}
+      )
+
+    first_state =
+      connection_state(
+        remote_ip: "203.0.113.10",
+        remote_ip_event_ingest_limiter: limiter
+      )
+
+    second_state =
+      connection_state(
+        remote_ip: "203.0.113.10",
+        remote_ip_event_ingest_limiter: limiter
+      )
+
+    first_event = valid_event(%{"content" => "first from ip"}) |> recalculate_event_id()
+    second_event = valid_event(%{"content" => "second from ip"}) |> recalculate_event_id()
+
+    assert {:push, {:text, first_response}, _next_state} =
+             Connection.handle_in(
+               {JSON.encode!(["EVENT", first_event]), [opcode: :text]},
+               first_state
+             )
+
+    assert JSON.decode!(first_response) == ["OK", first_event["id"], true, "ok: event stored"]
+
+    assert {:push, {:text, second_response}, ^second_state} =
+             Connection.handle_in(
+               {JSON.encode!(["EVENT", second_event]), [opcode: :text]},
+               second_state
+             )
+
+    assert JSON.decode!(second_response) == [
+             "OK",
+             second_event["id"],
+             false,
+             "rate-limited: too many EVENT messages from this IP"
+           ]
+  end
+
   test "protected sync REQ requires matching ACL grant" do
     previous_acl = Application.get_env(:parrhesia, :acl, [])
 

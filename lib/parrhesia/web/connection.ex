@@ -17,6 +17,7 @@ defmodule Parrhesia.Web.Connection do
   alias Parrhesia.Subscriptions.Index
   alias Parrhesia.Telemetry
   alias Parrhesia.Web.EventIngestLimiter
+  alias Parrhesia.Web.IPEventIngestLimiter
   alias Parrhesia.Web.Listener
 
   @default_max_subscriptions_per_connection 32
@@ -64,6 +65,7 @@ defmodule Parrhesia.Web.Connection do
             max_frame_bytes: @default_max_frame_bytes,
             max_event_bytes: @default_max_event_bytes,
             event_ingest_limiter: EventIngestLimiter,
+            remote_ip_event_ingest_limiter: IPEventIngestLimiter,
             max_event_ingest_per_window: @default_event_ingest_rate_limit,
             event_ingest_window_seconds: @default_event_ingest_window_seconds,
             event_ingest_window_started_at_ms: 0,
@@ -99,6 +101,7 @@ defmodule Parrhesia.Web.Connection do
           max_frame_bytes: pos_integer(),
           max_event_bytes: pos_integer(),
           event_ingest_limiter: GenServer.server() | nil,
+          remote_ip_event_ingest_limiter: GenServer.server() | nil,
           max_event_ingest_per_window: pos_integer(),
           event_ingest_window_seconds: pos_integer(),
           event_ingest_window_started_at_ms: integer(),
@@ -126,6 +129,7 @@ defmodule Parrhesia.Web.Connection do
       max_frame_bytes: max_frame_bytes(opts),
       max_event_bytes: max_event_bytes(opts),
       event_ingest_limiter: event_ingest_limiter(opts),
+      remote_ip_event_ingest_limiter: remote_ip_event_ingest_limiter(opts),
       max_event_ingest_per_window: max_event_ingest_per_window(opts),
       event_ingest_window_seconds: event_ingest_window_seconds(opts),
       event_ingest_window_started_at_ms: System.monotonic_time(:millisecond),
@@ -289,7 +293,12 @@ defmodule Parrhesia.Web.Connection do
   end
 
   defp maybe_publish_ingested_event(next_state, state, event, event_id) do
-    with :ok <- maybe_allow_relay_event_ingest(next_state.event_ingest_limiter),
+    with :ok <-
+           maybe_allow_remote_ip_event_ingest(
+             next_state.remote_ip,
+             next_state.remote_ip_event_ingest_limiter
+           ),
+         :ok <- maybe_allow_relay_event_ingest(next_state.event_ingest_limiter),
          :ok <- authorize_listener_write(next_state, event) do
       publish_event_response(next_state, event)
     else
@@ -573,6 +582,9 @@ defmodule Parrhesia.Web.Connection do
 
   defp error_message_for_ingest_failure(:event_rate_limited),
     do: "rate-limited: too many EVENT messages"
+
+  defp error_message_for_ingest_failure(:ip_event_rate_limited),
+    do: "rate-limited: too many EVENT messages from this IP"
 
   defp error_message_for_ingest_failure(:relay_event_rate_limited),
     do: "rate-limited: relay-wide EVENT ingress exceeded"
@@ -1571,6 +1583,16 @@ defmodule Parrhesia.Web.Connection do
 
   defp event_ingest_limiter(_opts), do: EventIngestLimiter
 
+  defp remote_ip_event_ingest_limiter(opts) when is_list(opts) do
+    Keyword.get(opts, :remote_ip_event_ingest_limiter, IPEventIngestLimiter)
+  end
+
+  defp remote_ip_event_ingest_limiter(opts) when is_map(opts) do
+    Map.get(opts, :remote_ip_event_ingest_limiter, IPEventIngestLimiter)
+  end
+
+  defp remote_ip_event_ingest_limiter(_opts), do: IPEventIngestLimiter
+
   defp event_ingest_window_seconds(opts) when is_list(opts) do
     opts
     |> Keyword.get(:event_ingest_window_seconds)
@@ -1669,6 +1691,15 @@ defmodule Parrhesia.Web.Connection do
       true ->
         {:error, :event_rate_limited}
     end
+  end
+
+  defp maybe_allow_remote_ip_event_ingest(_remote_ip, nil), do: :ok
+
+  defp maybe_allow_remote_ip_event_ingest(remote_ip, server) do
+    IPEventIngestLimiter.allow(remote_ip, server)
+  catch
+    :exit, {:noproc, _details} -> :ok
+    :exit, {:normal, _details} -> :ok
   end
 
   defp maybe_allow_relay_event_ingest(nil), do: :ok

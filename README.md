@@ -164,7 +164,6 @@ Examples:
 
 ```bash
 export PARRHESIA_POLICIES_AUTH_REQUIRED_FOR_WRITES=true
-export PARRHESIA_FEATURES_VERIFY_EVENT_SIGNATURES=true
 export PARRHESIA_METRICS_ALLOWED_CIDRS="10.0.0.0/8,192.168.0.0/16"
 export PARRHESIA_LIMITS_OUTBOUND_OVERFLOW_STRATEGY=drop_oldest
 ```
@@ -291,6 +290,8 @@ Parrhesia treats NIP-43 invite requests as synthetic relay output, not stored cl
 | `:max_filter_limit` | `PARRHESIA_LIMITS_MAX_FILTER_LIMIT` | `500` |
 | `:max_tags_per_event` | `PARRHESIA_LIMITS_MAX_TAGS_PER_EVENT` | `256` |
 | `:max_tag_values_per_filter` | `PARRHESIA_LIMITS_MAX_TAG_VALUES_PER_FILTER` | `128` |
+| `:ip_max_event_ingest_per_window` | `PARRHESIA_LIMITS_IP_MAX_EVENT_INGEST_PER_WINDOW` | `1000` |
+| `:ip_event_ingest_window_seconds` | `PARRHESIA_LIMITS_IP_EVENT_INGEST_WINDOW_SECONDS` | `1` |
 | `:relay_max_event_ingest_per_window` | `PARRHESIA_LIMITS_RELAY_MAX_EVENT_INGEST_PER_WINDOW` | `10000` |
 | `:relay_event_ingest_window_seconds` | `PARRHESIA_LIMITS_RELAY_EVENT_INGEST_WINDOW_SECONDS` | `1` |
 | `:max_subscriptions_per_connection` | `PARRHESIA_LIMITS_MAX_SUBSCRIPTIONS_PER_CONNECTION` | `32` |
@@ -359,11 +360,13 @@ Parrhesia treats NIP-43 invite requests as synthetic relay output, not stored cl
 
 | Atom key | ENV | Default |
 | --- | --- | --- |
-| `:verify_event_signatures` | `PARRHESIA_FEATURES_VERIFY_EVENT_SIGNATURES` | `true` |
+| `:verify_event_signatures` | `-` | `true` |
 | `:nip_45_count` | `PARRHESIA_FEATURES_NIP_45_COUNT` | `true` |
 | `:nip_50_search` | `PARRHESIA_FEATURES_NIP_50_SEARCH` | `true` |
 | `:nip_77_negentropy` | `PARRHESIA_FEATURES_NIP_77_NEGENTROPY` | `true` |
 | `:marmot_push_notifications` | `PARRHESIA_FEATURES_MARMOT_PUSH_NOTIFICATIONS` | `false` |
+
+`:verify_event_signatures` is config-file only. Production releases always verify event signatures.
 
 #### Extra runtime config
 
