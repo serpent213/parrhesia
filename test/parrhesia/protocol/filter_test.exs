@@ -40,6 +40,15 @@ defmodule Parrhesia.Protocol.FilterTest do
     assert {:error, :invalid_search} = Filter.validate_filters([%{"search" => ""}])
   end
 
+  test "rejects tag filters with too many values" do
+    filter = %{"#e" => Enum.map(1..129, &"event-ref-#{&1}")}
+
+    assert {:error, :too_many_tag_values} = Filter.validate_filters([filter])
+
+    assert Filter.error_message(:too_many_tag_values) ==
+             "invalid: tag filters exceed configured value limit"
+  end
+
   test "matches with AND semantics inside filter and OR across filters" do
     event = valid_event()
 

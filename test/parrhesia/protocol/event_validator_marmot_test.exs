@@ -140,6 +140,18 @@ defmodule Parrhesia.Protocol.EventValidatorMarmotTest do
              EventValidator.validate(invalid_empty_content)
   end
 
+  test "rejects events with too many tags" do
+    event =
+      valid_keypackage_event(%{
+        "tags" => Enum.map(1..257, fn index -> ["e", "ref-#{index}"] end)
+      })
+
+    assert {:error, :too_many_tags} = EventValidator.validate(event)
+
+    assert {:error, "invalid: event tags exceed configured limit"} =
+             Protocol.validate_event(event)
+  end
+
   defp valid_keypackage_event(overrides \\ %{}) do
     base_event = %{
       "pubkey" => String.duplicate("1", 64),

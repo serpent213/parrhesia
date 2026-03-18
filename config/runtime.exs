@@ -174,6 +174,16 @@ if config_env() == :prod do
         "PARRHESIA_LIMITS_MAX_FILTER_LIMIT",
         Keyword.get(limits_defaults, :max_filter_limit, 500)
       ),
+    max_tags_per_event:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_TAGS_PER_EVENT",
+        Keyword.get(limits_defaults, :max_tags_per_event, 256)
+      ),
+    max_tag_values_per_filter:
+      int_env.(
+        "PARRHESIA_LIMITS_MAX_TAG_VALUES_PER_FILTER",
+        Keyword.get(limits_defaults, :max_tag_values_per_filter, 128)
+      ),
     max_subscriptions_per_connection:
       int_env.(
         "PARRHESIA_LIMITS_MAX_SUBSCRIPTIONS_PER_CONNECTION",

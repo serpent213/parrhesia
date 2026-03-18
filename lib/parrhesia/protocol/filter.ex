@@ -5,6 +5,7 @@ defmodule Parrhesia.Protocol.Filter do
 
   @max_kind 65_535
   @default_max_filters_per_req 16
+  @default_max_tag_values_per_filter 128
 
   @type validation_error ::
           :invalid_filters
@@ -19,6 +20,7 @@ defmodule Parrhesia.Protocol.Filter do
           | :invalid_until
           | :invalid_limit
           | :invalid_search
+          | :too_many_tag_values
           | :invalid_tag_filter
 
   @allowed_keys MapSet.new(["ids", "authors", "kinds", "since", "until", "limit", "search"])
@@ -36,6 +38,7 @@ defmodule Parrhesia.Protocol.Filter do
     invalid_until: "invalid: until must be a non-negative integer",
     invalid_limit: "invalid: limit must be a positive integer",
     invalid_search: "invalid: search must be a non-empty string",
+    too_many_tag_values: "invalid: tag filters exceed configured value limit",
     invalid_tag_filter:
       "invalid: tag filters must use #<single-letter> with non-empty string arrays"
   }
@@ -178,19 +181,33 @@ defmodule Parrhesia.Protocol.Filter do
     filter
     |> Enum.filter(fn {key, _value} -> valid_tag_filter_key?(key) end)
     |> Enum.reduce_while(:ok, fn {_key, values}, :ok ->
-      if valid_tag_filter_values?(values) do
-        {:cont, :ok}
-      else
-        {:halt, {:error, :invalid_tag_filter}}
+      case validate_tag_filter_values(values) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp valid_tag_filter_values?(values) when is_list(values) do
-    values != [] and Enum.all?(values, &is_binary/1)
-  end
+  defp validate_tag_filter_values(values) when is_list(values),
+    do: validate_tag_filter_values(values, max_tag_values_per_filter(), 0)
 
-  defp valid_tag_filter_values?(_values), do: false
+  defp validate_tag_filter_values(_values), do: {:error, :invalid_tag_filter}
+
+  defp validate_tag_filter_values([], _max_values, 0), do: {:error, :invalid_tag_filter}
+  defp validate_tag_filter_values([], _max_values, _count), do: :ok
+
+  defp validate_tag_filter_values([value | rest], max_values, count) do
+    cond do
+      count + 1 > max_values ->
+        {:error, :too_many_tag_values}
+
+      is_binary(value) ->
+        validate_tag_filter_values(rest, max_values, count + 1)
+
+      true ->
+        {:error, :invalid_tag_filter}
+    end
+  end
 
   defp filter_predicates(event, filter) do
     [
@@ -277,5 +294,13 @@ defmodule Parrhesia.Protocol.Filter do
     :parrhesia
     |> Application.get_env(:limits, [])
     |> Keyword.get(:max_filters_per_req, @default_max_filters_per_req)
+  end
+
+  defp max_tag_values_per_filter do
+    case Application.get_env(:parrhesia, :limits, [])
+         |> Keyword.get(:max_tag_values_per_filter) do
+      value when is_integer(value) and value > 0 -> value
+      _other -> @default_max_tag_values_per_filter
+    end
   end
 end

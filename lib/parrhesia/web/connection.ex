@@ -414,6 +414,7 @@ defmodule Parrhesia.Web.Connection do
                    :invalid_until,
                    :invalid_limit,
                    :invalid_search,
+                   :too_many_tag_values,
                    :invalid_tag_filter
                  ] ->
               Filter.error_message(reason)
@@ -460,6 +461,27 @@ defmodule Parrhesia.Web.Connection do
               :marmot_group_filter_window_too_wide
             ] do
     restricted_count_notice(state, subscription_id, EventPolicy.error_message(reason))
+  end
+
+  defp handle_count_error(state, subscription_id, reason)
+       when reason in [
+              :invalid_filters,
+              :empty_filters,
+              :too_many_filters,
+              :invalid_filter,
+              :invalid_filter_key,
+              :invalid_ids,
+              :invalid_authors,
+              :invalid_kinds,
+              :invalid_since,
+              :invalid_until,
+              :invalid_limit,
+              :invalid_search,
+              :too_many_tag_values,
+              :invalid_tag_filter
+            ] do
+    response = Protocol.encode_relay({:closed, subscription_id, Filter.error_message(reason)})
+    {:push, {:text, response}, state}
   end
 
   defp handle_count_error(state, subscription_id, reason) do
@@ -648,6 +670,7 @@ defmodule Parrhesia.Web.Connection do
               :invalid_until,
               :invalid_limit,
               :invalid_search,
+              :too_many_tag_values,
               :invalid_tag_filter,
               :auth_required,
               :pubkey_not_allowed,
@@ -701,6 +724,7 @@ defmodule Parrhesia.Web.Connection do
               :invalid_until,
               :invalid_limit,
               :invalid_search,
+              :too_many_tag_values,
               :invalid_tag_filter
             ],
        do: Filter.error_message(reason)

@@ -40,6 +40,38 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert payload["approximate"] == false
   end
 
+  test "REQ rejects tag filters that exceed the configured value limit" do
+    state = connection_state()
+
+    payload =
+      JSON.encode!(["REQ", "sub-tag-limit", %{"#e" => Enum.map(1..129, &"ref-#{&1}")}])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "CLOSED",
+             "sub-tag-limit",
+             "invalid: tag filters exceed configured value limit"
+           ]
+  end
+
+  test "COUNT rejects tag filters that exceed the configured value limit" do
+    state = connection_state()
+
+    payload =
+      JSON.encode!(["COUNT", "sub-tag-limit", %{"#e" => Enum.map(1..129, &"ref-#{&1}")}])
+
+    assert {:push, {:text, response}, ^state} =
+             Connection.handle_in({payload, [opcode: :text]}, state)
+
+    assert JSON.decode!(response) == [
+             "CLOSED",
+             "sub-tag-limit",
+             "invalid: tag filters exceed configured value limit"
+           ]
+  end
+
   test "AUTH accepts valid challenge event" do
     state = connection_state()
 

@@ -6,6 +6,8 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:limits, :max_event_bytes]) == 262_144
     assert Parrhesia.Config.get([:limits, :max_event_future_skew_seconds]) == 900
     assert Parrhesia.Config.get([:limits, :max_event_ingest_per_window]) == 120
+    assert Parrhesia.Config.get([:limits, :max_tags_per_event]) == 256
+    assert Parrhesia.Config.get([:limits, :max_tag_values_per_filter]) == 128
     assert Parrhesia.Config.get([:limits, :event_ingest_window_seconds]) == 1
     assert Parrhesia.Config.get([:limits, :auth_max_age_seconds]) == 600
     assert Parrhesia.Config.get([:limits, :max_outbound_queue]) == 256

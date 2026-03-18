@@ -6,6 +6,7 @@ defmodule Parrhesia.Protocol.EventValidator do
   @required_fields ~w[id pubkey created_at kind tags content sig]
   @max_kind 65_535
   @default_max_event_future_skew_seconds 900
+  @default_max_tags_per_event 256
   @supported_mls_ciphersuites MapSet.new(~w[0x0001 0x0002 0x0003 0x0004 0x0005 0x0006 0x0007])
   @required_mls_extensions MapSet.new(["0xf2ee", "0x000a"])
   @supported_keypackage_ref_sizes [32, 48, 64]
@@ -17,6 +18,7 @@ defmodule Parrhesia.Protocol.EventValidator do
           | :invalid_created_at
           | :created_at_too_far_in_future
           | :invalid_kind
+          | :too_many_tags
           | :invalid_tags
           | :invalid_content
           | :invalid_sig
@@ -87,6 +89,7 @@ defmodule Parrhesia.Protocol.EventValidator do
     created_at_too_far_in_future:
       "invalid: event creation date is too far off from the current time",
     invalid_kind: "invalid: kind must be an integer between 0 and 65535",
+    too_many_tags: "invalid: event tags exceed configured limit",
     invalid_tags: "invalid: tags must be an array of non-empty string arrays",
     invalid_content: "invalid: content must be a string",
     invalid_sig: "invalid: sig must be 64-byte lowercase hex",
@@ -169,15 +172,24 @@ defmodule Parrhesia.Protocol.EventValidator do
   defp validate_kind(kind) when is_integer(kind) and kind >= 0 and kind <= @max_kind, do: :ok
   defp validate_kind(_kind), do: {:error, :invalid_kind}
 
-  defp validate_tags(tags) when is_list(tags) do
-    if Enum.all?(tags, &valid_tag?/1) do
-      :ok
-    else
-      {:error, :invalid_tags}
-    end
-  end
+  defp validate_tags(tags) when is_list(tags), do: validate_tags(tags, max_tags_per_event(), 0)
 
   defp validate_tags(_tags), do: {:error, :invalid_tags}
+
+  defp validate_tags([], _max_tags, _count), do: :ok
+
+  defp validate_tags([tag | rest], max_tags, count) do
+    cond do
+      count + 1 > max_tags ->
+        {:error, :too_many_tags}
+
+      valid_tag?(tag) ->
+        validate_tags(rest, max_tags, count + 1)
+
+      true ->
+        {:error, :invalid_tags}
+    end
+  end
 
   defp validate_content(content) when is_binary(content), do: :ok
   defp validate_content(_content), do: {:error, :invalid_content}
@@ -509,5 +521,12 @@ defmodule Parrhesia.Protocol.EventValidator do
     :parrhesia
     |> Application.get_env(:limits, [])
     |> Keyword.get(:max_event_future_skew_seconds, @default_max_event_future_skew_seconds)
+  end
+
+  defp max_tags_per_event do
+    case Application.get_env(:parrhesia, :limits, []) |> Keyword.get(:max_tags_per_event) do
+      value when is_integer(value) and value > 0 -> value
+      _other -> @default_max_tags_per_event
+    end
   end
 end
