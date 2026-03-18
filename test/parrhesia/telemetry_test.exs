@@ -12,6 +12,7 @@ defmodule Parrhesia.TelemetryTest do
     assert [:parrhesia, :connection, :outbound_queue, :depth] in metric_names
     assert [:parrhesia, :connection, :outbound_queue, :pressure] in metric_names
     assert [:parrhesia, :connection, :outbound_queue, :pressure_events, :count] in metric_names
+    assert [:parrhesia, :process, :mailbox, :depth] in metric_names
   end
 
   test "emit/3 accepts traffic-class metadata" do
@@ -21,5 +22,27 @@ defmodule Parrhesia.TelemetryTest do
                %{duration: 1},
                %{traffic_class: :marmot}
              )
+  end
+
+  test "emit_process_mailbox_depth/2 tags process type" do
+    handler_id = "telemetry-mailbox-depth-test"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:parrhesia, :process, :mailbox],
+        fn _event_name, measurements, metadata, test_pid ->
+          send(test_pid, {:mailbox_depth, measurements, metadata})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert :ok = Telemetry.emit_process_mailbox_depth(:connection)
+
+    assert_receive {:mailbox_depth, %{depth: depth}, %{process_type: :connection}}
+    assert is_integer(depth)
+    assert depth >= 0
   end
 end

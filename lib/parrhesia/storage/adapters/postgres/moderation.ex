@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.Moderation
@@ -212,7 +213,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
         select: field(record, ^field)
       )
 
-    Repo.all(query)
+    read_repo()
+    |> then(fn repo -> repo.all(query) end)
   end
 
   defp cache_put(scope, value) do
@@ -266,7 +268,9 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
         limit: 1
       )
 
-    Repo.one(query) == 1
+    read_repo()
+    |> then(fn repo -> repo.one(query) end)
+    |> Kernel.==(1)
   end
 
   defp scope_populated_db?(table, field) do
@@ -276,7 +280,10 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
         limit: 1
       )
 
-    not is_nil(Repo.one(query))
+    read_repo()
+    |> then(fn repo -> repo.one(query) end)
+    |> is_nil()
+    |> Kernel.not()
   end
 
   defp normalize_hex_or_binary(value, expected_bytes, _reason)
@@ -315,4 +322,6 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Moderation do
 
   defp to_inet({_, _, _, _, _, _, _, _} = ip_tuple),
     do: %Postgrex.INET{address: ip_tuple, netmask: 128}
+
+  defp read_repo, do: PostgresRepos.read()
 end

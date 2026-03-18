@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Partitions do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Repo
 
   @identifier_pattern ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/
@@ -35,7 +36,8 @@ defmodule Parrhesia.Storage.Partitions do
         order_by: [asc: table.tablename]
       )
 
-    Repo.all(query)
+    read_repo()
+    |> then(fn repo -> repo.all(query) end)
   end
 
   @doc """
@@ -88,7 +90,9 @@ defmodule Parrhesia.Storage.Partitions do
   """
   @spec database_size_bytes() :: {:ok, non_neg_integer()} | {:error, term()}
   def database_size_bytes do
-    case Repo.query("SELECT pg_database_size(current_database())") do
+    repo = read_repo()
+
+    case repo.query("SELECT pg_database_size(current_database())") do
       {:ok, %{rows: [[size]]}} when is_integer(size) and size >= 0 -> {:ok, size}
       {:ok, _result} -> {:error, :unexpected_result}
       {:error, reason} -> {:error, reason}
@@ -219,7 +223,9 @@ defmodule Parrhesia.Storage.Partitions do
       LIMIT 1
       """
 
-    case Repo.query(query, [partition_name, parent_table_name]) do
+    repo = read_repo()
+
+    case repo.query(query, [partition_name, parent_table_name]) do
       {:ok, %{rows: [[1]]}} -> true
       {:ok, %{rows: []}} -> false
       {:ok, _result} -> false
@@ -277,6 +283,8 @@ defmodule Parrhesia.Storage.Partitions do
     |> DateTime.new!(~T[00:00:00], "Etc/UTC")
     |> DateTime.to_unix()
   end
+
+  defp read_repo, do: PostgresRepos.read()
 
   defp month_start(%Date{} = date), do: Date.new!(date.year, date.month, 1)
 

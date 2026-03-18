@@ -111,6 +111,7 @@ defmodule Parrhesia.Web.Connection do
 
   @impl true
   def init(opts) do
+    maybe_configure_exit_trapping(opts)
     auth_challenges = auth_challenges(opts)
 
     state = %__MODULE__{
@@ -136,29 +137,33 @@ defmodule Parrhesia.Web.Connection do
       auth_max_age_seconds: auth_max_age_seconds(opts)
     }
 
+    Telemetry.emit_process_mailbox_depth(:connection)
     {:ok, state}
   end
 
   @impl true
   def handle_in({payload, [opcode: :text]}, %__MODULE__{} = state) do
-    if byte_size(payload) > state.max_frame_bytes do
-      response =
-        Protocol.encode_relay({
-          :notice,
-          "invalid: websocket frame exceeds max frame size"
-        })
+    result =
+      if byte_size(payload) > state.max_frame_bytes do
+        response =
+          Protocol.encode_relay({
+            :notice,
+            "invalid: websocket frame exceeds max frame size"
+          })
 
-      {:push, {:text, response}, state}
-    else
-      case Protocol.decode_client(payload) do
-        {:ok, decoded_message} ->
-          handle_decoded_message(decoded_message, state)
+        {:push, {:text, response}, state}
+      else
+        case Protocol.decode_client(payload) do
+          {:ok, decoded_message} ->
+            handle_decoded_message(decoded_message, state)
 
-        {:error, reason} ->
-          response = Protocol.encode_relay({:notice, Protocol.decode_error_notice(reason)})
-          {:push, {:text, response}, state}
+          {:error, reason} ->
+            response = Protocol.encode_relay({:notice, Protocol.decode_error_notice(reason)})
+            {:push, {:text, response}, state}
+        end
       end
-    end
+
+    emit_connection_mailbox_depth(result)
   end
 
   @impl true
@@ -167,6 +172,7 @@ defmodule Parrhesia.Web.Connection do
       Protocol.encode_relay({:notice, "invalid: binary websocket frames are not supported"})
 
     {:push, {:text, response}, state}
+    |> emit_connection_mailbox_depth()
   end
 
   defp handle_decoded_message({:event, event}, state), do: handle_event_ingest(state, event)
@@ -211,8 +217,10 @@ defmodule Parrhesia.Web.Connection do
       when is_reference(ref) and is_binary(subscription_id) and is_map(event) do
     if current_subscription_ref?(state, subscription_id, ref) do
       handle_fanout_events(state, [{subscription_id, event}])
+      |> emit_connection_mailbox_depth()
     else
       {:ok, state}
+      |> emit_connection_mailbox_depth()
     end
   end
 
@@ -224,9 +232,12 @@ defmodule Parrhesia.Web.Connection do
     if current_subscription_ref?(state, subscription_id, ref) and
          not subscription_eose_sent?(state, subscription_id) do
       response = Protocol.encode_relay({:eose, subscription_id})
+
       {:push, {:text, response}, mark_subscription_eose_sent(state, subscription_id)}
+      |> emit_connection_mailbox_depth()
     else
       {:ok, state}
+      |> emit_connection_mailbox_depth()
     end
   end
 
@@ -242,20 +253,25 @@ defmodule Parrhesia.Web.Connection do
         |> drop_queued_subscription_events(subscription_id)
 
       response = Protocol.encode_relay({:closed, subscription_id, stream_closed_reason(reason)})
+
       {:push, {:text, response}, next_state}
+      |> emit_connection_mailbox_depth()
     else
       {:ok, state}
+      |> emit_connection_mailbox_depth()
     end
   end
 
   def handle_info({:fanout_event, subscription_id, event}, %__MODULE__{} = state)
       when is_binary(subscription_id) and is_map(event) do
     handle_fanout_events(state, [{subscription_id, event}])
+    |> emit_connection_mailbox_depth()
   end
 
   def handle_info({:fanout_events, fanout_events}, %__MODULE__{} = state)
       when is_list(fanout_events) do
     handle_fanout_events(state, fanout_events)
+    |> emit_connection_mailbox_depth()
   end
 
   def handle_info(@drain_outbound_queue, %__MODULE__{} = state) do
@@ -263,13 +279,26 @@ defmodule Parrhesia.Web.Connection do
 
     if frames == [] do
       {:ok, next_state}
+      |> emit_connection_mailbox_depth()
     else
       {:push, frames, next_state}
+      |> emit_connection_mailbox_depth()
     end
+  end
+
+  def handle_info({:EXIT, _from, :shutdown}, %__MODULE__{} = state) do
+    close_with_drained_outbound_frames(state)
+    |> emit_connection_mailbox_depth()
+  end
+
+  def handle_info({:EXIT, _from, {:shutdown, _detail}}, %__MODULE__{} = state) do
+    close_with_drained_outbound_frames(state)
+    |> emit_connection_mailbox_depth()
   end
 
   def handle_info(_message, %__MODULE__{} = state) do
     {:ok, state}
+    |> emit_connection_mailbox_depth()
   end
 
   @impl true
@@ -988,6 +1017,11 @@ defmodule Parrhesia.Web.Connection do
     {:stop, :normal, {1008, message}, [{:text, notice}], state}
   end
 
+  defp close_with_drained_outbound_frames(state) do
+    {frames, next_state} = drain_all_outbound_frames(state)
+    {:stop, :normal, {1012, "service restart"}, frames, next_state}
+  end
+
   defp enqueue_fanout_events(state, fanout_events) do
     Enum.reduce_while(fanout_events, {:ok, state}, fn
       {subscription_id, event}, {:ok, acc} when is_binary(subscription_id) and is_map(event) ->
@@ -1094,8 +1128,36 @@ defmodule Parrhesia.Web.Connection do
     {Enum.reverse(frames), next_state}
   end
 
+  defp drain_all_outbound_frames(%__MODULE__{} = state) do
+    {frames, next_queue, remaining_size} =
+      pop_frames(state.outbound_queue, state.outbound_queue_size, :infinity, [])
+
+    next_state =
+      %__MODULE__{
+        state
+        | outbound_queue: next_queue,
+          outbound_queue_size: remaining_size,
+          drain_scheduled?: false
+      }
+
+    emit_outbound_queue_depth(next_state)
+
+    {Enum.reverse(frames), next_state}
+  end
+
   defp pop_frames(queue, queue_size, _remaining_batch, acc) when queue_size == 0,
     do: {acc, queue, queue_size}
+
+  defp pop_frames(queue, queue_size, :infinity, acc) do
+    case :queue.out(queue) do
+      {{:value, {subscription_id, event}}, next_queue} ->
+        frame = {:text, Protocol.encode_relay({:event, subscription_id, event})}
+        pop_frames(next_queue, queue_size - 1, :infinity, [frame | acc])
+
+      {:empty, _same_queue} ->
+        {acc, :queue.new(), 0}
+    end
+  end
 
   defp pop_frames(queue, queue_size, remaining_batch, acc) when remaining_batch <= 0,
     do: {acc, queue, queue_size}
@@ -1143,6 +1205,11 @@ defmodule Parrhesia.Web.Connection do
         metadata
       )
     end
+  end
+
+  defp emit_connection_mailbox_depth(result) do
+    Telemetry.emit_process_mailbox_depth(:connection)
+    result
   end
 
   defp ensure_subscription_capacity(%__MODULE__{} = state, subscription_id) do
@@ -1640,6 +1707,18 @@ defmodule Parrhesia.Web.Connection do
     |> Application.get_env(:limits, [])
     |> Keyword.get(:auth_max_age_seconds, @default_auth_max_age_seconds)
   end
+
+  defp maybe_configure_exit_trapping(opts) do
+    if trap_exit?(opts) do
+      Process.flag(:trap_exit, true)
+    end
+
+    :ok
+  end
+
+  defp trap_exit?(opts) when is_list(opts), do: Keyword.get(opts, :trap_exit?, true)
+  defp trap_exit?(opts) when is_map(opts), do: Map.get(opts, :trap_exit?, true)
+  defp trap_exit?(_opts), do: true
 
   defp request_context(%__MODULE__{} = state, subscription_id \\ nil) do
     %RequestContext{

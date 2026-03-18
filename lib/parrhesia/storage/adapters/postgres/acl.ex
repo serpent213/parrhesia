@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.ACL do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.ACL
@@ -74,7 +75,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.ACL do
       |> maybe_filter_principal(Keyword.get(opts, :principal))
       |> maybe_filter_capability(Keyword.get(opts, :capability))
 
-    {:ok, Enum.map(Repo.all(query), &normalize_persisted_rule/1)}
+    repo = read_repo()
+    {:ok, Enum.map(repo.all(query), &normalize_persisted_rule/1)}
   end
 
   def list_rules(_context, _opts), do: {:error, :invalid_opts}
@@ -133,11 +135,15 @@ defmodule Parrhesia.Storage.Adapters.Postgres.ACL do
         }
       )
 
-    case Repo.one(query) do
+    repo = read_repo()
+
+    case repo.one(query) do
       nil -> nil
       stored_rule -> normalize_persisted_rule(stored_rule)
     end
   end
+
+  defp read_repo, do: PostgresRepos.read()
 
   defp insert_rule(normalized_rule) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

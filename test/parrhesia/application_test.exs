@@ -1,6 +1,8 @@
 defmodule Parrhesia.ApplicationTest do
   use Parrhesia.IntegrationCase, async: false
 
+  alias Parrhesia.PostgresRepos
+
   test "starts the core supervision tree" do
     assert is_pid(Process.whereis(Parrhesia.Supervisor))
     assert is_pid(Process.whereis(Parrhesia.Telemetry))
@@ -25,6 +27,7 @@ defmodule Parrhesia.ApplicationTest do
     assert is_pid(Process.whereis(Parrhesia.Auth.Nip98ReplayCache))
     assert is_pid(Process.whereis(Parrhesia.API.Identity.Manager))
     assert is_pid(Process.whereis(Parrhesia.API.Sync.Manager))
+    assert Enum.all?(PostgresRepos.started_repos(), &is_pid(Process.whereis(&1)))
 
     if negentropy_enabled?() do
       assert is_pid(Process.whereis(Parrhesia.Negentropy.Sessions))

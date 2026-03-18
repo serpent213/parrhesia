@@ -1,14 +1,7 @@
 defmodule Parrhesia.TestSupport.Runtime do
   @moduledoc false
 
-  @required_processes [
-    Parrhesia.Supervisor,
-    Parrhesia.Config,
-    Parrhesia.Repo,
-    Parrhesia.Subscriptions.Supervisor,
-    Parrhesia.API.Stream.Supervisor,
-    Parrhesia.Web.Endpoint
-  ]
+  alias Parrhesia.PostgresRepos
 
   def ensure_started! do
     if healthy?() do
@@ -19,7 +12,7 @@ defmodule Parrhesia.TestSupport.Runtime do
   end
 
   defp healthy? do
-    Enum.all?(@required_processes, &is_pid(Process.whereis(&1)))
+    Enum.all?(required_processes(), &is_pid(Process.whereis(&1)))
   end
 
   defp restart! do
@@ -31,5 +24,15 @@ defmodule Parrhesia.TestSupport.Runtime do
 
     {:ok, _apps} = Application.ensure_all_started(:parrhesia)
     :ok
+  end
+
+  defp required_processes do
+    [
+      Parrhesia.Supervisor,
+      Parrhesia.Config,
+      Parrhesia.Subscriptions.Supervisor,
+      Parrhesia.API.Stream.Supervisor,
+      Parrhesia.Web.Endpoint
+    ] ++ PostgresRepos.started_repos()
   end
 end

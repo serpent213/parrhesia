@@ -3,6 +3,9 @@ import Config
 config :postgrex, :json_library, JSON
 
 config :parrhesia,
+  database: [
+    separate_read_pool?: config_env() != :test
+  ],
   moderation_cache_enabled: true,
   relay_url: "ws://localhost:4413/relay",
   nip43: [
@@ -120,6 +123,7 @@ config :parrhesia,
   ]
 
 config :parrhesia, Parrhesia.Repo, types: Parrhesia.PostgresTypes
+config :parrhesia, Parrhesia.ReadRepo, types: Parrhesia.PostgresTypes
 
 config :parrhesia, ecto_repos: [Parrhesia.Repo]
 

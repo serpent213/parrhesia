@@ -80,6 +80,13 @@ defmodule Parrhesia.Telemetry do
         tags: [:traffic_class],
         tag_values: &traffic_class_tag_values/1
       ),
+      last_value("parrhesia.process.mailbox.depth",
+        event_name: [:parrhesia, :process, :mailbox],
+        measurement: :depth,
+        tags: [:process_type],
+        tag_values: &process_tag_values/1,
+        reporter_options: [prometheus_type: :gauge]
+      ),
       last_value("parrhesia.vm.memory.total.bytes",
         event_name: [:parrhesia, :vm, :memory],
         measurement: :total,
@@ -93,6 +100,22 @@ defmodule Parrhesia.Telemetry do
   def emit(event_name, measurements, metadata \\ %{})
       when is_list(event_name) and is_map(measurements) and is_map(metadata) do
     :telemetry.execute(event_name, measurements, metadata)
+  end
+
+  @spec emit_process_mailbox_depth(atom(), map()) :: :ok
+  def emit_process_mailbox_depth(process_type, metadata \\ %{})
+      when is_atom(process_type) and is_map(metadata) do
+    case Process.info(self(), :message_queue_len) do
+      {:message_queue_len, depth} ->
+        emit(
+          [:parrhesia, :process, :mailbox],
+          %{depth: depth},
+          Map.put(metadata, :process_type, process_type)
+        )
+
+      nil ->
+        :ok
+    end
   end
 
   defp periodic_measurements do
@@ -110,5 +133,10 @@ defmodule Parrhesia.Telemetry do
   defp traffic_class_tag_values(metadata) do
     traffic_class = metadata |> Map.get(:traffic_class, :generic) |> to_string()
     %{traffic_class: traffic_class}
+  end
+
+  defp process_tag_values(metadata) do
+    process_type = metadata |> Map.get(:process_type, :unknown) |> to_string()
+    %{process_type: process_type}
   end
 end

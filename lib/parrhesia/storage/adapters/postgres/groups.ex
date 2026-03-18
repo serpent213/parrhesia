@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Groups do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.Groups
@@ -46,7 +47,9 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Groups do
           limit: 1
         )
 
-      case Repo.one(query) do
+      repo = read_repo()
+
+      case repo.one(query) do
         nil ->
           {:ok, nil}
 
@@ -94,8 +97,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Groups do
         )
 
       memberships =
-        query
-        |> Repo.all()
+        read_repo()
+        |> then(fn repo -> repo.all(query) end)
         |> Enum.map(fn membership ->
           to_membership_map(
             membership.group_id,
@@ -163,8 +166,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Groups do
         )
 
       roles =
-        query
-        |> Repo.all()
+        read_repo()
+        |> then(fn repo -> repo.all(query) end)
         |> Enum.map(fn role ->
           to_role_map(role.group_id, role.pubkey, role.role, role.metadata)
         end)
@@ -242,6 +245,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Groups do
 
   defp unwrap_transaction_result({:ok, result}), do: {:ok, result}
   defp unwrap_transaction_result({:error, reason}), do: {:error, reason}
+  defp read_repo, do: PostgresRepos.read()
 
   defp fetch_required_string(map, key) do
     map

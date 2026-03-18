@@ -5,7 +5,8 @@ defmodule Parrhesia.Performance.LoadSoakTest do
 
   @tag :performance
   test "fanout enqueue/drain stays within relaxed p95 budget" do
-    {:ok, state} = Connection.init(subscription_index: nil, max_outbound_queue: 10_000)
+    {:ok, state} =
+      Connection.init(subscription_index: nil, max_outbound_queue: 10_000, trap_exit?: false)
 
     req_payload = JSON.encode!(["REQ", "sub-load", %{"kinds" => [1]}])
 

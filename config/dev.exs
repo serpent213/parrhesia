@@ -23,3 +23,13 @@ config :parrhesia,
          show_sensitive_data_on_connection_error: true,
          pool_size: 10
        ] ++ repo_host_opts
+
+config :parrhesia,
+       Parrhesia.ReadRepo,
+       [
+         username: System.get_env("PGUSER") || System.get_env("USER") || "agent",
+         password: System.get_env("PGPASSWORD"),
+         database: System.get_env("PGDATABASE") || "parrhesia_dev",
+         show_sensitive_data_on_connection_error: true,
+         pool_size: 10
+       ] ++ repo_host_opts

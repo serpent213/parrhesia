@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Repo
 
   @behaviour Parrhesia.Storage.Admin
@@ -73,8 +74,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
       |> maybe_filter_actor_pubkey(Keyword.get(opts, :actor_pubkey))
 
     logs =
-      query
-      |> Repo.all()
+      read_repo()
+      |> then(fn repo -> repo.all(query) end)
       |> Enum.map(&to_audit_log_map/1)
 
     {:ok, logs}
@@ -83,11 +84,12 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
   def list_audit_logs(_context, _opts), do: {:error, :invalid_opts}
 
   defp relay_stats do
-    events_count = Repo.aggregate("events", :count, :id)
-    banned_pubkeys = Repo.aggregate("banned_pubkeys", :count, :pubkey)
-    allowed_pubkeys = Repo.aggregate("allowed_pubkeys", :count, :pubkey)
-    blocked_ips = Repo.aggregate("blocked_ips", :count, :ip)
-    acl_rules = Repo.aggregate("acl_rules", :count, :id)
+    repo = read_repo()
+    events_count = repo.aggregate("events", :count, :id)
+    banned_pubkeys = repo.aggregate("banned_pubkeys", :count, :pubkey)
+    allowed_pubkeys = repo.aggregate("allowed_pubkeys", :count, :pubkey)
+    blocked_ips = repo.aggregate("blocked_ips", :count, :ip)
+    acl_rules = repo.aggregate("acl_rules", :count, :id)
 
     %{
       "events" => events_count,
@@ -233,6 +235,8 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Admin do
   end
 
   defp normalize_pubkey(_value), do: {:error, :invalid_actor_pubkey}
+
+  defp read_repo, do: PostgresRepos.read()
 
   defp invalid_key_reason(:params), do: :invalid_params
   defp invalid_key_reason(:result), do: :invalid_result

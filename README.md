@@ -210,6 +210,16 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:queue_interval` | `DB_QUEUE_INTERVAL_MS` | `5000` | Ecto queue interval in ms |
 | `:types` | `-` | `Parrhesia.PostgresTypes` | Internal config-file setting |
 
+#### `Parrhesia.ReadRepo`
+
+| Atom key | ENV | Default | Notes |
+| --- | --- | --- | --- |
+| `:url` | `DATABASE_URL` | required | Shares the primary DB URL with the write repo |
+| `:pool_size` | `DB_READ_POOL_SIZE` | `32` | Read-only query pool size |
+| `:queue_target` | `DB_READ_QUEUE_TARGET_MS` | `1000` | Read pool Ecto queue target in ms |
+| `:queue_interval` | `DB_READ_QUEUE_INTERVAL_MS` | `5000` | Read pool Ecto queue interval in ms |
+| `:types` | `-` | `Parrhesia.PostgresTypes` | Internal config-file setting |
+
 #### `:listeners`
 
 | Atom key | ENV | Default | Notes |

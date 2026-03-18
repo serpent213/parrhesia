@@ -931,6 +931,30 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert delivered_ids == Enum.map(events, & &1["id"])
   end
 
+  test "shutdown drains queued outbound frames before closing" do
+    state = subscribed_connection_state(outbound_drain_batch_size: 1)
+    first = live_event(String.duplicate("a", 64), 1)
+    second = live_event(String.duplicate("b", 64), 1)
+
+    assert {:ok, queued_state} =
+             Connection.handle_info(
+               {:fanout_events, [{"sub-1", first}, {"sub-1", second}]},
+               state
+             )
+
+    assert queued_state.outbound_queue_size == 2
+
+    assert {:stop, :normal, {1012, "service restart"}, frames, drained_state} =
+             Connection.handle_info({:EXIT, self(), :shutdown}, queued_state)
+
+    assert drained_state.outbound_queue_size == 0
+
+    assert Enum.map(frames, fn {:text, payload} -> JSON.decode!(payload) end) == [
+             ["EVENT", "sub-1", first],
+             ["EVENT", "sub-1", second]
+           ]
+  end
+
   test "outbound queue overflow closes connection when strategy is close" do
     state =
       subscribed_connection_state(
@@ -975,7 +999,12 @@ defmodule Parrhesia.Web.ConnectionTest do
   end
 
   defp connection_state(opts \\ []) do
-    {:ok, state} = Connection.init(Keyword.put_new(opts, :subscription_index, nil))
+    opts =
+      opts
+      |> Keyword.put_new(:subscription_index, nil)
+      |> Keyword.put_new(:trap_exit?, false)
+
+    {:ok, state} = Connection.init(opts)
     state
   end
 

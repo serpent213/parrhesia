@@ -5,6 +5,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   import Ecto.Query
 
+  alias Parrhesia.PostgresRepos
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Repo
 
@@ -67,7 +68,9 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
           }
         )
 
-      case Repo.one(event_query) do
+      repo = read_repo()
+
+      case repo.one(event_query) do
         nil ->
           {:ok, nil}
 
@@ -81,13 +84,14 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   def query(_context, filters, opts) when is_list(opts) do
     with :ok <- Filter.validate_filters(filters) do
       now = Keyword.get(opts, :now, System.system_time(:second))
+      repo = read_repo()
 
       persisted_events =
         filters
         |> Enum.flat_map(fn filter ->
           filter
           |> event_query_for_filter(now, opts)
-          |> Repo.all()
+          |> repo.all()
         end)
         |> deduplicate_events()
         |> sort_persisted_events(filters)
@@ -365,30 +369,7 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp maybe_upsert_replaceable_state(normalized_event, now, deleted_at) do
     if replaceable_kind?(normalized_event.kind) do
-      lookup_query =
-        from(state in "replaceable_event_state",
-          where:
-            state.pubkey == ^normalized_event.pubkey and state.kind == ^normalized_event.kind,
-          select: %{event_created_at: state.event_created_at, event_id: state.event_id}
-        )
-
-      update_query =
-        from(state in "replaceable_event_state",
-          where:
-            state.pubkey == ^normalized_event.pubkey and
-              state.kind == ^normalized_event.kind
-        )
-
-      upsert_state_table(
-        "replaceable_event_state",
-        lookup_query,
-        update_query,
-        replaceable_state_row(normalized_event, now),
-        normalized_event,
-        now,
-        deleted_at,
-        :replaceable_state_update_failed
-      )
+      upsert_replaceable_state_table(normalized_event, now, deleted_at)
     else
       :ok
     end
@@ -396,157 +377,92 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp maybe_upsert_addressable_state(normalized_event, now, deleted_at) do
     if addressable_kind?(normalized_event.kind) do
-      lookup_query =
-        from(state in "addressable_event_state",
-          where:
-            state.pubkey == ^normalized_event.pubkey and
-              state.kind == ^normalized_event.kind and
-              state.d_tag == ^normalized_event.d_tag,
-          select: %{event_created_at: state.event_created_at, event_id: state.event_id}
-        )
-
-      update_query =
-        from(state in "addressable_event_state",
-          where:
-            state.pubkey == ^normalized_event.pubkey and
-              state.kind == ^normalized_event.kind and
-              state.d_tag == ^normalized_event.d_tag
-        )
-
-      upsert_state_table(
-        "addressable_event_state",
-        lookup_query,
-        update_query,
-        addressable_state_row(normalized_event, now),
-        normalized_event,
-        now,
-        deleted_at,
-        :addressable_state_update_failed
-      )
+      upsert_addressable_state_table(normalized_event, now, deleted_at)
     else
       :ok
     end
   end
 
-  defp upsert_state_table(
-         table_name,
-         lookup_query,
-         update_query,
-         insert_row,
-         normalized_event,
-         now,
-         deleted_at,
-         failure_reason
-       ) do
-    case Repo.one(lookup_query) do
-      nil ->
-        insert_state_or_resolve_race(
-          table_name,
-          lookup_query,
-          update_query,
-          insert_row,
-          normalized_event,
-          now,
-          deleted_at,
-          failure_reason
-        )
+  defp upsert_replaceable_state_table(normalized_event, now, deleted_at) do
+    params = [
+      normalized_event.pubkey,
+      normalized_event.kind,
+      normalized_event.created_at,
+      normalized_event.id,
+      now,
+      now
+    ]
 
-      current_state ->
-        maybe_update_state(
-          update_query,
-          normalized_event,
-          current_state,
-          now,
-          deleted_at,
-          failure_reason
-        )
+    case Repo.query(replaceable_state_upsert_sql(), params) do
+      {:ok, %{rows: [row]}} ->
+        finalize_state_upsert(row, normalized_event, deleted_at, :replaceable_state_update_failed)
+
+      {:ok, _result} ->
+        Repo.rollback(:replaceable_state_update_failed)
+
+      {:error, _reason} ->
+        Repo.rollback(:replaceable_state_update_failed)
     end
   end
 
-  defp insert_state_or_resolve_race(
-         table_name,
-         lookup_query,
-         update_query,
-         insert_row,
+  defp upsert_addressable_state_table(normalized_event, now, deleted_at) do
+    params = [
+      normalized_event.pubkey,
+      normalized_event.kind,
+      normalized_event.d_tag,
+      normalized_event.created_at,
+      normalized_event.id,
+      now,
+      now
+    ]
+
+    case Repo.query(addressable_state_upsert_sql(), params) do
+      {:ok, %{rows: [row]}} ->
+        finalize_state_upsert(row, normalized_event, deleted_at, :addressable_state_update_failed)
+
+      {:ok, _result} ->
+        Repo.rollback(:addressable_state_update_failed)
+
+      {:error, _reason} ->
+        Repo.rollback(:addressable_state_update_failed)
+    end
+  end
+
+  defp finalize_state_upsert(
+         [retired_event_created_at, retired_event_id, winner_event_created_at, winner_event_id],
          normalized_event,
-         now,
          deleted_at,
          failure_reason
        ) do
-    case Repo.insert_all(table_name, [insert_row], on_conflict: :nothing) do
-      {1, _result} ->
-        :ok
-
-      {0, _result} ->
-        resolve_state_race(
-          lookup_query,
-          update_query,
-          normalized_event,
-          now,
+    case {winner_event_created_at, winner_event_id} do
+      {created_at, event_id}
+      when created_at == normalized_event.created_at and event_id == normalized_event.id ->
+        maybe_retire_previous_state_event(
+          retired_event_created_at,
+          retired_event_id,
           deleted_at,
           failure_reason
         )
 
-      {_inserted, _result} ->
-        Repo.rollback(failure_reason)
-    end
-  end
-
-  defp resolve_state_race(
-         lookup_query,
-         update_query,
-         normalized_event,
-         now,
-         deleted_at,
-         failure_reason
-       ) do
-    case Repo.one(lookup_query) do
-      nil ->
-        Repo.rollback(failure_reason)
-
-      current_state ->
-        maybe_update_state(
-          update_query,
-          normalized_event,
-          current_state,
-          now,
-          deleted_at,
-          failure_reason
-        )
-    end
-  end
-
-  defp maybe_update_state(
-         update_query,
-         normalized_event,
-         current_state,
-         now,
-         deleted_at,
-         failure_reason
-       ) do
-    if candidate_wins_state?(normalized_event, current_state) do
-      {updated, _result} =
-        Repo.update_all(update_query,
-          set: [
-            event_created_at: normalized_event.created_at,
-            event_id: normalized_event.id,
-            updated_at: now
-          ]
-        )
-
-      if updated == 1 do
+      {_created_at, _event_id} ->
         retire_event!(
-          current_state.event_created_at,
-          current_state.event_id,
+          normalized_event.created_at,
+          normalized_event.id,
           deleted_at,
           failure_reason
         )
-      else
-        Repo.rollback(failure_reason)
-      end
-    else
-      retire_event!(normalized_event.created_at, normalized_event.id, deleted_at, failure_reason)
     end
+  end
+
+  defp maybe_retire_previous_state_event(nil, nil, _deleted_at, _failure_reason), do: :ok
+
+  defp maybe_retire_previous_state_event(
+         retired_event_created_at,
+         retired_event_id,
+         deleted_at,
+         failure_reason
+       ) do
+    retire_event!(retired_event_created_at, retired_event_id, deleted_at, failure_reason)
   end
 
   defp retire_event!(event_created_at, event_id, deleted_at, failure_reason) do
@@ -572,27 +488,147 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
 
   defp addressable_kind?(kind), do: kind >= 30_000 and kind < 40_000
 
-  defp replaceable_state_row(normalized_event, now) do
-    %{
-      pubkey: normalized_event.pubkey,
-      kind: normalized_event.kind,
-      event_created_at: normalized_event.created_at,
-      event_id: normalized_event.id,
-      inserted_at: now,
-      updated_at: now
-    }
+  defp replaceable_state_upsert_sql do
+    """
+    WITH inserted AS (
+      INSERT INTO replaceable_event_state (
+        pubkey,
+        kind,
+        event_created_at,
+        event_id,
+        inserted_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (pubkey, kind) DO NOTHING
+      RETURNING
+        NULL::bigint AS retired_event_created_at,
+        NULL::bytea AS retired_event_id,
+        event_created_at AS winner_event_created_at,
+        event_id AS winner_event_id
+    ),
+    updated AS (
+      UPDATE replaceable_event_state AS state
+      SET
+        event_created_at = $3,
+        event_id = $4,
+        updated_at = $6
+      FROM (
+        SELECT current.event_created_at, current.event_id
+        FROM replaceable_event_state AS current
+        WHERE current.pubkey = $1 AND current.kind = $2
+        FOR UPDATE
+      ) AS previous
+      WHERE
+        NOT EXISTS (SELECT 1 FROM inserted)
+        AND state.pubkey = $1
+        AND state.kind = $2
+        AND (
+          state.event_created_at < $3
+          OR (state.event_created_at = $3 AND state.event_id > $4)
+        )
+      RETURNING
+        previous.event_created_at AS retired_event_created_at,
+        previous.event_id AS retired_event_id,
+        state.event_created_at AS winner_event_created_at,
+        state.event_id AS winner_event_id
+    ),
+    current AS (
+      SELECT
+        NULL::bigint AS retired_event_created_at,
+        NULL::bytea AS retired_event_id,
+        state.event_created_at AS winner_event_created_at,
+        state.event_id AS winner_event_id
+      FROM replaceable_event_state AS state
+      WHERE
+        NOT EXISTS (SELECT 1 FROM inserted)
+        AND NOT EXISTS (SELECT 1 FROM updated)
+        AND state.pubkey = $1
+        AND state.kind = $2
+    )
+    SELECT *
+    FROM inserted
+    UNION ALL
+    SELECT *
+    FROM updated
+    UNION ALL
+    SELECT *
+    FROM current
+    LIMIT 1
+    """
   end
 
-  defp addressable_state_row(normalized_event, now) do
-    %{
-      pubkey: normalized_event.pubkey,
-      kind: normalized_event.kind,
-      d_tag: normalized_event.d_tag,
-      event_created_at: normalized_event.created_at,
-      event_id: normalized_event.id,
-      inserted_at: now,
-      updated_at: now
-    }
+  defp addressable_state_upsert_sql do
+    """
+    WITH inserted AS (
+      INSERT INTO addressable_event_state (
+        pubkey,
+        kind,
+        d_tag,
+        event_created_at,
+        event_id,
+        inserted_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (pubkey, kind, d_tag) DO NOTHING
+      RETURNING
+        NULL::bigint AS retired_event_created_at,
+        NULL::bytea AS retired_event_id,
+        event_created_at AS winner_event_created_at,
+        event_id AS winner_event_id
+    ),
+    updated AS (
+      UPDATE addressable_event_state AS state
+      SET
+        event_created_at = $4,
+        event_id = $5,
+        updated_at = $7
+      FROM (
+        SELECT current.event_created_at, current.event_id
+        FROM addressable_event_state AS current
+        WHERE current.pubkey = $1 AND current.kind = $2 AND current.d_tag = $3
+        FOR UPDATE
+      ) AS previous
+      WHERE
+        NOT EXISTS (SELECT 1 FROM inserted)
+        AND state.pubkey = $1
+        AND state.kind = $2
+        AND state.d_tag = $3
+        AND (
+          state.event_created_at < $4
+          OR (state.event_created_at = $4 AND state.event_id > $5)
+        )
+      RETURNING
+        previous.event_created_at AS retired_event_created_at,
+        previous.event_id AS retired_event_id,
+        state.event_created_at AS winner_event_created_at,
+        state.event_id AS winner_event_id
+    ),
+    current AS (
+      SELECT
+        NULL::bigint AS retired_event_created_at,
+        NULL::bytea AS retired_event_id,
+        state.event_created_at AS winner_event_created_at,
+        state.event_id AS winner_event_id
+      FROM addressable_event_state AS state
+      WHERE
+        NOT EXISTS (SELECT 1 FROM inserted)
+        AND NOT EXISTS (SELECT 1 FROM updated)
+        AND state.pubkey = $1
+        AND state.kind = $2
+        AND state.d_tag = $3
+    )
+    SELECT *
+    FROM inserted
+    UNION ALL
+    SELECT *
+    FROM updated
+    UNION ALL
+    SELECT *
+    FROM current
+    LIMIT 1
+    """
   end
 
   defp event_row(normalized_event, now) do
@@ -683,45 +719,57 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp fetch_event_refs([filter], now, opts) do
-    filter
-    |> event_ref_query_for_filter(now, opts)
-    |> maybe_limit_query(Keyword.get(opts, :limit))
-    |> Repo.all()
+    query =
+      filter
+      |> event_ref_query_for_filter(now, opts)
+      |> maybe_limit_query(Keyword.get(opts, :limit))
+
+    read_repo()
+    |> then(fn repo -> repo.all(query) end)
   end
 
   defp fetch_event_refs(filters, now, opts) do
-    filters
-    |> event_ref_union_query_for_filters(now, opts)
-    |> subquery()
-    |> then(fn union_query ->
-      from(ref in union_query,
-        group_by: [ref.created_at, ref.id],
-        order_by: [asc: ref.created_at, asc: ref.id],
-        select: %{created_at: ref.created_at, id: ref.id}
-      )
-    end)
-    |> maybe_limit_query(Keyword.get(opts, :limit))
-    |> Repo.all()
+    query =
+      filters
+      |> event_ref_union_query_for_filters(now, opts)
+      |> subquery()
+      |> then(fn union_query ->
+        from(ref in union_query,
+          group_by: [ref.created_at, ref.id],
+          order_by: [asc: ref.created_at, asc: ref.id],
+          select: %{created_at: ref.created_at, id: ref.id}
+        )
+      end)
+      |> maybe_limit_query(Keyword.get(opts, :limit))
+
+    read_repo()
+    |> then(fn repo -> repo.all(query) end)
   end
 
   defp count_events([filter], now, opts) do
-    filter
-    |> event_id_query_for_filter(now, opts)
-    |> subquery()
-    |> then(fn query ->
-      from(event in query, select: count())
-    end)
-    |> Repo.one()
+    query =
+      filter
+      |> event_id_query_for_filter(now, opts)
+      |> subquery()
+      |> then(fn query ->
+        from(event in query, select: count())
+      end)
+
+    read_repo()
+    |> then(fn repo -> repo.one(query) end)
   end
 
   defp count_events(filters, now, opts) do
-    filters
-    |> event_id_distinct_union_query_for_filters(now, opts)
-    |> subquery()
-    |> then(fn union_query ->
-      from(event in union_query, select: count())
-    end)
-    |> Repo.one()
+    query =
+      filters
+      |> event_id_distinct_union_query_for_filters(now, opts)
+      |> subquery()
+      |> then(fn union_query ->
+        from(event in union_query, select: count())
+      end)
+
+    read_repo()
+    |> then(fn repo -> repo.one(query) end)
   end
 
   defp event_source_query(filter, now) do
@@ -1195,4 +1243,6 @@ defmodule Parrhesia.Storage.Adapters.Postgres.Events do
   end
 
   defp maybe_apply_mls_group_retention(expires_at, _kind, _created_at), do: expires_at
+
+  defp read_repo, do: PostgresRepos.read()
 end

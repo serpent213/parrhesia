@@ -130,6 +130,7 @@ if config_env() == :prod do
       raise "environment variable DATABASE_URL is missing. Example: ecto://USER:PASS@HOST/DATABASE"
 
   repo_defaults = Application.get_env(:parrhesia, Parrhesia.Repo, [])
+  read_repo_defaults = Application.get_env(:parrhesia, Parrhesia.ReadRepo, [])
   relay_url_default = Application.get_env(:parrhesia, :relay_url)
 
   moderation_cache_enabled_default =
@@ -148,10 +149,18 @@ if config_env() == :prod do
   default_pool_size = Keyword.get(repo_defaults, :pool_size, 32)
   default_queue_target = Keyword.get(repo_defaults, :queue_target, 1_000)
   default_queue_interval = Keyword.get(repo_defaults, :queue_interval, 5_000)
+  default_read_pool_size = Keyword.get(read_repo_defaults, :pool_size, default_pool_size)
+  default_read_queue_target = Keyword.get(read_repo_defaults, :queue_target, default_queue_target)
+
+  default_read_queue_interval =
+    Keyword.get(read_repo_defaults, :queue_interval, default_queue_interval)
 
   pool_size = int_env.("POOL_SIZE", default_pool_size)
   queue_target = int_env.("DB_QUEUE_TARGET_MS", default_queue_target)
   queue_interval = int_env.("DB_QUEUE_INTERVAL_MS", default_queue_interval)
+  read_pool_size = int_env.("DB_READ_POOL_SIZE", default_read_pool_size)
+  read_queue_target = int_env.("DB_READ_QUEUE_TARGET_MS", default_read_queue_target)
+  read_queue_interval = int_env.("DB_READ_QUEUE_INTERVAL_MS", default_read_queue_interval)
 
   limits = [
     max_frame_bytes:
@@ -628,6 +637,12 @@ if config_env() == :prod do
     pool_size: pool_size,
     queue_target: queue_target,
     queue_interval: queue_interval
+
+  config :parrhesia, Parrhesia.ReadRepo,
+    url: database_url,
+    pool_size: read_pool_size,
+    queue_target: read_queue_target,
+    queue_interval: read_queue_interval
 
   config :parrhesia,
     relay_url: string_env.("PARRHESIA_RELAY_URL", relay_url_default),

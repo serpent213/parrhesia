@@ -5,6 +5,7 @@ defmodule Parrhesia.API.Stream.Subscription do
 
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Subscriptions.Index
+  alias Parrhesia.Telemetry
 
   defstruct [
     :ref,
@@ -57,6 +58,7 @@ defmodule Parrhesia.API.Stream.Subscription do
         buffered_events: []
       }
 
+      Telemetry.emit_process_mailbox_depth(:subscription)
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
@@ -72,20 +74,27 @@ defmodule Parrhesia.API.Stream.Subscription do
     end)
 
     {:reply, :ok, %__MODULE__{state | ready?: true, buffered_events: []}}
+    |> emit_mailbox_depth()
   end
 
   @impl true
   def handle_info({:fanout_event, subscription_id, event}, %__MODULE__{} = state)
       when is_binary(subscription_id) and is_map(event) do
-    handle_fanout_event(state, subscription_id, event)
+    state
+    |> handle_fanout_event(subscription_id, event)
+    |> emit_mailbox_depth()
   end
 
   def handle_info({:DOWN, monitor_ref, :process, subscriber, _reason}, %__MODULE__{} = state)
       when monitor_ref == state.subscriber_monitor_ref and subscriber == state.subscriber do
     {:stop, :normal, state}
+    |> emit_mailbox_depth()
   end
 
-  def handle_info(_message, %__MODULE__{} = state), do: {:noreply, state}
+  def handle_info(_message, %__MODULE__{} = state) do
+    {:noreply, state}
+    |> emit_mailbox_depth()
+  end
 
   @impl true
   def terminate(reason, %__MODULE__{} = state) do
@@ -174,5 +183,10 @@ defmodule Parrhesia.API.Stream.Subscription do
         buffered_events = [event | state.buffered_events]
         {:noreply, %__MODULE__{state | buffered_events: buffered_events}}
     end
+  end
+
+  defp emit_mailbox_depth(result) do
+    Telemetry.emit_process_mailbox_depth(:subscription)
+    result
   end
 end
