@@ -5,13 +5,13 @@ defmodule Parrhesia.API.Events do
 
   alias Parrhesia.API.Events.PublishResult
   alias Parrhesia.API.RequestContext
+  alias Parrhesia.Fanout.Dispatcher
   alias Parrhesia.Fanout.MultiNode
   alias Parrhesia.Groups.Flow
   alias Parrhesia.Policy.EventPolicy
   alias Parrhesia.Protocol
   alias Parrhesia.Protocol.Filter
   alias Parrhesia.Storage
-  alias Parrhesia.Subscriptions.Index
   alias Parrhesia.Telemetry
 
   @default_max_event_bytes 262_144
@@ -48,7 +48,7 @@ defmodule Parrhesia.API.Events do
         telemetry_metadata_for_event(event)
       )
 
-      fanout_event(event)
+      Dispatcher.dispatch(event)
       maybe_publish_multi_node(event)
 
       {:ok,
@@ -228,20 +228,6 @@ defmodule Parrhesia.API.Events do
       {:error, :duplicate_event} -> {:error, :duplicate_event}
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp fanout_event(event) do
-    case Index.candidate_subscription_keys(event) do
-      candidates when is_list(candidates) ->
-        Enum.each(candidates, fn {owner_pid, subscription_id} ->
-          send(owner_pid, {:fanout_event, subscription_id, event})
-        end)
-
-      _other ->
-        :ok
-    end
-  catch
-    :exit, _reason -> :ok
   end
 
   defp maybe_publish_multi_node(event) do

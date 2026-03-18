@@ -14,6 +14,7 @@ defmodule Parrhesia.Subscriptions.Supervisor do
     children =
       [
         {Parrhesia.Subscriptions.Index, name: Parrhesia.Subscriptions.Index},
+        {Parrhesia.Fanout.Dispatcher, name: Parrhesia.Fanout.Dispatcher},
         {Registry, keys: :unique, name: Parrhesia.API.Stream.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: Parrhesia.API.Stream.Supervisor}
       ] ++

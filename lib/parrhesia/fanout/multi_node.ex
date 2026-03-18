@@ -5,7 +5,7 @@ defmodule Parrhesia.Fanout.MultiNode do
 
   use GenServer
 
-  alias Parrhesia.Subscriptions.Index
+  alias Parrhesia.Fanout.Dispatcher
 
   @group __MODULE__
 
@@ -44,11 +44,7 @@ defmodule Parrhesia.Fanout.MultiNode do
 
   @impl true
   def handle_info({:remote_fanout_event, event}, state) do
-    Index.candidate_subscription_keys(event)
-    |> Enum.each(fn {owner_pid, subscription_id} ->
-      send(owner_pid, {:fanout_event, subscription_id, event})
-    end)
-
+    Dispatcher.dispatch(event)
     {:noreply, state}
   end
 
