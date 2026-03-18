@@ -1,5 +1,10 @@
 defmodule Parrhesia.ConnectionStats do
-  @moduledoc false
+  @moduledoc """
+  Per-listener connection and subscription counters.
+
+  Tracks active connection and subscription counts per listener and emits
+  `[:parrhesia, :listener, :population]` telemetry events on each change.
+  """
 
   use GenServer
 

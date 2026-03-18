@@ -9,7 +9,8 @@ defmodule Parrhesia.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: aliases()
+      aliases: aliases(),
+      docs: docs()
     ]
   end
 
@@ -53,6 +54,7 @@ defmodule Parrhesia.MixProject do
 
       # Project tooling
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:deps_changelog, "~> 0.3"},
       {:igniter, "~> 0.6", only: [:dev, :test]}
     ]
@@ -80,6 +82,41 @@ defmodule Parrhesia.MixProject do
         # "test.nak_e2e",
         "test.marmot_e2e"
       ]
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      output: "_build/doc",
+      extras: [
+        "README.md",
+        "docs/LOCAL_API.md",
+        "docs/SYNC.md",
+        "docs/ARCH.md",
+        "docs/CLUSTER.md",
+        "BENCHMARK.md"
+      ],
+      groups_for_modules: [
+        "Embedded API": [
+          Parrhesia.API.ACL,
+          Parrhesia.API.Admin,
+          Parrhesia.API.Auth,
+          Parrhesia.API.Auth.Context,
+          Parrhesia.API.Events,
+          Parrhesia.API.Events.PublishResult,
+          Parrhesia.API.Identity,
+          Parrhesia.API.RequestContext,
+          Parrhesia.API.Stream,
+          Parrhesia.API.Sync
+        ],
+        Runtime: [
+          Parrhesia,
+          Parrhesia.Release,
+          Parrhesia.Runtime
+        ]
+      ],
+      nest_modules_by_prefix: [Parrhesia.API]
     ]
   end
 end

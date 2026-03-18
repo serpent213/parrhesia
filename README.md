@@ -45,7 +45,7 @@ Current `supported_nips` list:
 
 ## Requirements
 
-- Elixir `~> 1.19`
+- Elixir `~> 1.18`
 - Erlang/OTP 28
 - PostgreSQL (18 used in the dev environment; 16+ recommended)
 - Docker or Podman plus Docker Compose support if you want to run the published container image
@@ -111,6 +111,38 @@ The node-sync harnesses are driven by:
 `mix test.node_sync_e2e` runs two real Parrhesia nodes against separate PostgreSQL databases, verifies catch-up and live sync, restarts one node, and verifies persisted resume behavior. `mix test.node_sync_docker_e2e` runs the same scenario against the release Docker image.
 
 GitHub CI currently runs the non-Docker node-sync e2e on the main Linux matrix job. The Docker node-sync e2e remains an explicit/manual check because it depends on release-image build/runtime fidelity and a working Docker host.
+
+---
+
+## Embedding in another Elixir app
+
+Parrhesia is usable as an embedded OTP dependency, not just as a standalone relay process.
+The intended in-process surface is `Parrhesia.API.*`, especially:
+
+- `Parrhesia.API.Events` for publish, query, and count
+- `Parrhesia.API.Stream` for local REQ-like subscriptions
+- `Parrhesia.API.Admin` for management operations
+- `Parrhesia.API.Identity`, `Parrhesia.API.ACL`, and `Parrhesia.API.Sync` for relay identity, protected sync ACLs, and outbound relay sync
+
+Start with:
+
+- [`docs/LOCAL_API.md`](./docs/LOCAL_API.md) for the embedding model and a minimal host setup
+- generated ExDoc for the `Embedded API` module group when running `mix docs`
+
+Important caveats for host applications:
+
+- Parrhesia is still alpha; expect some public API and config churn.
+- Parrhesia currently assumes a single runtime per BEAM node and uses globally registered process names.
+- The defaults in this repo's `config/*.exs` are not imported automatically when Parrhesia is used as a dependency. A host app must set `config :parrhesia, ...` explicitly.
+- The host app is responsible for migrating Parrhesia's schema, for example with `Parrhesia.Release.migrate()` or `mix ecto.migrate -r Parrhesia.Repo`.
+
+If you only want the in-process API and not the HTTP/WebSocket edge, configure:
+
+```elixir
+config :parrhesia, :listeners, %{}
+```
+
+The config reference below still applies when embedded. That is the primary place to document basic setup and runtime configuration changes.
 
 ---
 

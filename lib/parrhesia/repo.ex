@@ -1,6 +1,9 @@
 defmodule Parrhesia.Repo do
   @moduledoc """
-  PostgreSQL repository for storage adapter persistence.
+  PostgreSQL repository for write traffic and storage adapter persistence.
+
+  Separated from `Parrhesia.ReadRepo` so that ingest writes and read-heavy
+  queries use independent connection pools.
   """
 
   use Ecto.Repo,

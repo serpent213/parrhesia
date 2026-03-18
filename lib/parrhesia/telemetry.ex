@@ -1,6 +1,10 @@
 defmodule Parrhesia.Telemetry do
   @moduledoc """
   Supervision entrypoint and helpers for relay telemetry.
+
+  Starts the Prometheus reporter and telemetry poller as supervised children.
+  All relay metrics are namespaced under `parrhesia.*` and exposed through the
+  `/metrics` endpoint in Prometheus exposition format.
   """
 
   use Supervisor

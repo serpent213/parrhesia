@@ -1,6 +1,10 @@
 defmodule Parrhesia.Web.RelayInfo do
   @moduledoc """
   NIP-11 relay information document.
+
+  `document/1` builds the JSON-serialisable relay info map served on
+  `GET /relay` with `Accept: application/nostr+json`, including supported NIPs,
+  limitations, and the relay's advertised public key.
   """
 
   alias Parrhesia.API.Identity
@@ -8,7 +12,7 @@ defmodule Parrhesia.Web.RelayInfo do
   alias Parrhesia.NIP43
   alias Parrhesia.Web.Listener
 
-  @spec document(Listener.t()) :: map()
+  @spec document(map()) :: map()
   def document(listener) do
     document = %{
       "name" => Metadata.name(),

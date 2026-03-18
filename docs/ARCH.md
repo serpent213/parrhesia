@@ -82,16 +82,20 @@ Configured WS/HTTP Listeners (Bandit/Plug)
 
 ## 4) OTP supervision design
 
-`Parrhesia.Application` children (top-level):
+`Parrhesia.Runtime` children (top-level):
 
 1. `Parrhesia.Telemetry` – metric definitions/reporters
-2. `Parrhesia.Config` – runtime config cache (ETS-backed)
-3. `Parrhesia.Storage.Supervisor` – adapter processes (`Repo`, pools)
-4. `Parrhesia.Subscriptions.Supervisor` – subscription index + fanout workers
-5. `Parrhesia.Auth.Supervisor` – AUTH challenge/session tracking
-6. `Parrhesia.Policy.Supervisor` – rate limiters / ACL caches
-7. `Parrhesia.Web.Endpoint` – supervises configured WS + HTTP listeners
-8. `Parrhesia.Tasks.Supervisor` – background jobs (expiry purge, maintenance)
+2. `Parrhesia.ConnectionStats` – per-listener connection/subscription counters
+3. `Parrhesia.Config` – runtime config cache (ETS-backed)
+4. `Parrhesia.Web.EventIngestLimiter` – relay-wide event ingest rate limiter
+5. `Parrhesia.Web.IPEventIngestLimiter` – per-IP event ingest rate limiter
+6. `Parrhesia.Storage.Supervisor` – adapter processes (`Repo`, pools)
+7. `Parrhesia.Subscriptions.Supervisor` – subscription index + fanout workers
+8. `Parrhesia.Auth.Supervisor` – AUTH challenge/session tracking
+9. `Parrhesia.Sync.Supervisor` – outbound relay sync workers
+10. `Parrhesia.Policy.Supervisor` – rate limiters / ACL caches
+11. `Parrhesia.Web.Endpoint` – supervises configured WS + HTTP listeners
+12. `Parrhesia.Tasks.Supervisor` – background jobs (expiry purge, maintenance)
 
 Failure model:
 
