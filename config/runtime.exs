@@ -184,6 +184,16 @@ if config_env() == :prod do
         "PARRHESIA_LIMITS_MAX_TAG_VALUES_PER_FILTER",
         Keyword.get(limits_defaults, :max_tag_values_per_filter, 128)
       ),
+    relay_max_event_ingest_per_window:
+      int_env.(
+        "PARRHESIA_LIMITS_RELAY_MAX_EVENT_INGEST_PER_WINDOW",
+        Keyword.get(limits_defaults, :relay_max_event_ingest_per_window, 10_000)
+      ),
+    relay_event_ingest_window_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_RELAY_EVENT_INGEST_WINDOW_SECONDS",
+        Keyword.get(limits_defaults, :relay_event_ingest_window_seconds, 1)
+      ),
     max_subscriptions_per_connection:
       int_env.(
         "PARRHESIA_LIMITS_MAX_SUBSCRIPTIONS_PER_CONNECTION",

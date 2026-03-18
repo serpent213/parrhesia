@@ -17,6 +17,7 @@ defmodule Parrhesia.Runtime do
     [
       Parrhesia.Telemetry,
       Parrhesia.Config,
+      Parrhesia.Web.EventIngestLimiter,
       Parrhesia.Storage.Supervisor,
       Parrhesia.Subscriptions.Supervisor,
       Parrhesia.Auth.Supervisor,

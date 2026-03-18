@@ -424,6 +424,42 @@ defmodule Parrhesia.Web.ConnectionTest do
            ]
   end
 
+  test "EVENT ingest enforces relay-wide rate limits" do
+    limiter =
+      start_supervised!(
+        {Parrhesia.Web.EventIngestLimiter,
+         name: nil, max_events_per_window: 1, window_seconds: 60}
+      )
+
+    state =
+      connection_state(
+        event_ingest_limiter: limiter,
+        max_event_ingest_per_window: 10,
+        event_ingest_window_seconds: 60
+      )
+
+    first_event = valid_event(%{"content" => "first"})
+    second_event = valid_event(%{"content" => "second"})
+
+    assert {:push, {:text, first_response}, next_state} =
+             Connection.handle_in({JSON.encode!(["EVENT", first_event]), [opcode: :text]}, state)
+
+    assert JSON.decode!(first_response) == ["OK", first_event["id"], true, "ok: event stored"]
+
+    assert {:push, {:text, second_response}, ^next_state} =
+             Connection.handle_in(
+               {JSON.encode!(["EVENT", second_event]), [opcode: :text]},
+               next_state
+             )
+
+    assert JSON.decode!(second_response) == [
+             "OK",
+             second_event["id"],
+             false,
+             "rate-limited: relay-wide EVENT ingress exceeded"
+           ]
+  end
+
   test "EVENT ingest enforces max event bytes" do
     state = connection_state(max_event_bytes: 128)
 
