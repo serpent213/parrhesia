@@ -129,7 +129,7 @@ In `prod`, these environment variables are used:
 - `DATABASE_URL` (**required**), e.g. `ecto://USER:PASS@HOST/parrhesia_prod`
 - `POOL_SIZE` (optional, default `32`)
 - `PORT` (optional, default `4413`)
-- `PARRHESIA_*` runtime overrides for relay config, limits, policies, listener-related metrics helpers, and features
+- `PARRHESIA_*` runtime overrides for relay config, identity, sync, ACL, limits, policies, listeners, retention, and features
 - `PARRHESIA_EXTRA_CONFIG` (optional path to an extra runtime config file)
 
 `config/runtime.exs` reads these values at runtime in production releases.
@@ -139,12 +139,17 @@ In `prod`, these environment variables are used:
 For runtime overrides, use the `PARRHESIA_...` prefix:
 
 - `PARRHESIA_RELAY_URL`
+- `PARRHESIA_IDENTITY_*`
+- `PARRHESIA_SYNC_*`
+- `PARRHESIA_ACL_*`
 - `PARRHESIA_TRUSTED_PROXIES`
+- `PARRHESIA_PUBLIC_MAX_CONNECTIONS`
 - `PARRHESIA_MODERATION_CACHE_ENABLED`
 - `PARRHESIA_ENABLE_EXPIRATION_WORKER`
 - `PARRHESIA_LIMITS_*`
 - `PARRHESIA_POLICIES_*`
 - `PARRHESIA_METRICS_*`
+- `PARRHESIA_METRICS_ENDPOINT_MAX_CONNECTIONS`
 - `PARRHESIA_RETENTION_*`
 - `PARRHESIA_FEATURES_*`
 - `PARRHESIA_METRICS_ENDPOINT_*`
@@ -158,7 +163,7 @@ export PARRHESIA_METRICS_ALLOWED_CIDRS="10.0.0.0/8,192.168.0.0/16"
 export PARRHESIA_LIMITS_OUTBOUND_OVERFLOW_STRATEGY=drop_oldest
 ```
 
-Listeners themselves are primarily configured under `config :parrhesia, :listeners, ...`. The current runtime env helpers tune the default public listener and the optional dedicated metrics listener.
+Listeners themselves are primarily configured under `config :parrhesia, :listeners, ...`. The current runtime env helpers tune the default public listener and the optional dedicated metrics listener, including their connection ceilings.
 
 For settings that are awkward to express as env vars, mount an extra config file and set `PARRHESIA_EXTRA_CONFIG` to its path inside the container.
 
@@ -171,8 +176,13 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
 | `:relay_url` | `PARRHESIA_RELAY_URL` | `ws://localhost:4413/relay` | Advertised relay URL and auth relay tag target |
+| `:acl.protected_filters` | `PARRHESIA_ACL_PROTECTED_FILTERS` | `[]` | JSON-encoded protected filter list for sync ACL checks |
+| `:identity.path` | `PARRHESIA_IDENTITY_PATH` | `nil` | Optional path for persisted relay identity material |
+| `:identity.private_key` | `PARRHESIA_IDENTITY_PRIVATE_KEY` | `nil` | Optional inline relay private key |
 | `:moderation_cache_enabled` | `PARRHESIA_MODERATION_CACHE_ENABLED` | `true` | Toggle moderation cache |
 | `:enable_expiration_worker` | `PARRHESIA_ENABLE_EXPIRATION_WORKER` | `true` | Toggle background expiration worker |
+| `:sync.path` | `PARRHESIA_SYNC_PATH` | `nil` | Optional path to sync peer config |
+| `:sync.start_workers?` | `PARRHESIA_SYNC_START_WORKERS` | `true` | Start outbound sync workers on boot |
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
 | `:policies` | `PARRHESIA_POLICIES_*` | see table below | Runtime override group |
 | `:listeners` | config-file driven | see notes below | Ingress listeners with bind, transport, feature, auth, network, and baseline ACL settings |
@@ -198,12 +208,47 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | Atom key | ENV | Default | Notes |
 | --- | --- | --- | --- |
 | `:public.bind.port` | `PORT` | `4413` | Default public listener port |
+| `:public.max_connections` | `PARRHESIA_PUBLIC_MAX_CONNECTIONS` | `20000` | Target total connection ceiling for the public listener |
 | `:public.proxy.trusted_cidrs` | `PARRHESIA_TRUSTED_PROXIES` | `[]` | Trusted reverse proxies for forwarded IP handling |
 | `:public.features.metrics.*` | `PARRHESIA_METRICS_*` | see below | Convenience runtime overrides for metrics on the public listener |
 | `:metrics.bind.port` | `PARRHESIA_METRICS_ENDPOINT_PORT` | `9568` | Optional dedicated metrics listener port |
+| `:metrics.max_connections` | `PARRHESIA_METRICS_ENDPOINT_MAX_CONNECTIONS` | `1024` | Target total connection ceiling for the dedicated metrics listener |
 | `:metrics.enabled` | `PARRHESIA_METRICS_ENDPOINT_ENABLED` | `false` | Enables the optional dedicated metrics listener |
 
+Listener `max_connections` is a first-class config field. Parrhesia translates it to ThousandIsland's per-acceptor `num_connections` limit based on the active acceptor count. Raw `bandit_options[:thousand_island_options]` can still override that for advanced tuning.
+
 Listener `transport.tls` supports `:disabled`, `:server`, `:mutual`, and `:proxy_terminated`. For TLS-enabled listeners, the main config-file fields are `certfile`, `keyfile`, optional `cacertfile`, optional `cipher_suite`, optional `client_pins`, and `proxy_headers` for proxy-terminated identity.
+
+Every listener supports this config-file schema:
+
+| Atom key | ENV | Default | Notes |
+| --- | --- | --- | --- |
+| `:id` | `-` | listener key or `:listener` | Listener identifier |
+| `:enabled` | public/metrics helpers only | `true` | Whether the listener is started |
+| `:bind.ip` | `-` | `0.0.0.0` (`public`) / `127.0.0.1` (`metrics`) | Bind address |
+| `:bind.port` | `PORT` / `PARRHESIA_METRICS_ENDPOINT_PORT` | `4413` / `9568` | Bind port |
+| `:max_connections` | `PARRHESIA_PUBLIC_MAX_CONNECTIONS` / `PARRHESIA_METRICS_ENDPOINT_MAX_CONNECTIONS` | `20000` / `1024` | Target total listener connection ceiling; accepts integer or `:infinity` in config files |
+| `:transport.scheme` | `-` | `:http` | Listener scheme |
+| `:transport.tls` | `-` | `%{mode: :disabled}` | TLS mode and TLS-specific options |
+| `:proxy.trusted_cidrs` | `PARRHESIA_TRUSTED_PROXIES` on `public` | `[]` | Trusted proxy CIDRs for forwarded identity / IP handling |
+| `:proxy.honor_x_forwarded_for` | `-` | `true` | Respect `X-Forwarded-For` from trusted proxies |
+| `:network.public` | `-` | `false` | Allow only public networks |
+| `:network.private_networks_only` | `-` | `false` | Allow only RFC1918 / local networks |
+| `:network.allow_cidrs` | `-` | `[]` | Explicit CIDR allowlist |
+| `:network.allow_all` | `-` | `true` | Allow all source IPs |
+| `:features.nostr.enabled` | `-` | `true` on `public`, `false` on metrics listener | Enables `/relay` |
+| `:features.admin.enabled` | `-` | `true` on `public`, `false` on metrics listener | Enables `/management` |
+| `:features.metrics.enabled` | `PARRHESIA_METRICS_ENABLED_ON_MAIN_ENDPOINT` on `public` | `true` on `public`, `true` on metrics listener | Enables `/metrics` |
+| `:features.metrics.auth_token` | `PARRHESIA_METRICS_AUTH_TOKEN` | `nil` | Optional bearer token for `/metrics` |
+| `:features.metrics.access.public` | `PARRHESIA_METRICS_PUBLIC` | `false` | Allow public-network access to `/metrics` |
+| `:features.metrics.access.private_networks_only` | `PARRHESIA_METRICS_PRIVATE_NETWORKS_ONLY` | `true` | Restrict `/metrics` to private networks |
+| `:features.metrics.access.allow_cidrs` | `PARRHESIA_METRICS_ALLOWED_CIDRS` | `[]` | Additional CIDR allowlist for `/metrics` |
+| `:features.metrics.access.allow_all` | `-` | `true` | Unconditional metrics access in config files |
+| `:auth.nip42_required` | `-` | `false` | Require NIP-42 for relay reads / writes |
+| `:auth.nip98_required_for_admin` | `PARRHESIA_POLICIES_MANAGEMENT_AUTH_REQUIRED` on `public` | `true` | Require NIP-98 for management API calls |
+| `:baseline_acl.read` | `-` | `[]` | Static read deny/allow rules |
+| `:baseline_acl.write` | `-` | `[]` | Static write deny/allow rules |
+| `:bandit_options` | `-` | `[]` | Advanced Bandit / ThousandIsland passthrough |
 
 #### `:limits`
 
@@ -213,6 +258,10 @@ Listener `transport.tls` supports `:disabled`, `:server`, `:mutual`, and `:proxy
 | `:max_event_bytes` | `PARRHESIA_LIMITS_MAX_EVENT_BYTES` | `262144` |
 | `:max_filters_per_req` | `PARRHESIA_LIMITS_MAX_FILTERS_PER_REQ` | `16` |
 | `:max_filter_limit` | `PARRHESIA_LIMITS_MAX_FILTER_LIMIT` | `500` |
+| `:max_tags_per_event` | `PARRHESIA_LIMITS_MAX_TAGS_PER_EVENT` | `256` |
+| `:max_tag_values_per_filter` | `PARRHESIA_LIMITS_MAX_TAG_VALUES_PER_FILTER` | `128` |
+| `:relay_max_event_ingest_per_window` | `PARRHESIA_LIMITS_RELAY_MAX_EVENT_INGEST_PER_WINDOW` | `10000` |
+| `:relay_event_ingest_window_seconds` | `PARRHESIA_LIMITS_RELAY_EVENT_INGEST_WINDOW_SECONDS` | `1` |
 | `:max_subscriptions_per_connection` | `PARRHESIA_LIMITS_MAX_SUBSCRIPTIONS_PER_CONNECTION` | `32` |
 | `:max_event_future_skew_seconds` | `PARRHESIA_LIMITS_MAX_EVENT_FUTURE_SKEW_SECONDS` | `900` |
 | `:max_event_ingest_per_window` | `PARRHESIA_LIMITS_MAX_EVENT_INGEST_PER_WINDOW` | `120` |
@@ -224,6 +273,8 @@ Listener `transport.tls` supports `:disabled`, `:server`, `:mutual`, and `:proxy
 | `:max_negentropy_payload_bytes` | `PARRHESIA_LIMITS_MAX_NEGENTROPY_PAYLOAD_BYTES` | `4096` |
 | `:max_negentropy_sessions_per_connection` | `PARRHESIA_LIMITS_MAX_NEGENTROPY_SESSIONS_PER_CONNECTION` | `8` |
 | `:max_negentropy_total_sessions` | `PARRHESIA_LIMITS_MAX_NEGENTROPY_TOTAL_SESSIONS` | `10000` |
+| `:max_negentropy_items_per_session` | `PARRHESIA_LIMITS_MAX_NEGENTROPY_ITEMS_PER_SESSION` | `50000` |
+| `:negentropy_id_list_threshold` | `PARRHESIA_LIMITS_NEGENTROPY_ID_LIST_THRESHOLD` | `32` |
 | `:negentropy_session_idle_timeout_seconds` | `PARRHESIA_LIMITS_NEGENTROPY_SESSION_IDLE_TIMEOUT_SECONDS` | `60` |
 | `:negentropy_session_sweep_interval_seconds` | `PARRHESIA_LIMITS_NEGENTROPY_SESSION_SWEEP_INTERVAL_SECONDS` | `10` |
 

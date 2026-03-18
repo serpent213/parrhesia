@@ -21,6 +21,7 @@ defmodule Parrhesia.Web.Listener do
           id: atom(),
           enabled: boolean(),
           bind: %{ip: tuple(), port: pos_integer()},
+          max_connections: pos_integer() | :infinity,
           transport: map(),
           proxy: map(),
           network: map(),
@@ -167,12 +168,20 @@ defmodule Parrhesia.Web.Listener do
         _other -> listener.transport.scheme
       end
 
+    thousand_island_options =
+      listener.bandit_options
+      |> Keyword.get(:thousand_island_options, [])
+      |> maybe_put_connection_limit(listener.max_connections)
+
     [
       ip: listener.bind.ip,
       port: listener.bind.port,
       scheme: scheme,
       plug: {Parrhesia.Web.ListenerPlug, listener: listener}
-    ] ++ TLS.bandit_options(listener.transport.tls) ++ listener.bandit_options
+    ] ++
+      TLS.bandit_options(listener.transport.tls) ++
+      [thousand_island_options: thousand_island_options] ++
+      Keyword.delete(listener.bandit_options, :thousand_island_options)
   end
 
   defp normalize_listeners(listeners) when is_list(listeners) do
@@ -195,6 +204,7 @@ defmodule Parrhesia.Web.Listener do
     id = normalize_atom(fetch_value(listener, :id), :listener)
     enabled = normalize_boolean(fetch_value(listener, :enabled), true)
     bind = normalize_bind(fetch_value(listener, :bind), listener)
+    max_connections = normalize_max_connections(fetch_value(listener, :max_connections), id)
     transport = normalize_transport(fetch_value(listener, :transport))
     proxy = normalize_proxy(fetch_value(listener, :proxy))
     network = normalize_access(fetch_value(listener, :network), %{allow_all?: true})
@@ -207,6 +217,7 @@ defmodule Parrhesia.Web.Listener do
       id: id,
       enabled: enabled,
       bind: bind,
+      max_connections: max_connections,
       transport: transport,
       proxy: proxy,
       network: network,
@@ -232,6 +243,14 @@ defmodule Parrhesia.Web.Listener do
       port: normalize_port(fetch_value(listener, :port), 4413)
     }
   end
+
+  defp normalize_max_connections(value, _listener_id) when is_integer(value) and value > 0,
+    do: value
+
+  defp normalize_max_connections(:infinity, _listener_id), do: :infinity
+  defp normalize_max_connections("infinity", _listener_id), do: :infinity
+  defp normalize_max_connections(_value, :metrics), do: 1_024
+  defp normalize_max_connections(_value, _listener_id), do: 20_000
 
   defp default_bind_ip(listener) do
     normalize_ip(fetch_value(listener, :ip), {0, 0, 0, 0})
@@ -348,6 +367,27 @@ defmodule Parrhesia.Web.Listener do
 
   defp normalize_bandit_options(options) when is_list(options), do: options
   defp normalize_bandit_options(_options), do: []
+
+  defp maybe_put_connection_limit(thousand_island_options, :infinity)
+       when is_list(thousand_island_options),
+       do: Keyword.put_new(thousand_island_options, :num_connections, :infinity)
+
+  defp maybe_put_connection_limit(thousand_island_options, max_connections)
+       when is_list(thousand_island_options) and is_integer(max_connections) and
+              max_connections > 0 do
+    num_acceptors =
+      case Keyword.get(thousand_island_options, :num_acceptors, 100) do
+        value when is_integer(value) and value > 0 -> value
+        _other -> 100
+      end
+
+    per_acceptor_limit = ceil(max_connections / num_acceptors)
+    Keyword.put_new(thousand_island_options, :num_connections, per_acceptor_limit)
+  end
+
+  defp maybe_put_connection_limit(thousand_island_options, _max_connections)
+       when is_list(thousand_island_options),
+       do: thousand_island_options
 
   defp normalize_access(access, defaults) when is_map(access) do
     %{
@@ -516,6 +556,7 @@ defmodule Parrhesia.Web.Listener do
       id: :public,
       enabled: true,
       bind: %{ip: {0, 0, 0, 0}, port: 4413},
+      max_connections: 20_000,
       transport: %{scheme: :http, tls: TLS.default_config()},
       proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
       network: %{public?: false, private_networks_only?: false, allow_cidrs: [], allow_all?: true},

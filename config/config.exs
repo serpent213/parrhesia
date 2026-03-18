@@ -65,6 +65,7 @@ config :parrhesia,
     public: %{
       enabled: true,
       bind: %{ip: {0, 0, 0, 0}, port: 4413},
+      max_connections: 20_000,
       transport: %{scheme: :http, tls: %{mode: :disabled}},
       proxy: %{trusted_cidrs: [], honor_x_forwarded_for: true},
       network: %{allow_all: true},

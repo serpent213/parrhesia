@@ -408,6 +408,11 @@ if config_env() == :prod do
       ip: Map.get(public_bind_defaults, :ip, {0, 0, 0, 0}),
       port: int_env.("PORT", Map.get(public_bind_defaults, :port, 4413))
     },
+    max_connections:
+      infinity_or_int_env.(
+        "PARRHESIA_PUBLIC_MAX_CONNECTIONS",
+        Map.get(public_listener_defaults, :max_connections, 20_000)
+      ),
     transport: %{
       scheme: Map.get(public_transport_defaults, :scheme, :http),
       tls: Map.get(public_transport_defaults, :tls, %{mode: :disabled})
@@ -491,6 +496,11 @@ if config_env() == :prod do
                 Map.get(metrics_listener_bind_defaults, :port, 9568)
               )
           },
+          max_connections:
+            infinity_or_int_env.(
+              "PARRHESIA_METRICS_ENDPOINT_MAX_CONNECTIONS",
+              Map.get(metrics_listener_defaults, :max_connections, 1_024)
+            ),
           transport: %{
             scheme: Map.get(metrics_listener_transport_defaults, :scheme, :http),
             tls: Map.get(metrics_listener_transport_defaults, :tls, %{mode: :disabled})

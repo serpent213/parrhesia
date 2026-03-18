@@ -1,6 +1,8 @@
 defmodule Parrhesia.ConfigTest do
   use ExUnit.Case, async: true
 
+  alias Parrhesia.Web.Listener
+
   test "returns configured relay limits/policies/features" do
     assert Parrhesia.Config.get([:limits, :max_frame_bytes]) == 1_048_576
     assert Parrhesia.Config.get([:limits, :max_event_bytes]) == 262_144
@@ -22,6 +24,11 @@ defmodule Parrhesia.ConfigTest do
     assert Parrhesia.Config.get([:features, :verify_event_signatures]) == false
     assert Parrhesia.Config.get([:features, :nip_50_search]) == true
     assert Parrhesia.Config.get([:features, :marmot_push_notifications]) == false
+
+    assert Application.get_env(:parrhesia, :listeners, %{})
+           |> Keyword.get(:public)
+           |> then(&Listener.from_opts(listener: &1))
+           |> Map.get(:max_connections) == 20_000
   end
 
   test "returns default for unknown keys" do
