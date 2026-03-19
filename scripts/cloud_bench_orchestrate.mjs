@@ -16,20 +16,21 @@ const ESTIMATE_WINDOW_MINUTES = 30;
 const ESTIMATE_WINDOW_HOURS = ESTIMATE_WINDOW_MINUTES / 60;
 const ESTIMATE_WINDOW_LABEL = `${ESTIMATE_WINDOW_MINUTES}m`;
 const BENCH_BUILD_DIR = path.join(ROOT_DIR, "_build", "bench");
+const NOSTREAM_REDIS_IMAGE = "redis:7.0.5-alpine3.16";
 
 const DEFAULTS = {
   datacenter: "fsn1-dc14",
-  serverType: "cx23",
-  clientType: "cx23",
+  serverType: "ccx43",
+  clientType: "cpx31",
   imageBase: "ubuntu-24.04",
   clients: 3,
-  runs: 3,
+  runs: 5,
   targets: DEFAULT_TARGETS,
   historyFile: "bench/history.jsonl",
   artifactsDir: "bench/cloud_artifacts",
   gitRef: "HEAD",
   parrhesiaImage: null,
-  postgresImage: "postgres:17",
+  postgresImage: "postgres:18",
   strfryImage: "ghcr.io/hoytech/strfry:latest",
   nostrRsImage: "scsibug/nostr-rs-relay:latest",
   nostreamRepo: "https://github.com/Cameri/nostream.git",
@@ -37,16 +38,16 @@ const DEFAULTS = {
   havenImage: "holgerhatgarkeinenode/haven-docker:latest",
   keep: false,
   bench: {
-    connectCount: 200,
-    connectRate: 100,
-    echoCount: 100,
-    echoRate: 50,
+    connectCount: 1000,
+    connectRate: 200,
+    echoCount: 1000,
+    echoRate: 200,
     echoSize: 512,
-    eventCount: 100,
-    eventRate: 50,
-    reqCount: 100,
-    reqRate: 50,
-    reqLimit: 10,
+    eventCount: 2000,
+    eventRate: 300,
+    reqCount: 1000,
+    reqRate: 200,
+    reqLimit: 50,
     keepaliveSeconds: 5,
   },
 };
@@ -107,6 +108,7 @@ Notes:
   - Caches built nostr-bench at _build/bench/nostr-bench and reuses it when valid.
   - Auto-tunes Postgres/Redis/app pool sizing from server RAM + CPU for DB-backed targets.
   - Randomizes target order per run and wipes persisted target data directories on each start.
+  - Handles Ctrl-C / SIGTERM with best-effort cloud cleanup.
   - Tries nix .#nostrBenchStaticX86_64Musl first; falls back to docker-built portable nostr-bench.
   - If --parrhesia-image is omitted, requires nix locally.
 `);
@@ -788,11 +790,12 @@ function makeServerScript() {
 set -euo pipefail
 
 PARRHESIA_IMAGE="\${PARRHESIA_IMAGE:-parrhesia:latest}"
-POSTGRES_IMAGE="\${POSTGRES_IMAGE:-postgres:17}"
+POSTGRES_IMAGE="\${POSTGRES_IMAGE:-postgres:18}"
 STRFRY_IMAGE="\${STRFRY_IMAGE:-ghcr.io/hoytech/strfry:latest}"
 NOSTR_RS_IMAGE="\${NOSTR_RS_IMAGE:-scsibug/nostr-rs-relay:latest}"
 NOSTREAM_REPO="\${NOSTREAM_REPO:-https://github.com/Cameri/nostream.git}"
 NOSTREAM_REF="\${NOSTREAM_REF:-main}"
+NOSTREAM_REDIS_IMAGE="\${NOSTREAM_REDIS_IMAGE:-${NOSTREAM_REDIS_IMAGE}}"
 HAVEN_IMAGE="\${HAVEN_IMAGE:-holgerhatgarkeinenode/haven-docker:latest}"
 HAVEN_RELAY_URL="\${HAVEN_RELAY_URL:-127.0.0.1:3355}"
 
@@ -974,6 +977,57 @@ derive_resource_tuning() {
   echo "[server] app tuning: parrhesia_pool=\$PARRHESIA_POOL_SIZE nostream_db_pool=\${NOSTREAM_DB_MIN_POOL_SIZE}-\${NOSTREAM_DB_MAX_POOL_SIZE} redis_maxmemory=\${REDIS_MAXMEMORY_MB}MB"
 }
 
+tune_nostream_settings() {
+  local settings_path="/root/nostream-config/settings.yaml"
+
+  if [[ ! -f "\$settings_path" ]]; then
+    return 1
+  fi
+
+  python3 - "\$settings_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+def replace_after(marker: str, old: str, new: str) -> None:
+    global text
+    marker_idx = text.find(marker)
+    if marker_idx == -1:
+        return
+
+    old_idx = text.find(old, marker_idx)
+    if old_idx == -1:
+        return
+
+    text = text[:old_idx] + new + text[old_idx + len(old):]
+
+text = text.replace("  remoteIpHeader: x-forwarded-for", "  # remoteIpHeader disabled for direct bench traffic")
+
+text = text.replace(
+    "  connection:\\n    rateLimits:\\n      - period: 1000\\n        rate: 12\\n      - period: 60000\\n        rate: 48",
+    "  connection:\\n    rateLimits:\\n      - period: 1000\\n        rate: 300\\n      - period: 60000\\n        rate: 12000",
+)
+
+replace_after("description: 30 admission checks/min or 1 check every 2 seconds", "rate: 30", "rate: 3000")
+replace_after("description: 6 events/min for event kinds 0, 3, 40 and 41", "rate: 6", "rate: 600")
+replace_after("description: 12 events/min for event kinds 1, 2, 4 and 42", "rate: 12", "rate: 1200")
+replace_after("description: 30 events/min for event kind ranges 5-7 and 43-49", "rate: 30", "rate: 3000")
+replace_after("description: 24 events/min for replaceable events and parameterized replaceable", "rate: 24", "rate: 2400")
+replace_after("description: 60 events/min for ephemeral events", "rate: 60", "rate: 6000")
+replace_after("description: 720 events/hour for all events", "rate: 720", "rate: 72000")
+replace_after("description: 240 raw messages/min", "rate: 240", "rate: 120000")
+
+text = text.replace("maxSubscriptions: 10", "maxSubscriptions: 512")
+text = text.replace("maxFilters: 10", "maxFilters: 128")
+text = text.replace("maxFilterValues: 2500", "maxFilterValues: 100000")
+text = text.replace("maxLimit: 5000", "maxLimit: 50000")
+
+path.write_text(text, encoding="utf-8")
+PY
+}
+
 common_parrhesia_env=()
 common_parrhesia_env+=( -e PARRHESIA_ENABLE_EXPIRATION_WORKER=0 )
 common_parrhesia_env+=( -e PARRHESIA_ENABLE_PARTITION_RETENTION_WORKER=0 )
@@ -1011,6 +1065,7 @@ case "\$cmd" in
     docker network create benchnet >/dev/null 2>&1 || true
 
     docker run -d --name pg --network benchnet \
+      --ulimit nofile=262144:262144 \
       -e POSTGRES_DB=parrhesia \
       -e POSTGRES_USER=parrhesia \
       -e POSTGRES_PASSWORD=parrhesia \
@@ -1025,6 +1080,7 @@ case "\$cmd" in
       eval "Parrhesia.Release.migrate()"
 
     docker run -d --name parrhesia --network benchnet \
+      --ulimit nofile=262144:262144 \
       -p 4413:4413 \
       -e DATABASE_URL=ecto://parrhesia:parrhesia@pg:5432/parrhesia \
       -e POOL_SIZE="\$PARRHESIA_POOL_SIZE" \
@@ -1038,6 +1094,7 @@ case "\$cmd" in
     cleanup_containers
 
     docker run -d --name parrhesia \
+      --ulimit nofile=262144:262144 \
       -p 4413:4413 \
       -e PARRHESIA_STORAGE_BACKEND=memory \
       -e PARRHESIA_MODERATION_CACHE_ENABLED=0 \
@@ -1063,6 +1120,7 @@ relay {
 EOF
 
     docker run -d --name strfry \
+      --ulimit nofile=262144:262144 \
       -p 7777:7777 \
       -v /root/strfry.conf:/etc/strfry.conf:ro \
       -v /root/strfry-data:/data \
@@ -1080,11 +1138,26 @@ EOF
 engine = "sqlite"
 
 [network]
-ip = "0.0.0.0"
+address = "0.0.0.0"
 port = 8080
+ping_interval = 120
+
+[options]
+reject_future_seconds = 1800
+
+[limits]
+messages_per_sec = 5000
+subscriptions_per_min = 6000
+max_event_bytes = 1048576
+max_ws_message_bytes = 16777216
+max_ws_frame_bytes = 16777216
+broadcast_buffer = 65536
+event_persist_buffer = 16384
+limit_scrapers = false
 EOF
 
     docker run -d --name nostr-rs \
+      --ulimit nofile=262144:262144 \
       -p 8080:8080 \
       -v /root/nostr-rs.toml:/usr/src/app/config.toml:ro \
       "\$NOSTR_RS_IMAGE" >/dev/null
@@ -1125,7 +1198,10 @@ EOF
       cp /root/nostream-src/resources/default-settings.yaml /root/nostream-config/settings.yaml
     fi
 
+    tune_nostream_settings
+
     docker run -d --name nostream-db --network benchnet \
+      --ulimit nofile=262144:262144 \
       -e POSTGRES_DB=nostr_ts_relay \
       -e POSTGRES_USER=nostr_ts_relay \
       -e POSTGRES_PASSWORD=nostr_ts_relay \
@@ -1135,7 +1211,7 @@ EOF
     wait_nostream_pg 90
 
     docker run -d --name nostream-cache --network benchnet \
-      redis:7.0.5-alpine3.16 \
+      "\$NOSTREAM_REDIS_IMAGE" \
       redis-server \
       --loglevel warning \
       --requirepass nostr_ts_relay \
@@ -1156,6 +1232,7 @@ EOF
       sh -lc 'cd /code && npm install --no-save --quiet knex@2.4.0 pg@8.8.0 && npx knex migrate:latest'
 
     docker run -d --name nostream --network benchnet \
+      --ulimit nofile=262144:262144 \
       -p 8008:8008 \
       -e SECRET="\$NOSTREAM_SECRET" \
       -e RELAY_PORT=8008 \
@@ -1218,18 +1295,50 @@ PRIVATE_RELAY_NAME=Private Relay
 PRIVATE_RELAY_NPUB=\$HAVEN_OWNER_NPUB
 PRIVATE_RELAY_DESCRIPTION=Private relay for benchmarking
 PRIVATE_RELAY_ICON=https://example.com/icon.png
+PRIVATE_RELAY_EVENT_IP_LIMITER_TOKENS_PER_INTERVAL=1000
+PRIVATE_RELAY_EVENT_IP_LIMITER_INTERVAL=1
+PRIVATE_RELAY_EVENT_IP_LIMITER_MAX_TOKENS=5000
+PRIVATE_RELAY_ALLOW_EMPTY_FILTERS=true
+PRIVATE_RELAY_ALLOW_COMPLEX_FILTERS=true
+PRIVATE_RELAY_CONNECTION_RATE_LIMITER_TOKENS_PER_INTERVAL=500
+PRIVATE_RELAY_CONNECTION_RATE_LIMITER_INTERVAL=1
+PRIVATE_RELAY_CONNECTION_RATE_LIMITER_MAX_TOKENS=2000
 CHAT_RELAY_NAME=Chat Relay
 CHAT_RELAY_NPUB=\$HAVEN_OWNER_NPUB
 CHAT_RELAY_DESCRIPTION=Chat relay for benchmarking
 CHAT_RELAY_ICON=https://example.com/icon.png
+CHAT_RELAY_EVENT_IP_LIMITER_TOKENS_PER_INTERVAL=1000
+CHAT_RELAY_EVENT_IP_LIMITER_INTERVAL=1
+CHAT_RELAY_EVENT_IP_LIMITER_MAX_TOKENS=5000
+CHAT_RELAY_ALLOW_EMPTY_FILTERS=true
+CHAT_RELAY_ALLOW_COMPLEX_FILTERS=true
+CHAT_RELAY_CONNECTION_RATE_LIMITER_TOKENS_PER_INTERVAL=500
+CHAT_RELAY_CONNECTION_RATE_LIMITER_INTERVAL=1
+CHAT_RELAY_CONNECTION_RATE_LIMITER_MAX_TOKENS=2000
 OUTBOX_RELAY_NAME=Outbox Relay
 OUTBOX_RELAY_NPUB=\$HAVEN_OWNER_NPUB
 OUTBOX_RELAY_DESCRIPTION=Outbox relay for benchmarking
 OUTBOX_RELAY_ICON=https://example.com/icon.png
+OUTBOX_RELAY_EVENT_IP_LIMITER_TOKENS_PER_INTERVAL=1000
+OUTBOX_RELAY_EVENT_IP_LIMITER_INTERVAL=1
+OUTBOX_RELAY_EVENT_IP_LIMITER_MAX_TOKENS=5000
+OUTBOX_RELAY_ALLOW_EMPTY_FILTERS=true
+OUTBOX_RELAY_ALLOW_COMPLEX_FILTERS=true
+OUTBOX_RELAY_CONNECTION_RATE_LIMITER_TOKENS_PER_INTERVAL=500
+OUTBOX_RELAY_CONNECTION_RATE_LIMITER_INTERVAL=1
+OUTBOX_RELAY_CONNECTION_RATE_LIMITER_MAX_TOKENS=2000
 INBOX_RELAY_NAME=Inbox Relay
 INBOX_RELAY_NPUB=\$HAVEN_OWNER_NPUB
 INBOX_RELAY_DESCRIPTION=Inbox relay for benchmarking
 INBOX_RELAY_ICON=https://example.com/icon.png
+INBOX_RELAY_EVENT_IP_LIMITER_TOKENS_PER_INTERVAL=1000
+INBOX_RELAY_EVENT_IP_LIMITER_INTERVAL=1
+INBOX_RELAY_EVENT_IP_LIMITER_MAX_TOKENS=5000
+INBOX_RELAY_ALLOW_EMPTY_FILTERS=true
+INBOX_RELAY_ALLOW_COMPLEX_FILTERS=true
+INBOX_RELAY_CONNECTION_RATE_LIMITER_TOKENS_PER_INTERVAL=500
+INBOX_RELAY_CONNECTION_RATE_LIMITER_INTERVAL=1
+INBOX_RELAY_CONNECTION_RATE_LIMITER_MAX_TOKENS=2000
 INBOX_PULL_INTERVAL_SECONDS=600
 IMPORT_START_DATE=2023-01-20
 IMPORT_OWNER_NOTES_FETCH_TIMEOUT_SECONDS=60
@@ -1251,6 +1360,7 @@ EOF
     chmod -R a+rwX /root/haven-bench
 
     docker run -d --name haven \
+      --ulimit nofile=262144:262144 \
       -p 3355:3355 \
       --env-file /root/haven-bench/haven.env \
       -v /root/haven-bench/db:/app/db \
@@ -1358,21 +1468,51 @@ function mean(values) {
   return valid.reduce((a, b) => a + b, 0) / valid.length;
 }
 
+function sum(values) {
+  const valid = values.filter((v) => Number.isFinite(v));
+  if (valid.length === 0) return NaN;
+  return valid.reduce((a, b) => a + b, 0);
+}
+
+function throughputFromSection(section) {
+  const elapsedMs = Number(section?.elapsed ?? NaN);
+  const complete = Number(section?.message_stats?.complete ?? NaN);
+  const totalBytes = Number(section?.message_stats?.size ?? NaN);
+
+  const cumulativeTps =
+    Number.isFinite(elapsedMs) && elapsedMs > 0 && Number.isFinite(complete)
+      ? complete / (elapsedMs / 1000)
+      : NaN;
+
+  const cumulativeMibs =
+    Number.isFinite(elapsedMs) && elapsedMs > 0 && Number.isFinite(totalBytes)
+      ? totalBytes / (1024 * 1024) / (elapsedMs / 1000)
+      : NaN;
+
+  const sampleTps = Number(section?.tps ?? NaN);
+  const sampleMibs = Number(section?.size ?? NaN);
+
+  return {
+    tps: Number.isFinite(cumulativeTps) ? cumulativeTps : sampleTps,
+    mibs: Number.isFinite(cumulativeMibs) ? cumulativeMibs : sampleMibs,
+  };
+}
+
 function metricFromSections(sections) {
   const connect = sections?.connect?.connect_stats?.success_time || {};
-  const echo = sections?.echo || {};
-  const event = sections?.event || {};
-  const req = sections?.req || {};
+  const echo = throughputFromSection(sections?.echo || {});
+  const event = throughputFromSection(sections?.event || {});
+  const req = throughputFromSection(sections?.req || {});
 
   return {
     connect_avg_ms: Number(connect.avg ?? NaN),
     connect_max_ms: Number(connect.max ?? NaN),
-    echo_tps: Number(echo.tps ?? NaN),
-    echo_mibs: Number(echo.size ?? NaN),
-    event_tps: Number(event.tps ?? NaN),
-    event_mibs: Number(event.size ?? NaN),
-    req_tps: Number(req.tps ?? NaN),
-    req_mibs: Number(req.size ?? NaN),
+    echo_tps: echo.tps,
+    echo_mibs: echo.mibs,
+    event_tps: event.tps,
+    event_mibs: event.mibs,
+    req_tps: req.tps,
+    req_mibs: req.mibs,
   };
 }
 
@@ -1385,11 +1525,24 @@ function summariseServersFromResults(results) {
       byServer.set(serverName, []);
     }
 
-    const samples = byServer.get(serverName);
-    for (const clientResult of runEntry.clients || []) {
-      if (clientResult.status !== "ok") continue;
-      samples.push(metricFromSections(clientResult.sections || {}));
+    const clientSamples = (runEntry.clients || [])
+      .filter((clientResult) => clientResult.status === "ok")
+      .map((clientResult) => metricFromSections(clientResult.sections || {}));
+
+    if (clientSamples.length === 0) {
+      continue;
     }
+
+    byServer.get(serverName).push({
+      connect_avg_ms: mean(clientSamples.map((s) => s.connect_avg_ms)),
+      connect_max_ms: mean(clientSamples.map((s) => s.connect_max_ms)),
+      echo_tps: sum(clientSamples.map((s) => s.echo_tps)),
+      echo_mibs: sum(clientSamples.map((s) => s.echo_mibs)),
+      event_tps: sum(clientSamples.map((s) => s.event_tps)),
+      event_mibs: sum(clientSamples.map((s) => s.event_mibs)),
+      req_tps: sum(clientSamples.map((s) => s.req_tps)),
+      req_mibs: sum(clientSamples.map((s) => s.req_mibs)),
+    });
   }
 
   const metricKeys = [
@@ -1404,10 +1557,10 @@ function summariseServersFromResults(results) {
   ];
 
   const out = {};
-  for (const [serverName, samples] of byServer.entries()) {
+  for (const [serverName, runSamples] of byServer.entries()) {
     const summary = {};
     for (const key of metricKeys) {
-      summary[key] = mean(samples.map((s) => s[key]));
+      summary[key] = mean(runSamples.map((s) => s[key]));
     }
     out[serverName] = summary;
   }
@@ -1422,6 +1575,206 @@ async function tryCommandStdout(command, args = [], options = {}) {
   } catch {
     return "";
   }
+}
+
+function firstNonEmptyLine(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+}
+
+async function sshTryStdout(hostIp, keyPath, remoteCommand) {
+  try {
+    const res = await sshExec(hostIp, keyPath, remoteCommand);
+    return res.stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+async function inspectRemoteDockerImage(hostIp, keyPath, imageRef) {
+  const imageId =
+    firstNonEmptyLine(
+      await sshTryStdout(hostIp, keyPath, `docker image inspect ${shellEscape(imageRef)} --format '{{.Id}}'`),
+    ) || null;
+
+  const repoDigestsRaw = await sshTryStdout(
+    hostIp,
+    keyPath,
+    `docker image inspect ${shellEscape(imageRef)} --format '{{json .RepoDigests}}'`,
+  );
+
+  let imageDigests = [];
+  try {
+    const parsed = JSON.parse(repoDigestsRaw || "[]");
+    if (Array.isArray(parsed)) {
+      imageDigests = parsed;
+    }
+  } catch {
+    // ignore parse failures
+  }
+
+  return {
+    image: imageRef,
+    image_id: imageId,
+    image_digests: imageDigests,
+  };
+}
+
+async function collectCloudComponentVersions({
+  serverIp,
+  keyPath,
+  opts,
+  needsParrhesia,
+  parrhesiaImageOnServer,
+  gitTag,
+  gitCommit,
+}) {
+  const relays = {};
+  const datastores = {};
+
+  if (needsParrhesia && parrhesiaImageOnServer) {
+    relays.parrhesia = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, parrhesiaImageOnServer)),
+      version:
+        firstNonEmptyLine(
+          await sshTryStdout(serverIp, keyPath, `docker run --rm ${shellEscape(parrhesiaImageOnServer)} --version`),
+        ) || null,
+      git_tag: gitTag || null,
+      git_commit: gitCommit || null,
+      git_ref: opts.gitRef || null,
+    };
+  }
+
+  if (opts.targets.includes("strfry")) {
+    relays.strfry = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, opts.strfryImage)),
+      version:
+        firstNonEmptyLine(await sshTryStdout(serverIp, keyPath, `docker run --rm ${shellEscape(opts.strfryImage)} --version`)) ||
+        null,
+    };
+  }
+
+  if (opts.targets.includes("nostr-rs-relay")) {
+    const nostrRsVersion =
+      firstNonEmptyLine(
+        await sshTryStdout(
+          serverIp,
+          keyPath,
+          `docker run --rm --entrypoint /usr/src/app/nostr-rs-relay ${shellEscape(opts.nostrRsImage)} --version`,
+        ),
+      ) ||
+      firstNonEmptyLine(await sshTryStdout(serverIp, keyPath, `docker run --rm ${shellEscape(opts.nostrRsImage)} --version`)) ||
+      null;
+
+    relays.nostr_rs_relay = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, opts.nostrRsImage)),
+      version: nostrRsVersion,
+    };
+  }
+
+  if (opts.targets.includes("nostream")) {
+    const nostreamPackageVersion =
+      firstNonEmptyLine(
+        await sshTryStdout(serverIp, keyPath, `jq -r '.version // empty' /root/nostream-src/package.json 2>/dev/null || true`),
+      ) || null;
+    const nostreamCommit =
+      firstNonEmptyLine(await sshTryStdout(serverIp, keyPath, "git -C /root/nostream-src rev-parse --short=12 HEAD")) ||
+      null;
+
+    relays.nostream = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, "nostream:bench")),
+      version: nostreamPackageVersion,
+      git_commit: nostreamCommit,
+      git_ref: opts.nostreamRef,
+      repo: opts.nostreamRepo,
+    };
+  }
+
+  if (opts.targets.includes("haven")) {
+    const havenVersionLabel =
+      firstNonEmptyLine(
+        await sshTryStdout(
+          serverIp,
+          keyPath,
+          `docker image inspect ${shellEscape(opts.havenImage)} --format '{{index .Config.Labels "org.opencontainers.image.version"}}'`,
+        ),
+      ) || null;
+
+    relays.haven = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, opts.havenImage)),
+      version: havenVersionLabel,
+    };
+  }
+
+  if (opts.targets.includes("parrhesia-pg") || opts.targets.includes("nostream")) {
+    datastores.postgres = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, opts.postgresImage)),
+      version:
+        firstNonEmptyLine(
+          await sshTryStdout(serverIp, keyPath, `docker run --rm ${shellEscape(opts.postgresImage)} postgres --version`),
+        ) || null,
+    };
+  }
+
+  if (opts.targets.includes("nostream")) {
+    datastores.redis = {
+      ...(await inspectRemoteDockerImage(serverIp, keyPath, NOSTREAM_REDIS_IMAGE)),
+      version:
+        firstNonEmptyLine(
+          await sshTryStdout(serverIp, keyPath, `docker run --rm ${shellEscape(NOSTREAM_REDIS_IMAGE)} redis-server --version`),
+        ) || null,
+    };
+  }
+
+  return {
+    relays,
+    datastores,
+  };
+}
+
+function exitCodeForSignal(signal) {
+  if (signal === "SIGINT") return 130;
+  if (signal === "SIGTERM") return 143;
+  return 1;
+}
+
+function installSignalCleanup(cleanupFn) {
+  let handling = false;
+
+  const handler = (signal) => {
+    if (handling) {
+      console.warn(`[signal] ${signal} received again, forcing exit`);
+      process.exit(exitCodeForSignal(signal));
+      return;
+    }
+
+    handling = true;
+    console.warn(`[signal] ${signal} received, cleaning up cloud resources...`);
+
+    Promise.resolve()
+      .then(() => cleanupFn(signal))
+      .then(() => {
+        console.warn("[signal] cleanup complete");
+        process.exit(exitCodeForSignal(signal));
+      })
+      .catch((error) => {
+        console.error("[signal] cleanup failed", error?.message || error);
+        if (error?.stderr) {
+          console.error(error.stderr);
+        }
+        process.exit(1);
+      });
+  };
+
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
 }
 
 async function main() {
@@ -1481,39 +1834,52 @@ async function main() {
 
   const createdServers = [];
   let sshKeyCreated = false;
+  let cleanupPromise = null;
 
   const cleanup = async () => {
-    if (opts.keep) {
-      console.log("[cleanup] --keep set, skipping cloud cleanup");
-      return;
+    if (cleanupPromise) {
+      return cleanupPromise;
     }
 
-    if (createdServers.length > 0) {
-      console.log("[cleanup] deleting servers...");
-      await Promise.all(
-        createdServers.map((name) =>
-          runCommand("hcloud", ["server", "delete", name])
-            .then(() => {
-              console.log(`[cleanup] deleted server: ${name}`);
-            })
-            .catch((error) => {
-              console.warn(`[cleanup] failed to delete server ${name}: ${error.message || error}`);
-            }),
-        ),
-      );
-    }
+    cleanupPromise = (async () => {
+      if (opts.keep) {
+        console.log("[cleanup] --keep set, skipping cloud cleanup");
+        return;
+      }
 
-    if (sshKeyCreated) {
-      console.log("[cleanup] deleting ssh key...");
-      await runCommand("hcloud", ["ssh-key", "delete", keyName])
-        .then(() => {
-          console.log(`[cleanup] deleted ssh key: ${keyName}`);
-        })
-        .catch((error) => {
-          console.warn(`[cleanup] failed to delete ssh key ${keyName}: ${error.message || error}`);
-        });
-    }
+      if (createdServers.length > 0) {
+        console.log("[cleanup] deleting servers...");
+        await Promise.all(
+          createdServers.map((name) =>
+            runCommand("hcloud", ["server", "delete", name])
+              .then(() => {
+                console.log(`[cleanup] deleted server: ${name}`);
+              })
+              .catch((error) => {
+                console.warn(`[cleanup] failed to delete server ${name}: ${error.message || error}`);
+              }),
+          ),
+        );
+      }
+
+      if (sshKeyCreated) {
+        console.log("[cleanup] deleting ssh key...");
+        await runCommand("hcloud", ["ssh-key", "delete", keyName])
+          .then(() => {
+            console.log(`[cleanup] deleted ssh key: ${keyName}`);
+          })
+          .catch((error) => {
+            console.warn(`[cleanup] failed to delete ssh key ${keyName}: ${error.message || error}`);
+          });
+      }
+    })();
+
+    return cleanupPromise;
   };
+
+  const removeSignalHandlers = installSignalCleanup(async () => {
+    await cleanup();
+  });
 
   try {
     console.log("[phase] create ssh credentials");
@@ -1557,13 +1923,38 @@ async function main() {
         { stdio: "pipe" },
       ).then((res) => JSON.parse(res.stdout));
 
-    const [serverCreate, ...clientCreates] = await Promise.all([
-      createOne(serverName, "server", opts.serverType),
-      ...clientNames.map((name) => createOne(name, "client", opts.clientType)),
-    ]);
+    const createRequests = [
+      { name: serverName, role: "server", type: opts.serverType },
+      ...clientNames.map((name) => ({ name, role: "client", type: opts.clientType })),
+    ];
 
-    createdServers.push(serverName, ...clientNames);
+    const createResults = await Promise.allSettled(
+      createRequests.map((req) => createOne(req.name, req.role, req.type)),
+    );
 
+    const createdByName = new Map();
+    const createFailures = [];
+
+    createResults.forEach((result, index) => {
+      const req = createRequests[index];
+      if (result.status === "fulfilled") {
+        createdServers.push(req.name);
+        createdByName.set(req.name, result.value);
+      } else {
+        createFailures.push(`${req.role}:${req.name}: ${result.reason?.message || result.reason}`);
+      }
+    });
+
+    if (createFailures.length > 0) {
+      throw new Error(`Failed to create cloud servers: ${createFailures.join(" | ")}`);
+    }
+
+    const serverCreate = createdByName.get(serverName);
+    if (!serverCreate) {
+      throw new Error(`Failed to create cloud server node: ${serverName}`);
+    }
+
+    const clientCreates = clientNames.map((name) => createdByName.get(name));
     const serverIp = serverCreate.server.public_net.ipv4.ip;
     const clientInfos = clientCreates.map((c) => ({
       name: c.server.name,
@@ -1577,20 +1968,30 @@ async function main() {
       ...clientInfos.map((client) => waitForSsh(client.ip, keyPath)),
     ]);
 
-    console.log("[phase] install runtime dependencies on nodes");
-    const installCmd = [
+    console.log("[phase] install runtime dependencies on server node");
+    const serverInstallCmd = [
       "set -euo pipefail",
       "export DEBIAN_FRONTEND=noninteractive",
       "apt-get update -y >/dev/null",
-      "apt-get install -y docker.io curl jq git >/dev/null",
+      "apt-get install -y docker.io curl jq git python3 >/dev/null",
       "systemctl enable --now docker >/dev/null",
       "docker --version",
+      "python3 --version",
+      "git --version",
+      "curl --version",
     ].join("; ");
 
-    await Promise.all([
-      sshExec(serverIp, keyPath, installCmd, { stdio: "inherit" }),
-      ...clientInfos.map((client) => sshExec(client.ip, keyPath, installCmd, { stdio: "inherit" })),
-    ]);
+    await sshExec(serverIp, keyPath, serverInstallCmd, { stdio: "inherit" });
+
+    console.log("[phase] minimal client setup (no apt install)");
+    const clientBootstrapCmd = [
+      "set -euo pipefail",
+      "mkdir -p /usr/local/bin",
+      "bash --version",
+      "uname -m",
+    ].join("; ");
+
+    await Promise.all(clientInfos.map((client) => sshExec(client.ip, keyPath, clientBootstrapCmd, { stdio: "inherit" })));
 
     console.log("[phase] upload control scripts + nostr-bench binary");
 
@@ -1634,7 +2035,7 @@ async function main() {
       comparisonImages.add(opts.nostrRsImage);
     }
     if (opts.targets.includes("nostream")) {
-      comparisonImages.add("redis:7.0.5-alpine3.16");
+      comparisonImages.add(NOSTREAM_REDIS_IMAGE);
       comparisonImages.add("node:18-alpine3.16");
     }
     if (opts.targets.includes("haven")) {
@@ -1698,6 +2099,7 @@ async function main() {
           `NOSTR_RS_IMAGE=${shellEscape(opts.nostrRsImage)}`,
           `NOSTREAM_REPO=${shellEscape(opts.nostreamRepo)}`,
           `NOSTREAM_REF=${shellEscape(opts.nostreamRef)}`,
+          `NOSTREAM_REDIS_IMAGE=${shellEscape(NOSTREAM_REDIS_IMAGE)}`,
           `HAVEN_IMAGE=${shellEscape(opts.havenImage)}`,
           `HAVEN_RELAY_URL=${shellEscape(`${serverIp}:3355`)}`,
         ].join(" ");
@@ -1801,11 +2203,22 @@ async function main() {
       }
     }
 
+    const gitTag = detectedGitTag || "untagged";
+    const gitCommit = parrhesiaSource.gitCommit || detectedGitCommit || "unknown";
+
+    versions.components = await collectCloudComponentVersions({
+      serverIp,
+      keyPath,
+      opts,
+      needsParrhesia,
+      parrhesiaImageOnServer,
+      gitTag,
+      gitCommit,
+    });
+
     console.log("[phase] final server cleanup (containers)");
     await sshExec(serverIp, keyPath, "/root/cloud-bench-server.sh cleanup");
 
-    const gitTag = detectedGitTag || "untagged";
-    const gitCommit = parrhesiaSource.gitCommit || detectedGitCommit || "unknown";
     const servers = summariseServersFromResults(results);
 
     const entry = {
@@ -1864,6 +2277,7 @@ async function main() {
       console.log(`[done] ssh key kept: ${keyName}`);
     }
   } finally {
+    removeSignalHandlers();
     await cleanup();
   }
 }

@@ -190,8 +190,22 @@ deduped.sort((a, b) => {
   return (a.git_tag || "").localeCompare(b.git_tag || "", undefined, { numeric: true });
 });
 
-const baselineServerNames = ["strfry", "nostr-rs-relay"];
-const presentBaselines = baselineServerNames.filter((srv) => deduped.some((e) => e.servers?.[srv]));
+const primaryServerNames = new Set(["parrhesia-pg", "parrhesia-memory"]);
+const preferredBaselineOrder = ["strfry", "nostr-rs-relay", "nostream", "haven"];
+
+const discoveredBaselines = new Set();
+for (const e of deduped) {
+  for (const serverName of Object.keys(e.servers || {})) {
+    if (!primaryServerNames.has(serverName)) {
+      discoveredBaselines.add(serverName);
+    }
+  }
+}
+
+const presentBaselines = [
+  ...preferredBaselineOrder.filter((srv) => discoveredBaselines.has(srv)),
+  ...[...discoveredBaselines].filter((srv) => !preferredBaselineOrder.includes(srv)).sort((a, b) => a.localeCompare(b)),
+];
 
 const chartMetrics = [
   { key: "event_tps", label: "Event Throughput (TPS) — higher is better", file: "event_tps.tsv", ylabel: "TPS" },
@@ -278,19 +292,15 @@ if [[ ! -f "$WORK_DIR/latest_entry.json" ]]; then
   exit 0
 fi
 
-LATEST_ENTRY="$(cat "$WORK_DIR/latest_entry.json")"
-
-node - "$LATEST_ENTRY" "$README_FILE" <<'NODE'
+node - "$WORK_DIR/latest_entry.json" "$README_FILE" <<'NODE'
 const fs = require("node:fs");
 
-const [, , entryJson, readmePath] = process.argv;
-const entry = JSON.parse(entryJson);
+const [, , entryPath, readmePath] = process.argv;
+const entry = JSON.parse(fs.readFileSync(entryPath, "utf8"));
 const servers = entry.servers || {};
 
 const pg = servers["parrhesia-pg"];
 const mem = servers["parrhesia-memory"];
-const strfry = servers["strfry"];
-const nostrRs = servers["nostr-rs-relay"];
 
 if (!pg || !mem) {
   console.error("Selected entry is missing parrhesia-pg or parrhesia-memory");
@@ -325,27 +335,36 @@ const metricRows = [
   ["req throughput (MiB/s) ↑", "req_mibs", false],
 ];
 
-const hasStrfry = !!strfry;
-const hasNostrRs = !!nostrRs;
+const preferredComparisonOrder = ["strfry", "nostr-rs-relay", "nostream", "haven"];
+const discoveredComparisons = Object.keys(servers).filter(
+  (name) => name !== "parrhesia-pg" && name !== "parrhesia-memory",
+);
 
-const header = ["metric", "parrhesia-pg", "parrhesia-mem"];
-if (hasStrfry) header.push("strfry");
-if (hasNostrRs) header.push("nostr-rs-relay");
-header.push("mem/pg");
-if (hasStrfry) header.push("strfry/pg");
-if (hasNostrRs) header.push("nostr-rs/pg");
+const comparisonServers = [
+  ...preferredComparisonOrder.filter((name) => discoveredComparisons.includes(name)),
+  ...discoveredComparisons.filter((name) => !preferredComparisonOrder.includes(name)).sort((a, b) => a.localeCompare(b)),
+];
+
+const header = ["metric", "parrhesia-pg", "parrhesia-mem", ...comparisonServers, "mem/pg"];
+for (const serverName of comparisonServers) {
+  header.push(`${serverName}/pg`);
+}
 
 const alignRow = ["---"];
 for (let i = 1; i < header.length; i += 1) alignRow.push("---:");
 
 const rows = metricRows.map(([label, key, lowerIsBetter]) => {
   const row = [label, toFixed(pg[key]), toFixed(mem[key])];
-  if (hasStrfry) row.push(toFixed(strfry[key]));
-  if (hasNostrRs) row.push(toFixed(nostrRs[key]));
+
+  for (const serverName of comparisonServers) {
+    row.push(toFixed(servers?.[serverName]?.[key]));
+  }
 
   row.push(boldIf(ratio(pg[key], mem[key]), lowerIsBetter));
-  if (hasStrfry) row.push(boldIf(ratio(pg[key], strfry[key]), lowerIsBetter));
-  if (hasNostrRs) row.push(boldIf(ratio(pg[key], nostrRs[key]), lowerIsBetter));
+
+  for (const serverName of comparisonServers) {
+    row.push(boldIf(ratio(pg[key], servers?.[serverName]?.[key]), lowerIsBetter));
+  }
 
   return row;
 });

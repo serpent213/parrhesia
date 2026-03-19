@@ -14,15 +14,12 @@ Friendly wrapper around scripts/cloud_bench_orchestrate.mjs.
 The orchestrator checks datacenter availability for your server/client types,
 shows estimated 30m pricing, and asks for selection/confirmation in interactive terminals.
 
-Defaults (override via env or flags):
-  datacenter: fsn1-dc14
-  server/client type: cx23
-  clients: 3
-  runs: 3
-  targets: parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven
+Defaults:
+  Inherited from scripts/cloud_bench_orchestrate.mjs.
+  This wrapper only passes explicit overrides (flags/env), plus --quick profile overrides.
 
 Flags:
-  --quick                     Quick smoke profile (1 run, 1 client, lower load)
+  --quick                     Quick smoke profile (cx23/cx23, 1 run, 1 client, lower load)
   --clients N                 Override client count
   --runs N                    Override run count
   --targets CSV               Override targets
@@ -37,18 +34,18 @@ Flags:
   --keep                      Keep cloud resources after run
   -h, --help
 
-Environment overrides:
-  PARRHESIA_CLOUD_DATACENTER      (default: fsn1-dc14)
-  PARRHESIA_CLOUD_SERVER_TYPE     (default: cx23)
-  PARRHESIA_CLOUD_CLIENT_TYPE     (default: cx23)
-  PARRHESIA_CLOUD_CLIENTS         (default: 3)
-  PARRHESIA_BENCH_RUNS            (default: 3)
-  PARRHESIA_CLOUD_TARGETS         (default: all 6)
-  PARRHESIA_CLOUD_PARRHESIA_IMAGE (optional)
-  PARRHESIA_CLOUD_GIT_REF         (default: HEAD)
-  PARRHESIA_CLOUD_NOSTREAM_REPO   (default: https://github.com/Cameri/nostream.git)
-  PARRHESIA_CLOUD_NOSTREAM_REF    (default: main)
-  PARRHESIA_CLOUD_HAVEN_IMAGE     (default: holgerhatgarkeinenode/haven-docker:latest)
+Environment overrides (all optional):
+  PARRHESIA_CLOUD_DATACENTER
+  PARRHESIA_CLOUD_SERVER_TYPE
+  PARRHESIA_CLOUD_CLIENT_TYPE
+  PARRHESIA_CLOUD_CLIENTS
+  PARRHESIA_BENCH_RUNS
+  PARRHESIA_CLOUD_TARGETS
+  PARRHESIA_CLOUD_PARRHESIA_IMAGE
+  PARRHESIA_CLOUD_GIT_REF
+  PARRHESIA_CLOUD_NOSTREAM_REPO
+  PARRHESIA_CLOUD_NOSTREAM_REF
+  PARRHESIA_CLOUD_HAVEN_IMAGE
 
 Bench knobs (forwarded):
   PARRHESIA_BENCH_CONNECT_COUNT
@@ -75,17 +72,17 @@ Examples:
 EOF
 }
 
-DATACENTER="${PARRHESIA_CLOUD_DATACENTER:-fsn1-dc14}"
-SERVER_TYPE="${PARRHESIA_CLOUD_SERVER_TYPE:-cx23}"
-CLIENT_TYPE="${PARRHESIA_CLOUD_CLIENT_TYPE:-cx23}"
-CLIENTS="${PARRHESIA_CLOUD_CLIENTS:-3}"
-RUNS="${PARRHESIA_BENCH_RUNS:-3}"
-TARGETS="${PARRHESIA_CLOUD_TARGETS:-parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven}"
+DATACENTER="${PARRHESIA_CLOUD_DATACENTER:-}"
+SERVER_TYPE="${PARRHESIA_CLOUD_SERVER_TYPE:-}"
+CLIENT_TYPE="${PARRHESIA_CLOUD_CLIENT_TYPE:-}"
+CLIENTS="${PARRHESIA_CLOUD_CLIENTS:-}"
+RUNS="${PARRHESIA_BENCH_RUNS:-}"
+TARGETS="${PARRHESIA_CLOUD_TARGETS:-}"
 PARRHESIA_IMAGE="${PARRHESIA_CLOUD_PARRHESIA_IMAGE:-}"
-GIT_REF="${PARRHESIA_CLOUD_GIT_REF:-HEAD}"
-NOSTREAM_REPO="${PARRHESIA_CLOUD_NOSTREAM_REPO:-https://github.com/Cameri/nostream.git}"
-NOSTREAM_REF="${PARRHESIA_CLOUD_NOSTREAM_REF:-main}"
-HAVEN_IMAGE="${PARRHESIA_CLOUD_HAVEN_IMAGE:-holgerhatgarkeinenode/haven-docker:latest}"
+GIT_REF="${PARRHESIA_CLOUD_GIT_REF:-}"
+NOSTREAM_REPO="${PARRHESIA_CLOUD_NOSTREAM_REPO:-}"
+NOSTREAM_REF="${PARRHESIA_CLOUD_NOSTREAM_REF:-}"
+HAVEN_IMAGE="${PARRHESIA_CLOUD_HAVEN_IMAGE:-}"
 KEEP=0
 QUICK=0
 
@@ -163,8 +160,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$QUICK" == "1" ]]; then
-  RUNS=1
-  CLIENTS=1
+  : "${SERVER_TYPE:=cx23}"
+  : "${CLIENT_TYPE:=cx23}"
+  : "${RUNS:=1}"
+  : "${CLIENTS:=1}"
+
   : "${PARRHESIA_BENCH_CONNECT_COUNT:=20}"
   : "${PARRHESIA_BENCH_CONNECT_RATE:=20}"
   : "${PARRHESIA_BENCH_ECHO_COUNT:=20}"
@@ -178,22 +178,39 @@ if [[ "$QUICK" == "1" ]]; then
   : "${PARRHESIA_BENCH_KEEPALIVE_SECONDS:=2}"
 fi
 
-CMD=(
-  node scripts/cloud_bench_orchestrate.mjs
-  --datacenter "$DATACENTER"
-  --server-type "$SERVER_TYPE"
-  --client-type "$CLIENT_TYPE"
-  --clients "$CLIENTS"
-  --runs "$RUNS"
-  --targets "$TARGETS"
-  --nostream-repo "$NOSTREAM_REPO"
-  --nostream-ref "$NOSTREAM_REF"
-  --haven-image "$HAVEN_IMAGE"
-)
+CMD=(node scripts/cloud_bench_orchestrate.mjs)
+
+if [[ -n "$DATACENTER" ]]; then
+  CMD+=(--datacenter "$DATACENTER")
+fi
+if [[ -n "$SERVER_TYPE" ]]; then
+  CMD+=(--server-type "$SERVER_TYPE")
+fi
+if [[ -n "$CLIENT_TYPE" ]]; then
+  CMD+=(--client-type "$CLIENT_TYPE")
+fi
+if [[ -n "$CLIENTS" ]]; then
+  CMD+=(--clients "$CLIENTS")
+fi
+if [[ -n "$RUNS" ]]; then
+  CMD+=(--runs "$RUNS")
+fi
+if [[ -n "$TARGETS" ]]; then
+  CMD+=(--targets "$TARGETS")
+fi
+if [[ -n "$NOSTREAM_REPO" ]]; then
+  CMD+=(--nostream-repo "$NOSTREAM_REPO")
+fi
+if [[ -n "$NOSTREAM_REF" ]]; then
+  CMD+=(--nostream-ref "$NOSTREAM_REF")
+fi
+if [[ -n "$HAVEN_IMAGE" ]]; then
+  CMD+=(--haven-image "$HAVEN_IMAGE")
+fi
 
 if [[ -n "$PARRHESIA_IMAGE" ]]; then
   CMD+=(--parrhesia-image "$PARRHESIA_IMAGE")
-else
+elif [[ -n "$GIT_REF" ]]; then
   CMD+=(--git-ref "$GIT_REF")
 fi
 
