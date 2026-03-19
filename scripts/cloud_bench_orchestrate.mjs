@@ -54,6 +54,7 @@ const DEFAULTS = {
   keep: false,
   quick: false,
   monitoring: true,
+  yes: false,
   warmEvents: 25000,
   hotEvents: 250000,
   bench: {
@@ -82,7 +83,7 @@ bench/cloud_artifacts/<run_id>/, and appends metadata + pointers to
 bench/history.jsonl.
 
 Options:
-  --datacenter <name>          Initial datacenter selection (default: ${DEFAULTS.datacenter})
+  --datacenter <name|auto>     Initial datacenter selection (default: ${DEFAULTS.datacenter})
   --server-type <name>         (default: ${DEFAULTS.serverType})
   --client-type <name>         (default: ${DEFAULTS.clientType})
   --image-base <name>          (default: ${DEFAULTS.imageBase})
@@ -126,15 +127,17 @@ Options:
   --artifacts-dir <path>       (default: ${DEFAULTS.artifactsDir})
   --keep                       Keep cloud resources (no cleanup)
   --no-monitoring              Skip Prometheus + node_exporter setup
+  --yes                        Skip interactive prompts and proceed immediately
   -h, --help
 
 Notes:
   - Requires hcloud, ssh, scp, ssh-keygen, git.
   - Before provisioning, checks all datacenters for type availability and estimates ${ESTIMATE_WINDOW_LABEL} cost.
-  - In interactive terminals, prompts you to pick + confirm the datacenter.
+  - In interactive terminals, prompts you to pick + confirm the datacenter unless --yes is set.
   - Caches built nostr-bench at _build/bench/nostr-bench and reuses it when valid.
   - Auto-tunes Postgres/Redis/app pool sizing from server RAM + CPU for DB-backed targets.
   - Randomizes target order per run and wipes persisted target data directories on each start.
+  - Creates a Hetzner Cloud firewall restricting inbound access to benchmark ports from known IPs only.
   - Handles Ctrl-C / SIGTERM with best-effort cloud cleanup.
   - Tries nix .#nostrBenchStaticX86_64Musl first; falls back to docker-built portable nostr-bench.
   - If --parrhesia-image is omitted, requires nix locally.
@@ -266,6 +269,9 @@ function parseArgs(argv) {
         break;
       case "--no-monitoring":
         opts.monitoring = false;
+        break;
+      case "--yes":
+        opts.yes = true;
         break;
       case "--warm-events":
         opts.warmEvents = intOpt(arg, argv[++i]);
@@ -557,10 +563,15 @@ async function chooseDatacenter(opts) {
 
   printDatacenterChoices(choices, opts);
 
-  const defaultChoice = choices.find((choice) => choice.name === opts.datacenter) || choices[0];
+  const wantsAutoDatacenter = opts.datacenter === "auto";
+  const defaultChoice = wantsAutoDatacenter
+    ? choices[0]
+    : choices.find((choice) => choice.name === opts.datacenter) || choices[0];
 
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    if (!choices.some((choice) => choice.name === opts.datacenter)) {
+  const nonInteractiveOrYes = !process.stdin.isTTY || !process.stdout.isTTY || opts.yes;
+
+  if (nonInteractiveOrYes) {
+    if (!wantsAutoDatacenter && !choices.some((choice) => choice.name === opts.datacenter)) {
       throw new Error(
         `Requested datacenter ${opts.datacenter} is not currently compatible. Compatible: ${choices
           .map((choice) => choice.name)
@@ -568,8 +579,15 @@ async function chooseDatacenter(opts) {
       );
     }
 
+    const modeLabel = opts.yes && process.stdin.isTTY && process.stdout.isTTY
+      ? "auto-confirm mode (--yes)"
+      : "non-interactive mode";
+    const selectionLabel = wantsAutoDatacenter
+      ? "auto cheapest compatible datacenter"
+      : `requested datacenter ${defaultChoice.name}`;
+
     console.log(
-      `[plan] non-interactive mode: using datacenter ${opts.datacenter} (${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(defaultChoice.estimatedTotal.gross)} net=${formatEuro(defaultChoice.estimatedTotal.net)})`,
+      `[plan] ${modeLabel}: using ${selectionLabel} (${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(defaultChoice.estimatedTotal.gross)} net=${formatEuro(defaultChoice.estimatedTotal.net)})`,
     );
     return defaultChoice;
   }
@@ -1396,6 +1414,8 @@ async function main() {
 
   const createdServers = [];
   let sshKeyCreated = false;
+  let firewallName = null;
+  let firewallCreated = false;
   let cleanupPromise = null;
 
   const cleanup = async () => {
@@ -1422,6 +1442,17 @@ async function main() {
               }),
           ),
         );
+      }
+
+      if (firewallCreated) {
+        console.log("[cleanup] deleting firewall...");
+        await runCommand("hcloud", ["firewall", "delete", firewallName])
+          .then(() => {
+            console.log(`[cleanup] deleted firewall: ${firewallName}`);
+          })
+          .catch((error) => {
+            console.warn(`[cleanup] failed to delete firewall ${firewallName}: ${error.message || error}`);
+          });
       }
 
       if (sshKeyCreated) {
@@ -1529,6 +1560,42 @@ async function main() {
       waitForSsh(serverIp, keyPath),
       ...clientInfos.map((client) => waitForSsh(client.ip, keyPath)),
     ]);
+
+    // Detect orchestrator public IP from the server's perspective.
+    const orchestratorIp = (
+      await sshExec(serverIp, keyPath, "echo $SSH_CLIENT")
+    ).stdout.trim().split(/\s+/)[0];
+
+    // Create a firewall restricting inbound access to known benchmark IPs only.
+    firewallName = `${runId}-fw`;
+    const allBenchIps = [orchestratorIp, serverIp, ...clientInfos.map((c) => c.ip)];
+    const sourceIps = [...new Set(allBenchIps)].map((ip) => `${ip}/32`);
+
+    const firewallRules = [
+      { direction: "in", protocol: "tcp", port: "22",   source_ips: sourceIps, description: "SSH" },
+      { direction: "in", protocol: "tcp", port: "3355", source_ips: sourceIps, description: "Haven" },
+      { direction: "in", protocol: "tcp", port: "4413", source_ips: sourceIps, description: "Parrhesia" },
+      { direction: "in", protocol: "tcp", port: "7777", source_ips: sourceIps, description: "strfry" },
+      { direction: "in", protocol: "tcp", port: "8008", source_ips: sourceIps, description: "Nostream" },
+      { direction: "in", protocol: "tcp", port: "8080", source_ips: sourceIps, description: "nostr-rs-relay" },
+      { direction: "in", protocol: "tcp", port: "9090", source_ips: sourceIps, description: "Prometheus" },
+      { direction: "in", protocol: "tcp", port: "9100", source_ips: sourceIps, description: "node_exporter" },
+      { direction: "in", protocol: "icmp",              source_ips: ["0.0.0.0/0", "::/0"], description: "ICMP" },
+    ];
+
+    const rulesPath = path.join(tmpDir, "firewall-rules.json");
+    fs.writeFileSync(rulesPath, JSON.stringify(firewallRules));
+
+    await runCommand("hcloud", ["firewall", "create", "--name", firewallName, "--rules-file", rulesPath]);
+    firewallCreated = true;
+
+    for (const name of createdServers) {
+      await runCommand("hcloud", [
+        "firewall", "apply-to-resource", firewallName,
+        "--type", "server", "--server", name,
+      ]);
+    }
+    console.log(`[firewall] ${firewallName} applied (sources: ${sourceIps.join(", ")})`);
 
     console.log("[phase] install runtime dependencies on server node");
     const serverInstallCmd = [

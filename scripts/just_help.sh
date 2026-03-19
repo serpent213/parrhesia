@@ -60,6 +60,10 @@ Benchmark commands
   just bench cloud [args...]    Cloud benchmark wrapper
   just bench cloud-quick        Cloud smoke profile
 
+Cloud tip:
+  just bench cloud --yes --datacenter auto
+    -> auto-pick cheapest compatible DC and skip interactive confirmation
+
 Cloud defaults:
   targets = parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven
 

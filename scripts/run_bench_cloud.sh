@@ -9,87 +9,68 @@ usage() {
 usage:
   ./scripts/run_bench_cloud.sh [options] [-- extra args for cloud_bench_orchestrate.mjs]
 
-Friendly wrapper around scripts/cloud_bench_orchestrate.mjs.
+Thin wrapper around scripts/cloud_bench_orchestrate.mjs.
 
-The orchestrator checks datacenter availability for your server/client types,
-shows estimated 30m pricing, and asks for selection/confirmation in interactive terminals.
+Behavior:
+  - Forwards args directly to the orchestrator.
+  - Adds convenience aliases:
+      --image IMAGE    -> --parrhesia-image IMAGE
+  - Adds smoke defaults when --quick is set (unless already provided):
+      --server-type cx23
+      --client-type cx23
+      --runs 1
+      --clients 1
+      --connect-count 20
+      --connect-rate 20
+      --echo-count 20
+      --echo-rate 20
+      --echo-size 512
+      --event-count 20
+      --event-rate 20
+      --req-count 20
+      --req-rate 20
+      --req-limit 10
+      --keepalive-seconds 2
 
-Defaults:
-  Inherited from scripts/cloud_bench_orchestrate.mjs.
-  This wrapper only passes explicit overrides (flags/env), plus --quick profile overrides.
-
-Flags:
-  --quick                     Quick smoke profile (cx23/cx23, 1 run, 1 client, lower load)
-  --clients N                 Override client count
-  --runs N                    Override run count
-  --targets CSV               Override targets
-  --datacenter NAME           Override datacenter
-  --server-type NAME          Override server type
-  --client-type NAME          Override client type
-  --image IMAGE               Use remote Parrhesia image (e.g. ghcr.io/...)
-  --git-ref REF               Build Parrhesia image from git ref (default: HEAD)
-  --nostream-repo URL         Override nostream repo (default: Cameri/nostream)
-  --nostream-ref REF          Override nostream ref (default: main)
-  --haven-image IMAGE         Override Haven image
-  --threads N                 Override nostr-bench worker threads (0 = auto)
-  --keep                      Keep cloud resources after run
+Flags handled by this wrapper:
+  --quick
+  --image IMAGE
   -h, --help
 
-Environment overrides (all optional):
-  PARRHESIA_CLOUD_DATACENTER
-  PARRHESIA_CLOUD_SERVER_TYPE
-  PARRHESIA_CLOUD_CLIENT_TYPE
-  PARRHESIA_CLOUD_CLIENTS
-  PARRHESIA_BENCH_RUNS
-  PARRHESIA_CLOUD_TARGETS
-  PARRHESIA_CLOUD_PARRHESIA_IMAGE
-  PARRHESIA_CLOUD_GIT_REF
-  PARRHESIA_CLOUD_NOSTREAM_REPO
-  PARRHESIA_CLOUD_NOSTREAM_REF
-  PARRHESIA_CLOUD_HAVEN_IMAGE
-
-Bench knobs (forwarded):
-  PARRHESIA_BENCH_CONNECT_COUNT
-  PARRHESIA_BENCH_CONNECT_RATE
-  PARRHESIA_BENCH_ECHO_COUNT
-  PARRHESIA_BENCH_ECHO_RATE
-  PARRHESIA_BENCH_ECHO_SIZE
-  PARRHESIA_BENCH_EVENT_COUNT
-  PARRHESIA_BENCH_EVENT_RATE
-  PARRHESIA_BENCH_REQ_COUNT
-  PARRHESIA_BENCH_REQ_RATE
-  PARRHESIA_BENCH_REQ_LIMIT
-  PARRHESIA_BENCH_KEEPALIVE_SECONDS
-  PARRHESIA_BENCH_THREADS
+Everything else is passed through unchanged.
 
 Examples:
-  # Default full cloud run
-  ./scripts/run_bench_cloud.sh
-
-  # Quick smoke
-  ./scripts/run_bench_cloud.sh --quick
-
-  # Use a GHCR image
-  ./scripts/run_bench_cloud.sh --image ghcr.io/owner/parrhesia:latest
+  just bench cloud
+  just bench cloud --quick
+  just bench cloud --clients 2 --runs 1 --targets parrhesia-memory
+  just bench cloud --image ghcr.io/owner/parrhesia:latest --threads 4
+  just bench cloud --no-monitoring
+  just bench cloud --yes --datacenter auto
 EOF
 }
 
-DATACENTER="${PARRHESIA_CLOUD_DATACENTER:-}"
-SERVER_TYPE="${PARRHESIA_CLOUD_SERVER_TYPE:-}"
-CLIENT_TYPE="${PARRHESIA_CLOUD_CLIENT_TYPE:-}"
-CLIENTS="${PARRHESIA_CLOUD_CLIENTS:-}"
-RUNS="${PARRHESIA_BENCH_RUNS:-}"
-TARGETS="${PARRHESIA_CLOUD_TARGETS:-}"
-PARRHESIA_IMAGE="${PARRHESIA_CLOUD_PARRHESIA_IMAGE:-}"
-GIT_REF="${PARRHESIA_CLOUD_GIT_REF:-}"
-NOSTREAM_REPO="${PARRHESIA_CLOUD_NOSTREAM_REPO:-}"
-NOSTREAM_REF="${PARRHESIA_CLOUD_NOSTREAM_REF:-}"
-HAVEN_IMAGE="${PARRHESIA_CLOUD_HAVEN_IMAGE:-}"
-THREADS="${PARRHESIA_BENCH_THREADS:-}"
-KEEP=0
-QUICK=0
+has_opt() {
+  local key="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "$key" || "$arg" == "$key="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
-EXTRA_ARGS=()
+add_default_if_missing() {
+  local key="$1"
+  local value="$2"
+  if ! has_opt "$key" "${ORCH_ARGS[@]}"; then
+    ORCH_ARGS+=("$key" "$value")
+  fi
+}
+
+ORCH_ARGS=()
+QUICK=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -99,156 +80,49 @@ while [[ $# -gt 0 ]]; do
       ;;
     --quick)
       QUICK=1
+      ORCH_ARGS+=("--quick")
       shift
-      ;;
-    --clients)
-      CLIENTS="$2"
-      shift 2
-      ;;
-    --runs)
-      RUNS="$2"
-      shift 2
-      ;;
-    --targets)
-      TARGETS="$2"
-      shift 2
-      ;;
-    --datacenter)
-      DATACENTER="$2"
-      shift 2
-      ;;
-    --server-type)
-      SERVER_TYPE="$2"
-      shift 2
-      ;;
-    --client-type)
-      CLIENT_TYPE="$2"
-      shift 2
       ;;
     --image)
-      PARRHESIA_IMAGE="$2"
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --image" >&2
+        exit 1
+      fi
+      ORCH_ARGS+=("--parrhesia-image" "$2")
       shift 2
-      ;;
-    --git-ref)
-      GIT_REF="$2"
-      shift 2
-      ;;
-    --nostream-repo)
-      NOSTREAM_REPO="$2"
-      shift 2
-      ;;
-    --nostream-ref)
-      NOSTREAM_REF="$2"
-      shift 2
-      ;;
-    --haven-image)
-      HAVEN_IMAGE="$2"
-      shift 2
-      ;;
-    --threads)
-      THREADS="$2"
-      shift 2
-      ;;
-    --keep)
-      KEEP=1
-      shift
       ;;
     --)
       shift
-      EXTRA_ARGS+=("$@")
+      ORCH_ARGS+=("$@")
       break
       ;;
     *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
+      ORCH_ARGS+=("$1")
+      shift
       ;;
   esac
 done
 
 if [[ "$QUICK" == "1" ]]; then
-  : "${SERVER_TYPE:=cx23}"
-  : "${CLIENT_TYPE:=cx23}"
-  : "${RUNS:=1}"
-  : "${CLIENTS:=1}"
+  add_default_if_missing "--server-type" "cx23"
+  add_default_if_missing "--client-type" "cx23"
+  add_default_if_missing "--runs" "1"
+  add_default_if_missing "--clients" "1"
 
-  : "${PARRHESIA_BENCH_CONNECT_COUNT:=20}"
-  : "${PARRHESIA_BENCH_CONNECT_RATE:=20}"
-  : "${PARRHESIA_BENCH_ECHO_COUNT:=20}"
-  : "${PARRHESIA_BENCH_ECHO_RATE:=20}"
-  : "${PARRHESIA_BENCH_ECHO_SIZE:=512}"
-  : "${PARRHESIA_BENCH_EVENT_COUNT:=20}"
-  : "${PARRHESIA_BENCH_EVENT_RATE:=20}"
-  : "${PARRHESIA_BENCH_REQ_COUNT:=20}"
-  : "${PARRHESIA_BENCH_REQ_RATE:=20}"
-  : "${PARRHESIA_BENCH_REQ_LIMIT:=10}"
-  : "${PARRHESIA_BENCH_KEEPALIVE_SECONDS:=2}"
-fi
-
-CMD=(node scripts/cloud_bench_orchestrate.mjs)
-
-if [[ -n "$DATACENTER" ]]; then
-  CMD+=(--datacenter "$DATACENTER")
-fi
-if [[ -n "$SERVER_TYPE" ]]; then
-  CMD+=(--server-type "$SERVER_TYPE")
-fi
-if [[ -n "$CLIENT_TYPE" ]]; then
-  CMD+=(--client-type "$CLIENT_TYPE")
-fi
-if [[ -n "$CLIENTS" ]]; then
-  CMD+=(--clients "$CLIENTS")
-fi
-if [[ -n "$RUNS" ]]; then
-  CMD+=(--runs "$RUNS")
-fi
-if [[ -n "$TARGETS" ]]; then
-  CMD+=(--targets "$TARGETS")
-fi
-if [[ -n "$NOSTREAM_REPO" ]]; then
-  CMD+=(--nostream-repo "$NOSTREAM_REPO")
-fi
-if [[ -n "$NOSTREAM_REF" ]]; then
-  CMD+=(--nostream-ref "$NOSTREAM_REF")
-fi
-if [[ -n "$HAVEN_IMAGE" ]]; then
-  CMD+=(--haven-image "$HAVEN_IMAGE")
-fi
-if [[ -n "$THREADS" ]]; then
-  CMD+=(--threads "$THREADS")
+  add_default_if_missing "--connect-count" "20"
+  add_default_if_missing "--connect-rate" "20"
+  add_default_if_missing "--echo-count" "20"
+  add_default_if_missing "--echo-rate" "20"
+  add_default_if_missing "--echo-size" "512"
+  add_default_if_missing "--event-count" "20"
+  add_default_if_missing "--event-rate" "20"
+  add_default_if_missing "--req-count" "20"
+  add_default_if_missing "--req-rate" "20"
+  add_default_if_missing "--req-limit" "10"
+  add_default_if_missing "--keepalive-seconds" "2"
 fi
 
-if [[ -n "$PARRHESIA_IMAGE" ]]; then
-  CMD+=(--parrhesia-image "$PARRHESIA_IMAGE")
-elif [[ -n "$GIT_REF" ]]; then
-  CMD+=(--git-ref "$GIT_REF")
-fi
-
-if [[ "$KEEP" == "1" ]]; then
-  CMD+=(--keep)
-fi
-
-# Forward bench knob envs if set
-for kv in \
-  PARRHESIA_BENCH_CONNECT_COUNT \
-  PARRHESIA_BENCH_CONNECT_RATE \
-  PARRHESIA_BENCH_ECHO_COUNT \
-  PARRHESIA_BENCH_ECHO_RATE \
-  PARRHESIA_BENCH_ECHO_SIZE \
-  PARRHESIA_BENCH_EVENT_COUNT \
-  PARRHESIA_BENCH_EVENT_RATE \
-  PARRHESIA_BENCH_REQ_COUNT \
-  PARRHESIA_BENCH_REQ_RATE \
-  PARRHESIA_BENCH_REQ_LIMIT \
-  PARRHESIA_BENCH_KEEPALIVE_SECONDS
- do
-  if [[ -n "${!kv:-}" ]]; then
-    flag="--$(echo "$kv" | tr '[:upper:]' '[:lower:]' | sed -E 's/^parrhesia_bench_//' | tr '_' '-')"
-    CMD+=("$flag" "${!kv}")
-  fi
- done
-
-CMD+=("${EXTRA_ARGS[@]}")
+CMD=(node scripts/cloud_bench_orchestrate.mjs "${ORCH_ARGS[@]}")
 
 printf 'Running cloud bench:\n  %q' "${CMD[0]}"
 for ((i=1; i<${#CMD[@]}; i++)); do
