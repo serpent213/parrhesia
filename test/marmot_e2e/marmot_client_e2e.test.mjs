@@ -11,6 +11,7 @@ import {
   MarmotClient,
   KeyPackageStore,
   KeyValueGroupStateBackend,
+  Proposals,
   createKeyPackageRelayListEvent,
   deserializeApplicationData,
   extractMarmotGroupData,
@@ -140,6 +141,129 @@ function createClient(account, network) {
     keyPackageStore: new KeyPackageStore(new MemoryBackend()),
     groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
   });
+}
+
+/**
+ * Bootstraps a group with one admin and `count` invited members.
+ */
+async function createGroupWithMembers(network, count) {
+  const adminAccount = PrivateKeyAccount.generateNew();
+  const adminPubkey = await adminAccount.signer.getPublicKey();
+  const adminClient = createClient(adminAccount, network);
+
+  const adminRelayList = await adminAccount.signer.signEvent(
+    createKeyPackageRelayListEvent({
+      pubkey: adminPubkey,
+      relays: [relayWsUrl],
+      client: "parrhesia-marmot-e2e",
+    }),
+  );
+  await network.publish([relayWsUrl], adminRelayList);
+
+  const memberInfos = [];
+  for (let i = 0; i < count; i++) {
+    const account = PrivateKeyAccount.generateNew();
+    const pubkey = await account.signer.getPublicKey();
+    const client = createClient(account, network);
+
+    const relayList = await account.signer.signEvent(
+      createKeyPackageRelayListEvent({
+        pubkey,
+        relays: [relayWsUrl],
+        client: "parrhesia-marmot-e2e",
+      }),
+    );
+    await network.publish([relayWsUrl], relayList);
+    await client.keyPackages.create({
+      relays: [relayWsUrl],
+      client: "parrhesia-marmot-e2e",
+    });
+
+    memberInfos.push({ account, pubkey, client });
+  }
+
+  const adminGroup = await adminClient.createGroup(
+    `E2E Group ${randomUUID()}`,
+    { relays: [relayWsUrl], adminPubkeys: [adminPubkey] },
+  );
+
+  const members = [];
+  for (const mi of memberInfos) {
+    const keyPackageEvents = await network.request([relayWsUrl], [
+      { kinds: [KEY_PACKAGE_KIND], authors: [mi.pubkey], limit: 1 },
+    ]);
+    assert.equal(keyPackageEvents.length, 1, `key package missing for ${mi.pubkey}`);
+    await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
+
+    const giftWraps = await requestGiftWrapsWithAuth({
+      relayUrl: relayWsUrl,
+      relayHttpUrl,
+      signer: mi.account.signer,
+      recipientPubkey: mi.pubkey,
+    });
+    assert.ok(giftWraps.length >= 1, `gift wrap missing for ${mi.pubkey}`);
+
+    const inviteReader = new InviteReader({
+      signer: mi.account.signer,
+      store: {
+        received: new MemoryBackend(),
+        unread: new MemoryBackend(),
+        seen: new MemoryBackend(),
+      },
+    });
+    await inviteReader.ingestEvents(giftWraps);
+    const invites = await inviteReader.decryptGiftWraps();
+    assert.equal(invites.length, 1);
+
+    const { group } = await mi.client.joinGroupFromWelcome({
+      welcomeRumor: invites[0],
+    });
+
+    members.push({ account: mi.account, pubkey: mi.pubkey, client: mi.client, group });
+  }
+
+  return {
+    admin: { account: adminAccount, pubkey: adminPubkey, client: adminClient, group: adminGroup },
+    members,
+  };
+}
+
+function getNostrGroupId(group) {
+  const data = extractMarmotGroupData(group.state);
+  assert.ok(data, "MarmotGroupData should exist on group");
+  return bytesToHex(data.nostrGroupId);
+}
+
+async function fetchGroupEvents(network, group) {
+  const nostrGroupId = getNostrGroupId(group);
+  return network.request([relayWsUrl], [
+    { kinds: [GROUP_EVENT_KIND], "#h": [nostrGroupId], limit: 100 },
+  ]);
+}
+
+async function countEvents(relayUrl, filters) {
+  const relay = await openRelay(relayUrl, 5_000);
+  const subId = randomSubId("count");
+  const filtersArray = Array.isArray(filters) ? filters : [filters];
+
+  try {
+    relay.send(["COUNT", subId, ...filtersArray]);
+
+    while (true) {
+      const frame = await relay.nextFrame(5_000);
+      if (!Array.isArray(frame)) continue;
+
+      if (frame[0] === "COUNT" && frame[1] === subId) {
+        return frame[2];
+      }
+
+      if (frame[0] === "CLOSED" && frame[1] === subId) {
+        throw new Error(`COUNT closed: ${frame[2]}`);
+      }
+    }
+  } finally {
+    await relay.close();
+  }
 }
 
 function computeEventId(event) {
@@ -602,4 +726,231 @@ test("admin invites user, user joins, and message round-trip decrypts", async ()
     decryptedMessages.some((rumor) => rumor.content === messageRumor.content),
     "admin should decrypt invitee application message",
   );
+});
+
+test("sendChatMessage convenience API works", async () => {
+  const network = new RelayNetwork(relayWsUrl, relayHttpUrl);
+  const { admin, members } = await createGroupWithMembers(network, 1);
+  const invitee = members[0];
+
+  const content = `chat-msg-${randomUUID()}`;
+  await invitee.group.sendChatMessage(content);
+
+  const groupEvents = await fetchGroupEvents(network, admin.group);
+
+  const decrypted = [];
+  for await (const result of admin.group.ingest(groupEvents)) {
+    if (result.kind === "processed" && result.result.kind === "applicationMessage") {
+      decrypted.push(deserializeApplicationData(result.result.message));
+    }
+  }
+
+  assert.ok(
+    decrypted.some((r) => r.content === content && r.kind === 9),
+    "admin should decrypt kind 9 chat message from invitee",
+  );
+});
+
+test("admin removes member from group", async () => {
+  const network = new RelayNetwork(relayWsUrl, relayHttpUrl);
+  const { admin, members } = await createGroupWithMembers(network, 2);
+  const [user1, user2] = members;
+
+  // proposeRemoveUser returns ProposalRemove[] — use propose() which handles arrays
+  await admin.group.propose(Proposals.proposeRemoveUser(user2.pubkey));
+  await admin.group.commit();
+
+  // user1 ingests the removal commit
+  const groupEvents = await fetchGroupEvents(network, admin.group);
+
+  let user1Processed = false;
+  for await (const result of user1.group.ingest(groupEvents)) {
+    if (result.kind === "processed" && result.result.kind === "newState") {
+      user1Processed = true;
+    }
+  }
+  assert.ok(user1Processed, "user1 should process the removal commit");
+
+  // user1 can still send a message that admin decrypts
+  const msg = `post-removal-${randomUUID()}`;
+  await user1.group.sendChatMessage(msg);
+
+  const updatedEvents = await fetchGroupEvents(network, admin.group);
+
+  const decrypted = [];
+  for await (const result of admin.group.ingest(updatedEvents)) {
+    if (result.kind === "processed" && result.result.kind === "applicationMessage") {
+      decrypted.push(deserializeApplicationData(result.result.message));
+    }
+  }
+
+  assert.ok(
+    decrypted.some((r) => r.content === msg),
+    "admin should decrypt message from user1 after user2 removal",
+  );
+});
+
+test("group metadata update via proposal", async () => {
+  const network = new RelayNetwork(relayWsUrl, relayHttpUrl);
+  const { admin, members } = await createGroupWithMembers(network, 1);
+  const invitee = members[0];
+
+  const updatedName = `Updated-${randomUUID()}`;
+  await admin.group.commit({
+    extraProposals: [Proposals.proposeUpdateMetadata({ name: updatedName })],
+  });
+
+  // Admin sees the updated name locally
+  const adminGroupData = extractMarmotGroupData(admin.group.state);
+  assert.equal(adminGroupData.name, updatedName);
+
+  // Invitee ingests the commit and sees updated metadata
+  const groupEvents = await fetchGroupEvents(network, admin.group);
+
+  for await (const _result of invitee.group.ingest(groupEvents)) {
+    // drain ingest
+  }
+
+  const inviteeGroupData = extractMarmotGroupData(invitee.group.state);
+  assert.equal(inviteeGroupData.name, updatedName, "invitee should see updated group name");
+});
+
+test("member self-update rotates leaf keys (forward secrecy)", async () => {
+  const network = new RelayNetwork(relayWsUrl, relayHttpUrl);
+  const { admin, members } = await createGroupWithMembers(network, 1);
+  const invitee = members[0];
+
+  const epochBefore = admin.group.state.groupContext.epoch;
+
+  await invitee.group.selfUpdate();
+
+  // Admin ingests the self-update commit
+  const groupEvents = await fetchGroupEvents(network, admin.group);
+
+  for await (const result of admin.group.ingest(groupEvents)) {
+    // drain
+  }
+
+  const epochAfter = admin.group.state.groupContext.epoch;
+  assert.ok(epochAfter > epochBefore, "admin epoch should advance after self-update commit");
+
+  // Both parties can still exchange messages after key rotation
+  const msg = `after-selfupdate-${randomUUID()}`;
+  await invitee.group.sendChatMessage(msg);
+
+  const updatedEvents = await fetchGroupEvents(network, admin.group);
+
+  const decrypted = [];
+  for await (const result of admin.group.ingest(updatedEvents)) {
+    if (result.kind === "processed" && result.result.kind === "applicationMessage") {
+      decrypted.push(deserializeApplicationData(result.result.message));
+    }
+  }
+
+  assert.ok(
+    decrypted.some((r) => r.content === msg),
+    "admin should decrypt message sent after self-update",
+  );
+});
+
+test("member leaves group voluntarily", async () => {
+  const network = new RelayNetwork(relayWsUrl, relayHttpUrl);
+  const { admin, members } = await createGroupWithMembers(network, 2);
+  const [stayer, leaver] = members;
+
+  // Leaver publishes self-remove proposals and destroys local state
+  await leaver.group.leave();
+
+  // Admin ingests the leave proposals (they become unapplied)
+  const groupEventsForAdmin = await fetchGroupEvents(network, admin.group);
+  for await (const _result of admin.group.ingest(groupEventsForAdmin)) {
+    // drain
+  }
+
+  // Admin commits all unapplied proposals (the leave removals)
+  await admin.group.commit();
+
+  // Stayer ingests everything and the group continues
+  const allEvents = await fetchGroupEvents(network, admin.group);
+  for await (const _result of stayer.group.ingest(allEvents)) {
+    // drain
+  }
+
+  const msgAfterLeave = `after-leave-${randomUUID()}`;
+  await stayer.group.sendChatMessage(msgAfterLeave);
+
+  const latestEvents = await fetchGroupEvents(network, admin.group);
+
+  const decrypted = [];
+  for await (const result of admin.group.ingest(latestEvents)) {
+    if (result.kind === "processed" && result.result.kind === "applicationMessage") {
+      decrypted.push(deserializeApplicationData(result.result.message));
+    }
+  }
+
+  assert.ok(
+    decrypted.some((r) => r.content === msgAfterLeave),
+    "group should continue functioning after member departure",
+  );
+});
+
+test("NIP-45 COUNT returns accurate event count", async () => {
+  const account = PrivateKeyAccount.generateNew();
+  const pubkey = await account.signer.getPublicKey();
+  const tag = `count-test-${randomUUID()}`;
+
+  for (let i = 0; i < 3; i++) {
+    const event = {
+      kind: 1,
+      pubkey,
+      created_at: unixNow() + i,
+      tags: [["t", tag]],
+      content: `count-event-${i}`,
+    };
+    event.id = computeEventId(event);
+    const signed = await account.signer.signEvent(event);
+    const frame = await publishEvent(relayWsUrl, signed);
+    assert.equal(frame[2], true, `publish of event ${i} failed: ${frame[3]}`);
+  }
+
+  const result = await countEvents(relayWsUrl, { kinds: [1], "#t": [tag] });
+  assert.equal(result.count, 3, "COUNT should report 3 events");
+});
+
+test("NIP-9 event deletion removes event from relay", async () => {
+  const account = PrivateKeyAccount.generateNew();
+  const pubkey = await account.signer.getPublicKey();
+
+  const original = {
+    kind: 1,
+    pubkey,
+    created_at: unixNow(),
+    tags: [],
+    content: `to-be-deleted-${randomUUID()}`,
+  };
+  original.id = computeEventId(original);
+  const signedOriginal = await account.signer.signEvent(original);
+  const publishFrame = await publishEvent(relayWsUrl, signedOriginal);
+  assert.equal(publishFrame[2], true, `original publish failed: ${publishFrame[3]}`);
+
+  // Verify it exists
+  const beforeDelete = await requestEvents(relayWsUrl, [{ ids: [signedOriginal.id] }]);
+  assert.equal(beforeDelete.length, 1, "event should exist before deletion");
+
+  // Publish kind 5 deletion referencing the original
+  const deletion = {
+    kind: 5,
+    pubkey,
+    created_at: unixNow(),
+    tags: [["e", signedOriginal.id]],
+    content: "",
+  };
+  deletion.id = computeEventId(deletion);
+  const signedDeletion = await account.signer.signEvent(deletion);
+  const deleteFrame = await publishEvent(relayWsUrl, signedDeletion);
+  assert.equal(deleteFrame[2], true, `deletion publish failed: ${deleteFrame[3]}`);
+
+  // Query again -- the original should be gone
+  const afterDelete = await requestEvents(relayWsUrl, [{ ids: [signedOriginal.id] }]);
+  assert.equal(afterDelete.length, 0, "event should be deleted after kind 5 request");
 });

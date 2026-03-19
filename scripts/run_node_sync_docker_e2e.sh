@@ -108,4 +108,8 @@ docker compose -f "$COMPOSE_FILE" up -d parrhesia-b
 wait_for_health "$NODE_B_HTTP_URL" "Node B"
 run_runner verify-resume
 
+run_runner filter-selectivity
+run_runner sync-stop-restart
+run_runner bidirectional-sync
+
 printf 'node-sync-e2e docker run completed\nstate: %s\n' "$STATE_FILE"

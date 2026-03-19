@@ -115,7 +115,7 @@ wait_for_health() {
       return
     fi
 
-    sleep 0.1
+    sleep 0.2
   done
 
   echo "${label} did not become healthy on port ${port}" >&2
@@ -223,5 +223,9 @@ start_node \
 
 wait_for_health "$NODE_B_PORT" "Node B"
 run_runner verify-resume
+
+run_runner filter-selectivity
+run_runner sync-stop-restart
+run_runner bidirectional-sync
 
 printf 'node-sync-e2e local run completed\nlogs: %s\n' "$LOG_DIR"
