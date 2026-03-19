@@ -31,6 +31,7 @@ Flags:
   --nostream-repo URL         Override nostream repo (default: Cameri/nostream)
   --nostream-ref REF          Override nostream ref (default: main)
   --haven-image IMAGE         Override Haven image
+  --threads N                 Override nostr-bench worker threads (0 = auto)
   --keep                      Keep cloud resources after run
   -h, --help
 
@@ -59,6 +60,7 @@ Bench knobs (forwarded):
   PARRHESIA_BENCH_REQ_RATE
   PARRHESIA_BENCH_REQ_LIMIT
   PARRHESIA_BENCH_KEEPALIVE_SECONDS
+  PARRHESIA_BENCH_THREADS
 
 Examples:
   # Default full cloud run
@@ -83,6 +85,7 @@ GIT_REF="${PARRHESIA_CLOUD_GIT_REF:-}"
 NOSTREAM_REPO="${PARRHESIA_CLOUD_NOSTREAM_REPO:-}"
 NOSTREAM_REF="${PARRHESIA_CLOUD_NOSTREAM_REF:-}"
 HAVEN_IMAGE="${PARRHESIA_CLOUD_HAVEN_IMAGE:-}"
+THREADS="${PARRHESIA_BENCH_THREADS:-}"
 KEEP=0
 QUICK=0
 
@@ -140,6 +143,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --haven-image)
       HAVEN_IMAGE="$2"
+      shift 2
+      ;;
+    --threads)
+      THREADS="$2"
       shift 2
       ;;
     --keep)
@@ -206,6 +213,9 @@ if [[ -n "$NOSTREAM_REF" ]]; then
 fi
 if [[ -n "$HAVEN_IMAGE" ]]; then
   CMD+=(--haven-image "$HAVEN_IMAGE")
+fi
+if [[ -n "$THREADS" ]]; then
+  CMD+=(--threads "$THREADS")
 fi
 
 if [[ -n "$PARRHESIA_IMAGE" ]]; then
