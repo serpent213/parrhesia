@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { seedEvents } from "./nostr_seed.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,9 @@ const DEFAULTS = {
   nostreamRef: "main",
   havenImage: "holgerhatgarkeinenode/haven-docker:latest",
   keep: false,
+  quick: false,
+  warmEvents: 100000,
+  hotEvents: 1000000,
   bench: {
     connectCount: 1000,
     connectRate: 200,
@@ -94,6 +98,11 @@ Options:
   --req-rate <n>               (default: ${DEFAULTS.bench.reqRate})
   --req-limit <n>              (default: ${DEFAULTS.bench.reqLimit})
   --keepalive-seconds <n>      (default: ${DEFAULTS.bench.keepaliveSeconds})
+
+  Phased benchmark:
+  --warm-events <n>            DB fill level for warm phase (default: ${DEFAULTS.warmEvents})
+  --hot-events <n>             DB fill level for hot phase (default: ${DEFAULTS.hotEvents})
+  --quick                      Skip phased benchmarks, run flat connect→echo→event→req
 
   Output + lifecycle:
   --history-file <path>        (default: ${DEFAULTS.historyFile})
@@ -223,10 +232,23 @@ function parseArgs(argv) {
       case "--keep":
         opts.keep = true;
         break;
+      case "--quick":
+        opts.quick = true;
+        break;
+      case "--warm-events":
+        opts.warmEvents = intOpt(arg, argv[++i]);
+        break;
+      case "--hot-events":
+        opts.hotEvents = intOpt(arg, argv[++i]);
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
+
+  if (process.env.PARRHESIA_BENCH_WARM_EVENTS) opts.warmEvents = Number(process.env.PARRHESIA_BENCH_WARM_EVENTS);
+  if (process.env.PARRHESIA_BENCH_HOT_EVENTS) opts.hotEvents = Number(process.env.PARRHESIA_BENCH_HOT_EVENTS);
+  if (process.env.PARRHESIA_BENCH_QUICK === "1") opts.quick = true;
 
   if (!opts.targets.length) {
     throw new Error("--targets must include at least one target");
@@ -1053,7 +1075,7 @@ common_parrhesia_env+=( -e PARRHESIA_LIMITS_MAX_NEGENTROPY_ITEMS_PER_SESSION=100
 
 cmd="\${1:-}"
 if [[ -z "\$cmd" ]]; then
-  echo "usage: cloud-bench-server.sh <start-parrhesia-pg|start-parrhesia-memory|start-strfry|start-nostr-rs-relay|start-nostream|start-haven|cleanup>" >&2
+  echo "usage: cloud-bench-server.sh <start-*|wipe-data-*|cleanup>" >&2
   exit 1
 fi
 
@@ -1375,6 +1397,45 @@ EOF
     wait_port 3355 120 haven
     ;;
 
+  wipe-data-parrhesia-pg)
+    docker exec pg psql -U parrhesia -d parrhesia -c \
+      "TRUNCATE event_ids, event_tags, events, replaceable_event_state, addressable_event_state CASCADE"
+    ;;
+
+  wipe-data-parrhesia-memory)
+    docker restart parrhesia
+    wait_http "http://127.0.0.1:4413/health" 120 parrhesia
+    ;;
+
+  wipe-data-strfry)
+    docker stop strfry
+    rm -rf /root/strfry-data/strfry/*
+    docker start strfry
+    wait_port 7777 60 strfry
+    ;;
+
+  wipe-data-nostr-rs-relay)
+    docker rm -f nostr-rs
+    docker run -d --name nostr-rs \
+      --ulimit nofile=262144:262144 \
+      -p 8080:8080 \
+      -v /root/nostr-rs.toml:/usr/src/app/config.toml:ro \
+      "\$NOSTR_RS_IMAGE" >/dev/null
+    wait_http "http://127.0.0.1:8080/" 60 nostr-rs
+    ;;
+
+  wipe-data-nostream)
+    docker exec nostream-db psql -U nostr_ts_relay -d nostr_ts_relay -c \
+      "TRUNCATE events CASCADE"
+    ;;
+
+  wipe-data-haven)
+    docker stop haven
+    rm -rf /root/haven-bench/db/*
+    docker start haven
+    wait_port 3355 120 haven
+    ;;
+
   cleanup)
     cleanup_containers
     ;;
@@ -1392,45 +1453,61 @@ function makeClientScript() {
 set -euo pipefail
 
 relay_url="\${1:-}"
+mode="\${2:-all}"
+
 if [[ -z "\$relay_url" ]]; then
-  echo "usage: cloud-bench-client.sh <relay-url>" >&2
+  echo "usage: cloud-bench-client.sh <relay-url> [connect|echo|event|req|all]" >&2
   exit 1
 fi
 
 bench_bin="\${NOSTR_BENCH_BIN:-/usr/local/bin/nostr-bench}"
 
-echo "==> nostr-bench connect \${relay_url}"
-"\$bench_bin" connect --json \
-  -c "\${PARRHESIA_BENCH_CONNECT_COUNT:-200}" \
-  -r "\${PARRHESIA_BENCH_CONNECT_RATE:-100}" \
-  -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
-  "\${relay_url}"
+run_connect() {
+  echo "==> nostr-bench connect \${relay_url}"
+  "\$bench_bin" connect --json \
+    -c "\${PARRHESIA_BENCH_CONNECT_COUNT:-200}" \
+    -r "\${PARRHESIA_BENCH_CONNECT_RATE:-100}" \
+    -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
+    "\${relay_url}"
+}
 
-echo
-echo "==> nostr-bench echo \${relay_url}"
-"\$bench_bin" echo --json \
-  -c "\${PARRHESIA_BENCH_ECHO_COUNT:-100}" \
-  -r "\${PARRHESIA_BENCH_ECHO_RATE:-50}" \
-  -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
-  --size "\${PARRHESIA_BENCH_ECHO_SIZE:-512}" \
-  "\${relay_url}"
+run_echo() {
+  echo "==> nostr-bench echo \${relay_url}"
+  "\$bench_bin" echo --json \
+    -c "\${PARRHESIA_BENCH_ECHO_COUNT:-100}" \
+    -r "\${PARRHESIA_BENCH_ECHO_RATE:-50}" \
+    -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
+    --size "\${PARRHESIA_BENCH_ECHO_SIZE:-512}" \
+    "\${relay_url}"
+}
 
-echo
-echo "==> nostr-bench event \${relay_url}"
-"\$bench_bin" event --json \
-  -c "\${PARRHESIA_BENCH_EVENT_COUNT:-100}" \
-  -r "\${PARRHESIA_BENCH_EVENT_RATE:-50}" \
-  -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
-  "\${relay_url}"
+run_event() {
+  echo "==> nostr-bench event \${relay_url}"
+  "\$bench_bin" event --json \
+    -c "\${PARRHESIA_BENCH_EVENT_COUNT:-100}" \
+    -r "\${PARRHESIA_BENCH_EVENT_RATE:-50}" \
+    -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
+    "\${relay_url}"
+}
 
-echo
-echo "==> nostr-bench req \${relay_url}"
-"\$bench_bin" req --json \
-  -c "\${PARRHESIA_BENCH_REQ_COUNT:-100}" \
-  -r "\${PARRHESIA_BENCH_REQ_RATE:-50}" \
-  -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
-  --limit "\${PARRHESIA_BENCH_REQ_LIMIT:-10}" \
-  "\${relay_url}"
+run_req() {
+  echo "==> nostr-bench req \${relay_url}"
+  "\$bench_bin" req --json \
+    -c "\${PARRHESIA_BENCH_REQ_COUNT:-100}" \
+    -r "\${PARRHESIA_BENCH_REQ_RATE:-50}" \
+    -k "\${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
+    --limit "\${PARRHESIA_BENCH_REQ_LIMIT:-10}" \
+    "\${relay_url}"
+}
+
+case "\$mode" in
+  connect) run_connect ;;
+  echo)    run_echo ;;
+  event)   run_event ;;
+  req)     run_req ;;
+  all)     run_connect; echo; run_echo; echo; run_event; echo; run_req ;;
+  *)       echo "unknown mode: \$mode" >&2; exit 1 ;;
+esac
 `;
 }
 
@@ -1516,7 +1593,7 @@ function metricFromSections(sections) {
   };
 }
 
-function summariseServersFromResults(results) {
+function summariseFlatResults(results) {
   const byServer = new Map();
 
   for (const runEntry of results) {
@@ -1566,6 +1643,210 @@ function summariseServersFromResults(results) {
   }
 
   return out;
+}
+
+function summarisePhasedResults(results) {
+  const byServer = new Map();
+
+  for (const entry of results) {
+    if (!byServer.has(entry.target)) byServer.set(entry.target, []);
+    const phases = entry.phases;
+    if (!phases) continue;
+
+    const sample = {};
+
+    // connect
+    const connectClients = (phases.connect?.clients || [])
+      .filter((c) => c.status === "ok")
+      .map((c) => metricFromSections(c.sections || {}));
+    if (connectClients.length > 0) {
+      sample.connect_avg_ms = mean(connectClients.map((s) => s.connect_avg_ms));
+      sample.connect_max_ms = mean(connectClients.map((s) => s.connect_max_ms));
+    }
+
+    // echo
+    const echoClients = (phases.echo?.clients || [])
+      .filter((c) => c.status === "ok")
+      .map((c) => metricFromSections(c.sections || {}));
+    if (echoClients.length > 0) {
+      sample.echo_tps = sum(echoClients.map((s) => s.echo_tps));
+      sample.echo_mibs = sum(echoClients.map((s) => s.echo_mibs));
+    }
+
+    // Per-level req and event metrics
+    for (const level of ["empty", "warm", "hot"]) {
+      const phase = phases[level];
+      if (!phase) continue;
+
+      const reqClients = (phase.req?.clients || [])
+        .filter((c) => c.status === "ok")
+        .map((c) => metricFromSections(c.sections || {}));
+      if (reqClients.length > 0) {
+        sample[`req_${level}_tps`] = sum(reqClients.map((s) => s.req_tps));
+        sample[`req_${level}_mibs`] = sum(reqClients.map((s) => s.req_mibs));
+      }
+
+      const eventClients = (phase.event?.clients || [])
+        .filter((c) => c.status === "ok")
+        .map((c) => metricFromSections(c.sections || {}));
+      if (eventClients.length > 0) {
+        sample[`event_${level}_tps`] = sum(eventClients.map((s) => s.event_tps));
+        sample[`event_${level}_mibs`] = sum(eventClients.map((s) => s.event_mibs));
+      }
+    }
+
+    byServer.get(entry.target).push(sample);
+  }
+
+  const out = {};
+  for (const [name, samples] of byServer.entries()) {
+    if (samples.length === 0) continue;
+    const allKeys = new Set(samples.flatMap((s) => Object.keys(s)));
+    const summary = {};
+    for (const key of allKeys) {
+      summary[key] = mean(samples.map((s) => s[key]).filter((v) => v !== undefined));
+    }
+    out[name] = summary;
+  }
+
+  return out;
+}
+
+function summariseServersFromResults(results) {
+  const isPhased = results.some((r) => r.mode === "phased");
+  return isPhased ? summarisePhasedResults(results) : summariseFlatResults(results);
+}
+
+// Count events successfully written by event benchmarks across all clients.
+function countEventsWritten(clientResults) {
+  let total = 0;
+  for (const cr of clientResults) {
+    if (cr.status !== "ok") continue;
+    const eventSection = cr.sections?.event;
+    if (eventSection?.message_stats?.complete) {
+      total += Number(eventSection.message_stats.complete) || 0;
+    }
+  }
+  return total;
+}
+
+// Ensure the relay has approximately `targetCount` events.
+// Seeds from the orchestrator via WebSocket, or wipes and reseeds if over target.
+async function smartFill({
+  target,
+  targetCount,
+  eventsInDb,
+  relayUrl,
+  serverIp,
+  keyPath,
+  serverEnvPrefix,
+}) {
+  if (targetCount <= 0) return { eventsInDb, seeded: 0, wiped: false };
+
+  let wiped = false;
+  if (eventsInDb > targetCount) {
+    console.log(`[fill] ${target}: have ${eventsInDb} > ${targetCount}, wiping and reseeding`);
+    const wipeCmd = `wipe-data-${target}`;
+    await sshExec(serverIp, keyPath, `${serverEnvPrefix} /root/cloud-bench-server.sh ${shellEscape(wipeCmd)}`);
+    eventsInDb = 0;
+    wiped = true;
+  }
+
+  const deficit = targetCount - eventsInDb;
+  if (deficit <= 0) {
+    console.log(`[fill] ${target}: already at ${eventsInDb} events (target ${targetCount}), skipping`);
+    return { eventsInDb, seeded: 0, wiped };
+  }
+
+  console.log(`[fill] ${target}: seeding ${deficit} events (${eventsInDb} → ${targetCount})`);
+  const result = await seedEvents({
+    url: relayUrl,
+    count: deficit,
+    concurrency: 16,
+    onProgress: (n) => {
+      if (n % 10000 === 0) console.log(`[fill] ${target}: ${n}/${deficit} seeded`);
+    },
+  });
+  const elapsedSec = result.elapsed_ms / 1000;
+  const eventsPerSec = elapsedSec > 0 ? Math.round(result.acked / elapsedSec) : 0;
+  console.log(
+    `[fill] ${target}: seeded ${result.acked}/${deficit} in ${elapsedSec.toFixed(1)}s (${eventsPerSec} events/s)` +
+      (result.errors > 0 ? ` (${result.errors} errors)` : ""),
+  );
+  eventsInDb += result.acked;
+
+  return { eventsInDb, seeded: result.acked, wiped };
+}
+
+// Run a single benchmark type across all clients in parallel.
+async function runSingleBenchmark({
+  clientInfos,
+  keyPath,
+  benchEnvPrefix,
+  relayUrl,
+  mode,
+  artifactDir,
+}) {
+  fs.mkdirSync(artifactDir, { recursive: true });
+
+  const clientResults = await Promise.all(
+    clientInfos.map(async (client) => {
+      const startedAt = new Date().toISOString();
+      const startMs = Date.now();
+      const stdoutPath = path.join(artifactDir, `${client.name}.stdout.log`);
+      const stderrPath = path.join(artifactDir, `${client.name}.stderr.log`);
+
+      try {
+        const benchRes = await sshExec(
+          client.ip,
+          keyPath,
+          `${benchEnvPrefix} /root/cloud-bench-client.sh ${shellEscape(relayUrl)} ${shellEscape(mode)}`,
+        );
+
+        fs.writeFileSync(stdoutPath, benchRes.stdout, "utf8");
+        fs.writeFileSync(stderrPath, benchRes.stderr, "utf8");
+
+        return {
+          client_name: client.name,
+          client_ip: client.ip,
+          status: "ok",
+          started_at: startedAt,
+          finished_at: new Date().toISOString(),
+          duration_ms: Date.now() - startMs,
+          stdout_path: path.relative(ROOT_DIR, stdoutPath),
+          stderr_path: path.relative(ROOT_DIR, stderrPath),
+          sections: parseNostrBenchSections(benchRes.stdout),
+        };
+      } catch (error) {
+        const out = error.stdout || "";
+        const err = error.stderr || String(error);
+        fs.writeFileSync(stdoutPath, out, "utf8");
+        fs.writeFileSync(stderrPath, err, "utf8");
+
+        return {
+          client_name: client.name,
+          client_ip: client.ip,
+          status: "error",
+          started_at: startedAt,
+          finished_at: new Date().toISOString(),
+          duration_ms: Date.now() - startMs,
+          stdout_path: path.relative(ROOT_DIR, stdoutPath),
+          stderr_path: path.relative(ROOT_DIR, stderrPath),
+          error: String(error.message || error),
+          sections: parseNostrBenchSections(out),
+        };
+      }
+    }),
+  );
+
+  const failed = clientResults.filter((r) => r.status !== "ok");
+  if (failed.length > 0) {
+    throw new Error(
+      `Client benchmark failed: ${failed.map((f) => f.client_name).join(", ")}`,
+    );
+  }
+
+  return clientResults;
 }
 
 async function tryCommandStdout(command, args = [], options = {}) {
@@ -2082,7 +2363,7 @@ async function main() {
     const results = [];
     const targetOrderPerRun = [];
 
-    console.log("[phase] benchmark execution");
+    console.log(`[phase] benchmark execution (mode=${opts.quick ? "quick" : "phased"})`);
 
     for (let runIndex = 1; runIndex <= opts.runs; runIndex += 1) {
       const runTargets = shuffled(opts.targets);
@@ -2135,70 +2416,142 @@ async function main() {
           `PARRHESIA_BENCH_KEEPALIVE_SECONDS=${opts.bench.keepaliveSeconds}`,
         ].join(" ");
 
-        const clientRunResults = await Promise.all(
-          clientInfos.map(async (client) => {
-            const startedAt = new Date().toISOString();
-            const startMs = Date.now();
-            const stdoutPath = path.join(runTargetDir, `${client.name}.stdout.log`);
-            const stderrPath = path.join(runTargetDir, `${client.name}.stderr.log`);
+        const benchArgs = { clientInfos, keyPath, benchEnvPrefix, relayUrl };
 
-            try {
-              const benchRes = await sshExec(
-                client.ip,
-                keyPath,
-                `${benchEnvPrefix} /root/cloud-bench-client.sh ${shellEscape(relayUrl)}`,
-              );
+        if (opts.quick) {
+          // Flat mode: run all benchmarks in one shot (backward compat)
+          const clientRunResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "all",
+            artifactDir: runTargetDir,
+          });
 
-              fs.writeFileSync(stdoutPath, benchRes.stdout, "utf8");
-              fs.writeFileSync(stderrPath, benchRes.stderr, "utf8");
+          results.push({
+            run: runIndex,
+            target,
+            relay_url: relayUrl,
+            mode: "flat",
+            clients: clientRunResults,
+          });
+        } else {
+          // Phased mode: separate benchmarks at different DB fill levels
+          let eventsInDb = 0;
 
-              return {
-                client_name: client.name,
-                client_ip: client.ip,
-                status: "ok",
-                started_at: startedAt,
-                finished_at: new Date().toISOString(),
-                duration_ms: Date.now() - startMs,
-                stdout_path: path.relative(ROOT_DIR, stdoutPath),
-                stderr_path: path.relative(ROOT_DIR, stderrPath),
-                sections: parseNostrBenchSections(benchRes.stdout),
-              };
-            } catch (error) {
-              const out = error.stdout || "";
-              const err = error.stderr || String(error);
-              fs.writeFileSync(stdoutPath, out, "utf8");
-              fs.writeFileSync(stderrPath, err, "utf8");
+          console.log(`[bench] ${target}: connect`);
+          const connectResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "connect",
+            artifactDir: path.join(runTargetDir, "connect"),
+          });
 
-              return {
-                client_name: client.name,
-                client_ip: client.ip,
-                status: "error",
-                started_at: startedAt,
-                finished_at: new Date().toISOString(),
-                duration_ms: Date.now() - startMs,
-                stdout_path: path.relative(ROOT_DIR, stdoutPath),
-                stderr_path: path.relative(ROOT_DIR, stderrPath),
-                error: String(error.message || error),
-                sections: parseNostrBenchSections(out),
-              };
-            }
-          }),
-        );
+          console.log(`[bench] ${target}: echo`);
+          const echoResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "echo",
+            artifactDir: path.join(runTargetDir, "echo"),
+          });
 
-        results.push({
-          run: runIndex,
-          target,
-          relay_url: relayUrl,
-          clients: clientRunResults,
-        });
+          // Phase: empty
+          console.log(`[bench] ${target}: req (empty, ${eventsInDb} events)`);
+          const emptyReqResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "req",
+            artifactDir: path.join(runTargetDir, "empty-req"),
+          });
 
-        const failed = clientRunResults.filter((r) => r.status !== "ok");
-        if (failed.length > 0) {
-          throw new Error(
-            `Client benchmark failed for target=${target}, run=${runIndex}: ${failed
-              .map((f) => f.client_name)
-              .join(", ")}`,
-          );
+          console.log(`[bench] ${target}: event (empty, ${eventsInDb} events)`);
+          const emptyEventResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "event",
+            artifactDir: path.join(runTargetDir, "empty-event"),
+          });
+          eventsInDb += countEventsWritten(emptyEventResults);
+          console.log(`[bench] ${target}: ~${eventsInDb} events in DB after empty phase`);
+
+          // Fill to warm
+          const fillWarm = await smartFill({
+            target,
+            targetCount: opts.warmEvents,
+            eventsInDb,
+            relayUrl,
+            serverIp,
+            keyPath,
+            serverEnvPrefix,
+          });
+          eventsInDb = fillWarm.eventsInDb;
+
+          // Phase: warm
+          console.log(`[bench] ${target}: req (warm, ~${eventsInDb} events)`);
+          const warmReqResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "req",
+            artifactDir: path.join(runTargetDir, "warm-req"),
+          });
+
+          console.log(`[bench] ${target}: event (warm, ~${eventsInDb} events)`);
+          const warmEventResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "event",
+            artifactDir: path.join(runTargetDir, "warm-event"),
+          });
+          eventsInDb += countEventsWritten(warmEventResults);
+
+          // Fill to hot
+          const fillHot = await smartFill({
+            target,
+            targetCount: opts.hotEvents,
+            eventsInDb,
+            relayUrl,
+            serverIp,
+            keyPath,
+            serverEnvPrefix,
+          });
+          eventsInDb = fillHot.eventsInDb;
+
+          // Phase: hot
+          console.log(`[bench] ${target}: req (hot, ~${eventsInDb} events)`);
+          const hotReqResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "req",
+            artifactDir: path.join(runTargetDir, "hot-req"),
+          });
+
+          console.log(`[bench] ${target}: event (hot, ~${eventsInDb} events)`);
+          const hotEventResults = await runSingleBenchmark({
+            ...benchArgs,
+            mode: "event",
+            artifactDir: path.join(runTargetDir, "hot-event"),
+          });
+
+          results.push({
+            run: runIndex,
+            target,
+            relay_url: relayUrl,
+            mode: "phased",
+            phases: {
+              connect: { clients: connectResults },
+              echo: { clients: echoResults },
+              empty: {
+                req: { clients: emptyReqResults },
+                event: { clients: emptyEventResults },
+                db_events_before: 0,
+              },
+              warm: {
+                req: { clients: warmReqResults },
+                event: { clients: warmEventResults },
+                db_events_before: fillWarm.eventsInDb,
+                seeded: fillWarm.seeded,
+                wiped: fillWarm.wiped,
+              },
+              hot: {
+                req: { clients: hotReqResults },
+                event: { clients: hotEventResults },
+                db_events_before: fillHot.eventsInDb,
+                seeded: fillHot.seeded,
+                wiped: fillHot.wiped,
+              },
+            },
+          });
         }
       }
     }
@@ -2222,7 +2575,7 @@ async function main() {
     const servers = summariseServersFromResults(results);
 
     const entry = {
-      schema_version: 2,
+      schema_version: opts.quick ? 2 : 3,
       timestamp,
       run_id: runId,
       machine_id: os.hostname(),
@@ -2255,6 +2608,9 @@ async function main() {
         runs: opts.runs,
         targets: opts.targets,
         target_order_per_run: targetOrderPerRun,
+        mode: opts.quick ? "flat" : "phased",
+        warm_events: opts.warmEvents,
+        hot_events: opts.hotEvents,
         ...opts.bench,
       },
       versions,

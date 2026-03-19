@@ -207,51 +207,138 @@ const presentBaselines = [
   ...[...discoveredBaselines].filter((srv) => !preferredBaselineOrder.includes(srv)).sort((a, b) => a.localeCompare(b)),
 ];
 
-const chartMetrics = [
-  { key: "event_tps", label: "Event Throughput (TPS) — higher is better", file: "event_tps.tsv", ylabel: "TPS" },
-  { key: "req_tps", label: "Req Throughput (TPS) — higher is better", file: "req_tps.tsv", ylabel: "TPS" },
-  { key: "echo_tps", label: "Echo Throughput (TPS) — higher is better", file: "echo_tps.tsv", ylabel: "TPS" },
-  { key: "connect_avg_ms", label: "Connect Avg Latency (ms) — lower is better", file: "connect_avg_ms.tsv", ylabel: "ms" },
+// --- Colour palette per server: [empty, warm, hot] ---
+const serverColours = {
+  "parrhesia-pg":     ["#93c5fd", "#3b82f6", "#1e40af"],
+  "parrhesia-memory": ["#86efac", "#22c55e", "#166534"],
+  "strfry":           ["#fdba74", "#f97316", "#9a3412"],
+  "nostr-rs-relay":   ["#fca5a5", "#ef4444", "#991b1b"],
+  "nostream":         ["#d8b4fe", "#a855f7", "#6b21a8"],
+  "haven":            ["#fde68a", "#eab308", "#854d0e"],
+};
+
+const levelStyles = [
+  /* empty */ { dt: 3, pt: 6, ps: 0.7, lw: 1.5 },
+  /* warm  */ { dt: 2, pt: 8, ps: 0.8, lw: 1.5 },
+  /* hot   */ { dt: 1, pt: 7, ps: 1.0, lw: 2 },
 ];
 
-for (const cm of chartMetrics) {
-  const header = ["tag", "parrhesia-pg", "parrhesia-memory"];
-  for (const srv of presentBaselines) header.push(srv);
+const levels = ["empty", "warm", "hot"];
 
-  const rows = [header.join("\t")];
-  for (const e of deduped) {
-    const row = [
-      e.git_tag || "untagged",
-      e.servers?.["parrhesia-pg"]?.[cm.key] ?? "NaN",
-      e.servers?.["parrhesia-memory"]?.[cm.key] ?? "NaN",
-    ];
-    for (const srv of presentBaselines) {
-      row.push(e.servers?.[srv]?.[cm.key] ?? "NaN");
-    }
-    rows.push(row.join("\t"));
+const shortLabel = {
+  "parrhesia-pg": "pg", "parrhesia-memory": "mem",
+  "strfry": "strfry", "nostr-rs-relay": "nostr-rs",
+  "nostream": "nostream", "haven": "haven",
+};
+
+const allServers = ["parrhesia-pg", "parrhesia-memory", ...presentBaselines];
+
+function isPhased(e) {
+  for (const srv of Object.values(e.servers || {})) {
+    if (srv.event_empty_tps !== undefined) return true;
   }
-
-  fs.writeFileSync(path.join(workDir, cm.file), rows.join("\n") + "\n", "utf8");
+  return false;
 }
 
-const serverLabels = ["parrhesia-pg", "parrhesia-memory"];
-for (const srv of presentBaselines) serverLabels.push(srv);
+// Build phased key: "event_tps" + "empty" → "event_empty_tps"
+function phasedKey(base, level) {
+  const idx = base.lastIndexOf("_");
+  return `${base.slice(0, idx)}_${level}_${base.slice(idx + 1)}`;
+}
 
+// --- Emit linetype definitions (server × level) ---
 const plotLines = [];
-for (const cm of chartMetrics) {
-  const dataFile = `data_dir."/${cm.file}"`;
-  plotLines.push(`set title "${cm.label}"`);
-  plotLines.push(`set ylabel "${cm.ylabel}"`);
-
-  const plotParts = [];
-  plotParts.push(`${dataFile} using 0:2:xtic(1) lt 1 title "${serverLabels[0]}"`);
-  plotParts.push(`'' using 0:3 lt 2 title "${serverLabels[1]}"`);
-  for (let i = 0; i < presentBaselines.length; i += 1) {
-    plotParts.push(`'' using 0:${4 + i} lt ${3 + i} title "${serverLabels[2 + i]}"`);
+for (let si = 0; si < allServers.length; si++) {
+  const colours = serverColours[allServers[si]] || ["#888888", "#555555", "#222222"];
+  for (let li = 0; li < 3; li++) {
+    const s = levelStyles[li];
+    plotLines.push(
+      `set linetype ${si * 3 + li + 1} lc rgb "${colours[li]}" lw ${s.lw} pt ${s.pt} ps ${s.ps} dt ${s.dt}`
+    );
   }
+}
+plotLines.push("");
 
-  plotLines.push("plot " + plotParts.join(", \\\n     "));
-  plotLines.push("");
+// Panel definitions — order matches 4x2 grid (left-to-right, top-to-bottom)
+const panels = [
+  { kind: "simple", key: "echo_tps",       label: "Echo Throughput (TPS) — higher is better",    file: "echo_tps.tsv",       ylabel: "TPS" },
+  { kind: "simple", key: "echo_mibs",      label: "Echo Throughput (MiB/s) — higher is better",  file: "echo_mibs.tsv",      ylabel: "MiB/s" },
+  { kind: "fill",   base: "event_tps",     label: "Event Throughput (TPS) — higher is better",   file: "event_tps.tsv",      ylabel: "TPS" },
+  { kind: "fill",   base: "event_mibs",    label: "Event Throughput (MiB/s) — higher is better", file: "event_mibs.tsv",     ylabel: "MiB/s" },
+  { kind: "fill",   base: "req_tps",       label: "Req Throughput (TPS) — higher is better",     file: "req_tps.tsv",        ylabel: "TPS" },
+  { kind: "fill",   base: "req_mibs",      label: "Req Throughput (MiB/s) — higher is better",   file: "req_mibs.tsv",       ylabel: "MiB/s" },
+  { kind: "simple", key: "connect_avg_ms", label: "Connect Avg Latency (ms) — lower is better",  file: "connect_avg_ms.tsv", ylabel: "ms" },
+];
+
+for (const panel of panels) {
+  if (panel.kind === "simple") {
+    // One column per server
+    const header = ["tag", ...allServers.map((s) => shortLabel[s] || s)];
+    const rows = [header.join("\t")];
+    for (const e of deduped) {
+      const row = [e.git_tag || "untagged"];
+      for (const srv of allServers) {
+        row.push(e.servers?.[srv]?.[panel.key] ?? "NaN");
+      }
+      rows.push(row.join("\t"));
+    }
+    fs.writeFileSync(path.join(workDir, panel.file), rows.join("\n") + "\n", "utf8");
+
+    // Plot: one series per server, using its "hot" linetype
+    const dataFile = `data_dir."/${panel.file}"`;
+    plotLines.push(`set title "${panel.label}"`);
+    plotLines.push(`set ylabel "${panel.ylabel}"`);
+    const parts = allServers.map((srv, si) => {
+      const src = si === 0 ? dataFile : "''";
+      const xtic = si === 0 ? ":xtic(1)" : "";
+      return `${src} using 0:${si + 2}${xtic} lt ${si * 3 + 3} title "${shortLabel[srv] || srv}"`;
+    });
+    plotLines.push("plot " + parts.join(", \\\n     "));
+    plotLines.push("");
+
+  } else {
+    // Three columns per server (empty, warm, hot)
+    const header = ["tag"];
+    for (const srv of allServers) {
+      const sl = shortLabel[srv] || srv;
+      for (const lvl of levels) header.push(`${sl}-${lvl}`);
+    }
+    const rows = [header.join("\t")];
+    for (const e of deduped) {
+      const row = [e.git_tag || "untagged"];
+      const phased = isPhased(e);
+      for (const srv of allServers) {
+        const d = e.servers?.[srv];
+        if (!d) { row.push("NaN", "NaN", "NaN"); continue; }
+        if (phased) {
+          for (const lvl of levels) row.push(d[phasedKey(panel.base, lvl)] ?? "NaN");
+        } else {
+          row.push("NaN", d[panel.base] ?? "NaN", "NaN"); // flat → warm only
+        }
+      }
+      rows.push(row.join("\t"));
+    }
+    fs.writeFileSync(path.join(workDir, panel.file), rows.join("\n") + "\n", "utf8");
+
+    // Plot: three series per server (empty/warm/hot)
+    const dataFile = `data_dir."/${panel.file}"`;
+    plotLines.push(`set title "${panel.label}"`);
+    plotLines.push(`set ylabel "${panel.ylabel}"`);
+    const parts = [];
+    let first = true;
+    for (let si = 0; si < allServers.length; si++) {
+      const label = shortLabel[allServers[si]] || allServers[si];
+      for (let li = 0; li < 3; li++) {
+        const src = first ? dataFile : "''";
+        const xtic = first ? ":xtic(1)" : "";
+        const col = 2 + si * 3 + li;
+        parts.push(`${src} using 0:${col}${xtic} lt ${si * 3 + li + 1} title "${label} (${levels[li]})"`);
+        first = false;
+      }
+    }
+    plotLines.push("plot " + parts.join(", \\\n     "));
+    plotLines.push("");
+  }
 }
 
 fs.writeFileSync(path.join(workDir, "plot_commands.gnuplot"), plotLines.join("\n") + "\n", "utf8");
@@ -307,6 +394,18 @@ if (!pg || !mem) {
   process.exit(1);
 }
 
+// Detect phased entries — use hot fill level as headline metric
+const phased = pg.event_empty_tps !== undefined;
+
+// For phased entries, resolve "event_tps" → "event_hot_tps" etc.
+function resolveKey(key) {
+  if (!phased) return key;
+  const fillKeys = ["event_tps", "event_mibs", "req_tps", "req_mibs"];
+  if (!fillKeys.includes(key)) return key;
+  const idx = key.lastIndexOf("_");
+  return `${key.slice(0, idx)}_hot_${key.slice(idx + 1)}`;
+}
+
 function toFixed(v, d = 2) {
   return Number.isFinite(v) ? v.toFixed(d) : "n/a";
 }
@@ -324,15 +423,17 @@ function boldIf(ratioStr, lowerIsBetter) {
   return better ? `**${ratioStr}**` : ratioStr;
 }
 
+const fillNote = phased ? " (hot fill level)" : "";
+
 const metricRows = [
   ["connect avg latency (ms) ↓", "connect_avg_ms", true],
   ["connect max latency (ms) ↓", "connect_max_ms", true],
   ["echo throughput (TPS) ↑", "echo_tps", false],
   ["echo throughput (MiB/s) ↑", "echo_mibs", false],
-  ["event throughput (TPS) ↑", "event_tps", false],
-  ["event throughput (MiB/s) ↑", "event_mibs", false],
-  ["req throughput (TPS) ↑", "req_tps", false],
-  ["req throughput (MiB/s) ↑", "req_mibs", false],
+  [`event throughput (TPS)${fillNote} ↑`, "event_tps", false],
+  [`event throughput (MiB/s)${fillNote} ↑`, "event_mibs", false],
+  [`req throughput (TPS)${fillNote} ↑`, "req_tps", false],
+  [`req throughput (MiB/s)${fillNote} ↑`, "req_mibs", false],
 ];
 
 const preferredComparisonOrder = ["strfry", "nostr-rs-relay", "nostream", "haven"];
@@ -354,16 +455,17 @@ const alignRow = ["---"];
 for (let i = 1; i < header.length; i += 1) alignRow.push("---:");
 
 const rows = metricRows.map(([label, key, lowerIsBetter]) => {
-  const row = [label, toFixed(pg[key]), toFixed(mem[key])];
+  const rk = resolveKey(key);
+  const row = [label, toFixed(pg[rk]), toFixed(mem[rk])];
 
   for (const serverName of comparisonServers) {
-    row.push(toFixed(servers?.[serverName]?.[key]));
+    row.push(toFixed(servers?.[serverName]?.[rk]));
   }
 
-  row.push(boldIf(ratio(pg[key], mem[key]), lowerIsBetter));
+  row.push(boldIf(ratio(pg[rk], mem[rk]), lowerIsBetter));
 
   for (const serverName of comparisonServers) {
-    row.push(boldIf(ratio(pg[key], servers?.[serverName]?.[key]), lowerIsBetter));
+    row.push(boldIf(ratio(pg[rk], servers?.[serverName]?.[rk]), lowerIsBetter));
   }
 
   return row;

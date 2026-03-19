@@ -610,7 +610,7 @@ just bench update all
 
 Current comparison results:
 
-| metric | parrhesia-pg | parrhesia-mem | strfry | nostr-rs-relay | mem/pg | strfry/pg | nostr-rs/pg |
+| metric | parrhesia-pg | parrhesia-mem | strfry | nostr-rs-relay | mem/pg | strfry/pg | nostr-rs-relay/pg |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | connect avg latency (ms) ↓ | 34.67 | 43.33 | 2.67 | 2.67 | 1.25x | **0.08x** | **0.08x** |
 | connect max latency (ms) ↓ | 61.67 | 74.67 | 4.67 | 4.00 | 1.21x | **0.08x** | **0.06x** |

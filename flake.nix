@@ -18,6 +18,7 @@
     packages = forAllSystems (
       system: let
         pkgs = import nixpkgs {inherit system;};
+        pkgsLinux = import nixpkgs {system = "x86_64-linux";};
         lib = pkgs.lib;
         parrhesia = pkgs.callPackage ./default.nix {};
         nostrBench = pkgs.callPackage ./nix/nostr-bench.nix {};
@@ -25,10 +26,12 @@
         {
           default = parrhesia;
           inherit parrhesia nostrBench;
+
+          # Uses x86_64-linux pkgs so it can cross-build via a remote
+          # builder even when the host is aarch64-darwin.
+          nostrBenchStaticX86_64Musl = pkgsLinux.callPackage ./nix/nostr-bench.nix {staticX86_64Musl = true;};
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          nostrBenchStaticX86_64Musl = pkgs.callPackage ./nix/nostr-bench.nix {staticX86_64Musl = true;};
-
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "parrhesia";
             tag = "latest";
