@@ -548,6 +548,51 @@ Run it with:
 mix bench
 ```
 
+### Cloud benchmark (Hetzner Cloud)
+
+For distributed runs (one server node + multiple client nodes), use:
+
+```bash
+./scripts/run_bench_cloud.sh
+```
+
+or invoke the orchestrator directly:
+
+```bash
+node scripts/cloud_bench_orchestrate.mjs
+```
+
+Prerequisites:
+
+- [`hcloud`](https://github.com/hetznercloud/cli) CLI installed
+- Hetzner Cloud token exported as `HCLOUD_TOKEN`
+- local `docker`, `git`, `ssh`, and `scp` available
+
+Example:
+
+```bash
+export HCLOUD_TOKEN=...
+./scripts/run_bench_cloud.sh --quick
+```
+
+Outputs:
+
+- raw client logs per run: `bench/cloud_artifacts/<run_id>/...`
+- JSONL history entries (local + cloud): `bench/history.jsonl`
+
+Useful history/render commands:
+
+```bash
+# List available machines and runs in history
+./scripts/run_bench_update.sh --list
+
+# Regenerate chart + README table for a machine
+./scripts/run_bench_update.sh <machine_id>
+
+# Regenerate from all machines
+./scripts/run_bench_update.sh all
+```
+
 Current comparison results:
 
 | metric | parrhesia-pg | parrhesia-mem | strfry | nostr-rs-relay | mem/pg | strfry/pg | nostr-rs/pg |

@@ -78,11 +78,23 @@ const [, , jsonOut, timestamp, machineId, gitTag, gitCommit, runsStr, historyFil
 const { versions, ...servers } = JSON.parse(fs.readFileSync(jsonOut, "utf8"));
 
 const entry = {
+  schema_version: 2,
   timestamp,
+  run_id: `local-${timestamp}-${machineId}-${gitCommit}`,
   machine_id: machineId,
   git_tag: gitTag,
   git_commit: gitCommit,
   runs: Number(runsStr),
+  source: {
+    kind: "local",
+    mode: "run_bench_collect",
+    git_ref: gitTag,
+    git_tag: gitTag,
+    git_commit: gitCommit,
+  },
+  infra: {
+    provider: "local",
+  },
   versions: versions || {},
   servers,
 };

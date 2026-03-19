@@ -78,6 +78,7 @@ in {
     with pkgs;
       [
         just
+        # Mix NIFs
         gcc
         git
         gnumake
@@ -85,6 +86,8 @@ in {
         automake
         libtool
         pkg-config
+        # for tests
+        openssl
         # Nix code formatter
         alejandra
         # i18n
@@ -103,8 +106,11 @@ in {
         nostr-rs-relay
         # Benchmark graph
         gnuplot
+        # Cloud benchmarks
+        hcloud
       ]
       ++ lib.optionals pkgs.stdenv.hostPlatform.isx86_64 [
+        # Nostr reference servers
         strfry
       ];
 
