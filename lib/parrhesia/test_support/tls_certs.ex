@@ -137,9 +137,16 @@ defmodule Parrhesia.TestSupport.TLSCerts do
   end
 
   defp openssl!(args) do
-    case System.cmd("/usr/bin/openssl", args, stderr_to_stdout: true) do
+    case System.cmd(openssl_executable!(), args, stderr_to_stdout: true) do
       {output, 0} -> output
       {output, status} -> raise "openssl failed with status #{status}: #{output}"
+    end
+  end
+
+  defp openssl_executable! do
+    case System.find_executable("openssl") do
+      nil -> raise "openssl executable not found in PATH"
+      path -> path
     end
   end
 end
