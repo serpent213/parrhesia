@@ -548,22 +548,24 @@ Run it with:
 mix bench
 ```
 
-Current comparison results from [BENCHMARK.md](./BENCHMARK.md):
+Current comparison results:
 
 | metric | parrhesia-pg | parrhesia-mem | strfry | nostr-rs-relay | mem/pg | strfry/pg | nostr-rs/pg |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| connect avg latency (ms) ↓ | 26.67 | 14.67 | 3.00 | 2.00 | **0.55x** | **0.11x** | **0.07x** |
-| connect max latency (ms) ↓ | 45.33 | 24.33 | 4.67 | 3.33 | **0.54x** | **0.10x** | **0.07x** |
-| echo throughput (TPS) ↑ | 68100.33 | 55978.00 | 67718.33 | 166178.00 | 0.82x | 0.99x | **2.44x** |
-| echo throughput (MiB/s) ↑ | 37.23 | 30.63 | 37.87 | 91.03 | 0.82x | **1.02x** | **2.44x** |
-| event throughput (TPS) ↑ | 1647.33 | 882.00 | 3548.33 | 787.00 | 0.54x | **2.15x** | 0.48x |
-| event throughput (MiB/s) ↑ | 1.07 | 0.57 | 2.30 | 0.50 | 0.53x | **2.16x** | 0.47x |
-| req throughput (TPS) ↑ | 3576.67 | 6888.00 | 1808.00 | 860.67 | **1.93x** | 0.51x | 0.24x |
-| req throughput (MiB/s) ↑ | 18.83 | 36.07 | 11.70 | 2.40 | **1.92x** | 0.62x | 0.13x |
+| connect avg latency (ms) ↓ | 34.67 | 43.33 | 2.67 | 2.67 | 1.25x | **0.08x** | **0.08x** |
+| connect max latency (ms) ↓ | 61.67 | 74.67 | 4.67 | 4.00 | 1.21x | **0.08x** | **0.06x** |
+| echo throughput (TPS) ↑ | 72441.00 | 62704.67 | 61189.33 | 152654.33 | 0.87x | 0.84x | **2.11x** |
+| echo throughput (MiB/s) ↑ | 39.67 | 34.30 | 34.20 | 83.63 | 0.86x | 0.86x | **2.11x** |
+| event throughput (TPS) ↑ | 1897.33 | 1370.00 | 3426.67 | 772.67 | 0.72x | **1.81x** | 0.41x |
+| event throughput (MiB/s) ↑ | 1.23 | 0.87 | 2.20 | 0.50 | 0.70x | **1.78x** | 0.41x |
+| req throughput (TPS) ↑ | 13.33 | 47.00 | 1811.33 | 878.33 | **3.52x** | **135.85x** | **65.88x** |
+| req throughput (MiB/s) ↑ | 0.03 | 0.17 | 11.77 | 2.40 | **5.00x** | **353.00x** | **72.00x** |
 
 Higher is better for `↑` metrics. Lower is better for `↓` metrics.
 
 (Results from a Linux container on a 6-core Intel i5-8400T with NVMe drive, PostgreSQL 18)
+
+![Benchmark chart](./bench/chart.svg)
 
 ---
 
