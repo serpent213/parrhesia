@@ -11,6 +11,9 @@ usage:
 
 Friendly wrapper around scripts/cloud_bench_orchestrate.mjs.
 
+The orchestrator checks datacenter availability for your server/client types,
+shows estimated 30m pricing, and asks for selection/confirmation in interactive terminals.
+
 Defaults (override via env or flags):
   datacenter: fsn1-dc14
   server/client type: cx23

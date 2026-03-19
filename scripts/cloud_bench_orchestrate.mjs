@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,6 +12,10 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
 
 const DEFAULT_TARGETS = ["parrhesia-pg", "parrhesia-memory", "strfry", "nostr-rs-relay", "nostream", "haven"];
+const ESTIMATE_WINDOW_MINUTES = 30;
+const ESTIMATE_WINDOW_HOURS = ESTIMATE_WINDOW_MINUTES / 60;
+const ESTIMATE_WINDOW_LABEL = `${ESTIMATE_WINDOW_MINUTES}m`;
+const BENCH_BUILD_DIR = path.join(ROOT_DIR, "_build", "bench");
 
 const DEFAULTS = {
   datacenter: "fsn1-dc14",
@@ -56,7 +61,7 @@ bench/cloud_artifacts/<run_id>/, and appends metadata + pointers to
 bench/history.jsonl.
 
 Options:
-  --datacenter <name>          (default: ${DEFAULTS.datacenter})
+  --datacenter <name>          Initial datacenter selection (default: ${DEFAULTS.datacenter})
   --server-type <name>         (default: ${DEFAULTS.serverType})
   --client-type <name>         (default: ${DEFAULTS.clientType})
   --image-base <name>          (default: ${DEFAULTS.imageBase})
@@ -97,6 +102,11 @@ Options:
 
 Notes:
   - Requires hcloud, ssh, scp, ssh-keygen, git.
+  - Before provisioning, checks all datacenters for type availability and estimates ${ESTIMATE_WINDOW_LABEL} cost.
+  - In interactive terminals, prompts you to pick + confirm the datacenter.
+  - Caches built nostr-bench at _build/bench/nostr-bench and reuses it when valid.
+  - Auto-tunes Postgres/Redis/app pool sizing from server RAM + CPU for DB-backed targets.
+  - Randomizes target order per run and wipes persisted target data directories on each start.
   - Tries nix .#nostrBenchStaticX86_64Musl first; falls back to docker-built portable nostr-bench.
   - If --parrhesia-image is omitted, requires nix locally.
 `);
@@ -233,6 +243,15 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
+function shuffled(values) {
+  const out = [...values];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 function commandExists(cmd) {
   const pathEnv = process.env.PATH || "";
   for (const dir of pathEnv.split(":")) {
@@ -298,6 +317,8 @@ async function sshExec(hostIp, keyPath, remoteCommand, options = {}) {
       "-o",
       "UserKnownHostsFile=/dev/null",
       "-o",
+      "LogLevel=ERROR",
+      "-o",
       "BatchMode=yes",
       "-o",
       "ConnectTimeout=8",
@@ -316,6 +337,8 @@ async function scpToHost(hostIp, keyPath, localPath, remotePath) {
     "StrictHostKeyChecking=no",
     "-o",
     "UserKnownHostsFile=/dev/null",
+    "-o",
+    "LogLevel=ERROR",
     "-i",
     keyPath,
     localPath,
@@ -350,27 +373,308 @@ async function ensureLocalPrereqs(opts) {
   }
 }
 
+function priceForLocation(serverType, locationName, key) {
+  const price = serverType.prices?.find((entry) => entry.location === locationName);
+  const value = Number(price?.price_hourly?.[key]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function formatEuro(value) {
+  if (!Number.isFinite(value)) {
+    return "n/a";
+  }
+  return `€${value.toFixed(4)}`;
+}
+
+function compatibleDatacenterChoices(datacenters, serverType, clientType, clientCount) {
+  const compatible = [];
+
+  for (const dc of datacenters) {
+    const availableIds = dc?.server_types?.available || dc?.server_types?.supported || [];
+    if (!availableIds.includes(serverType.id) || !availableIds.includes(clientType.id)) {
+      continue;
+    }
+
+    const locationName = dc.location?.name;
+    const serverGrossHourly = priceForLocation(serverType, locationName, "gross");
+    const clientGrossHourly = priceForLocation(clientType, locationName, "gross");
+    const serverNetHourly = priceForLocation(serverType, locationName, "net");
+    const clientNetHourly = priceForLocation(clientType, locationName, "net");
+
+    const totalGrossHourly =
+      Number.isFinite(serverGrossHourly) && Number.isFinite(clientGrossHourly)
+        ? serverGrossHourly + clientGrossHourly * clientCount
+        : null;
+
+    const totalNetHourly =
+      Number.isFinite(serverNetHourly) && Number.isFinite(clientNetHourly)
+        ? serverNetHourly + clientNetHourly * clientCount
+        : null;
+
+    compatible.push({
+      name: dc.name,
+      description: dc.description,
+      location: {
+        name: locationName,
+        city: dc.location?.city,
+        country: dc.location?.country,
+      },
+      totalHourly: {
+        gross: totalGrossHourly,
+        net: totalNetHourly,
+      },
+      estimatedTotal: {
+        gross: Number.isFinite(totalGrossHourly) ? totalGrossHourly * ESTIMATE_WINDOW_HOURS : null,
+        net: Number.isFinite(totalNetHourly) ? totalNetHourly * ESTIMATE_WINDOW_HOURS : null,
+      },
+    });
+  }
+
+  compatible.sort((a, b) => {
+    const aPrice = Number.isFinite(a.estimatedTotal.gross) ? a.estimatedTotal.gross : Number.POSITIVE_INFINITY;
+    const bPrice = Number.isFinite(b.estimatedTotal.gross) ? b.estimatedTotal.gross : Number.POSITIVE_INFINITY;
+    if (aPrice !== bPrice) {
+      return aPrice - bPrice;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
+  return compatible;
+}
+
+function printDatacenterChoices(choices, opts) {
+  console.log("[plan] datacenter availability for requested server/client types");
+  console.log(
+    `[plan] requested: server=${opts.serverType}, client=${opts.clientType}, clients=${opts.clients}, estimate window=${ESTIMATE_WINDOW_LABEL}`,
+  );
+
+  choices.forEach((choice, index) => {
+    const where = `${choice.location.name} (${choice.location.city}, ${choice.location.country})`;
+    console.log(
+      `  [${index + 1}] ${choice.name.padEnd(10)} ${where}  ${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(choice.estimatedTotal.gross)} net=${formatEuro(choice.estimatedTotal.net)}`,
+    );
+  });
+}
+
+function askLine(prompt) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function chooseDatacenter(opts) {
+  const [dcRes, serverTypeRes] = await Promise.all([
+    runCommand("hcloud", ["datacenter", "list", "-o", "json"]),
+    runCommand("hcloud", ["server-type", "list", "-o", "json"]),
+  ]);
+
+  const datacenters = JSON.parse(dcRes.stdout);
+  const serverTypes = JSON.parse(serverTypeRes.stdout);
+
+  const serverType = serverTypes.find((type) => type.name === opts.serverType);
+  if (!serverType) {
+    throw new Error(`Unknown server type: ${opts.serverType}`);
+  }
+
+  const clientType = serverTypes.find((type) => type.name === opts.clientType);
+  if (!clientType) {
+    throw new Error(`Unknown client type: ${opts.clientType}`);
+  }
+
+  const choices = compatibleDatacenterChoices(datacenters, serverType, clientType, opts.clients);
+
+  if (choices.length === 0) {
+    throw new Error(
+      `No datacenter has both server type ${opts.serverType} and client type ${opts.clientType} available right now`,
+    );
+  }
+
+  printDatacenterChoices(choices, opts);
+
+  const defaultChoice = choices.find((choice) => choice.name === opts.datacenter) || choices[0];
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (!choices.some((choice) => choice.name === opts.datacenter)) {
+      throw new Error(
+        `Requested datacenter ${opts.datacenter} is not currently compatible. Compatible: ${choices
+          .map((choice) => choice.name)
+          .join(", ")}`,
+      );
+    }
+
+    console.log(
+      `[plan] non-interactive mode: using datacenter ${opts.datacenter} (${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(defaultChoice.estimatedTotal.gross)} net=${formatEuro(defaultChoice.estimatedTotal.net)})`,
+    );
+    return defaultChoice;
+  }
+
+  const defaultIndex = choices.findIndex((choice) => choice.name === defaultChoice.name) + 1;
+
+  let selected = defaultChoice;
+
+  while (true) {
+    const response = await askLine(
+      `Select datacenter by number or name [default: ${defaultIndex}/${defaultChoice.name}] (or 'abort'): `,
+    );
+
+    if (response === "") {
+      selected = defaultChoice;
+      break;
+    }
+
+    const normalized = response.trim().toLowerCase();
+    if (["a", "abort", "q", "quit", "n"].includes(normalized)) {
+      throw new Error("Aborted by user before provisioning");
+    }
+
+    if (/^\d+$/.test(response)) {
+      const idx = Number(response);
+      if (idx >= 1 && idx <= choices.length) {
+        selected = choices[idx - 1];
+        break;
+      }
+    }
+
+    const byName = choices.find((choice) => choice.name.toLowerCase() === normalized);
+    if (byName) {
+      selected = byName;
+      break;
+    }
+
+    console.log(`Invalid selection: ${response}`);
+  }
+
+  const confirm = await askLine(
+    `Provision in ${selected.name} (${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(selected.estimatedTotal.gross)} net=${formatEuro(selected.estimatedTotal.net)})? [y/N]: `,
+  );
+
+  if (!["y", "yes"].includes(confirm.trim().toLowerCase())) {
+    throw new Error("Aborted by user before provisioning");
+  }
+
+  return selected;
+}
+
 async function buildNostrBenchBinary(tmpDir) {
-  const outPath = path.join(tmpDir, "nostr-bench");
+  const cacheDir = BENCH_BUILD_DIR;
+  const cachedBinaryPath = path.join(cacheDir, "nostr-bench");
+  const cacheMetadataPath = path.join(cacheDir, "nostr-bench.json");
+
+  fs.mkdirSync(cacheDir, { recursive: true });
 
   const staticLinked = (fileOutput) => fileOutput.includes("statically linked") || fileOutput.includes("static-pie linked");
 
-  const copyAndValidateBinary = async (binaryPath, buildMode) => {
-    const fileOut = await runCommand("file", [binaryPath]);
+  const binaryLooksPortable = (fileOutput) =>
+    fileOutput.includes("/lib64/ld-linux-x86-64.so.2") || staticLinked(fileOutput);
 
-    if (!(fileOut.stdout.includes("/lib64/ld-linux-x86-64.so.2") || staticLinked(fileOut.stdout))) {
+  const validatePortableBinary = async (binaryPath) => {
+    const fileOut = await runCommand("file", [binaryPath]);
+    if (!binaryLooksPortable(fileOut.stdout)) {
       throw new Error(`Built nostr-bench binary does not look portable: ${fileOut.stdout.trim()}`);
     }
+    return fileOut.stdout.trim();
+  };
 
-    fs.copyFileSync(binaryPath, outPath);
-    fs.chmodSync(outPath, 0o755);
+  const readCacheMetadata = () => {
+    if (!fs.existsSync(cacheMetadataPath)) {
+      return null;
+    }
 
-    const copiedFileOut = await runCommand("file", [outPath]);
-    console.log(`[local] nostr-bench ready (${buildMode}): ${outPath}`);
+    try {
+      return JSON.parse(fs.readFileSync(cacheMetadataPath, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+
+  const writeCacheMetadata = (metadata) => {
+    fs.writeFileSync(cacheMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  };
+
+  const readVersionIfRunnable = async (binaryPath, fileSummary, phase) => {
+    const binaryIsX86_64 = /x86-64|x86_64/i.test(fileSummary);
+
+    if (binaryIsX86_64 && process.arch !== "x64") {
+      console.log(
+        `[local] skipping nostr-bench --version check (${phase}): host arch ${process.arch} cannot execute x86_64 binary`,
+      );
+      return "";
+    }
+
+    try {
+      return (await runCommand(binaryPath, ["--version"])).stdout.trim();
+    } catch (error) {
+      console.warn(`[local] unable to run nostr-bench --version (${phase}), continuing: ${error.message}`);
+      return "";
+    }
+  };
+
+  const tryReuseCachedBinary = async () => {
+    if (!fs.existsSync(cachedBinaryPath)) {
+      return null;
+    }
+
+    try {
+      const fileSummary = await validatePortableBinary(cachedBinaryPath);
+      fs.chmodSync(cachedBinaryPath, 0o755);
+
+      const version = await readVersionIfRunnable(cachedBinaryPath, fileSummary, "cache-reuse");
+      const metadata = readCacheMetadata();
+
+      console.log(`[local] reusing cached nostr-bench: ${cachedBinaryPath}`);
+      if (metadata?.build_mode) {
+        console.log(`[local] cache metadata: build_mode=${metadata.build_mode}, built_at=${metadata.built_at || "unknown"}`);
+      }
+      if (version) {
+        console.log(`[local] ${version}`);
+      }
+      console.log(`[local] ${fileSummary}`);
+
+      return { path: cachedBinaryPath, buildMode: "cache-reuse" };
+    } catch (error) {
+      console.warn(`[local] cached nostr-bench invalid, rebuilding: ${error.message}`);
+      return null;
+    }
+  };
+
+  const cacheAndValidateBinary = async (binaryPath, buildMode) => {
+    await validatePortableBinary(binaryPath);
+
+    fs.copyFileSync(binaryPath, cachedBinaryPath);
+    fs.chmodSync(cachedBinaryPath, 0o755);
+
+    const copiedFileOut = await runCommand("file", [cachedBinaryPath]);
+
+    const version = await readVersionIfRunnable(cachedBinaryPath, copiedFileOut.stdout.trim(), "post-build");
+
+    writeCacheMetadata({
+      build_mode: buildMode,
+      built_at: new Date().toISOString(),
+      binary_path: cachedBinaryPath,
+      file_summary: copiedFileOut.stdout.trim(),
+      version,
+    });
+
+    console.log(`[local] nostr-bench ready (${buildMode}): ${cachedBinaryPath}`);
+    if (version) {
+      console.log(`[local] ${version}`);
+    }
     console.log(`[local] ${copiedFileOut.stdout.trim()}`);
 
-    return { path: outPath, buildMode };
+    return { path: cachedBinaryPath, buildMode };
   };
+
+  const cachedBinary = await tryReuseCachedBinary();
+  if (cachedBinary) {
+    return cachedBinary;
+  }
 
   if (commandExists("nix")) {
     try {
@@ -387,7 +691,7 @@ async function buildNostrBenchBinary(tmpDir) {
       }
 
       const binaryPath = path.join(nixOut, "bin", "nostr-bench");
-      return await copyAndValidateBinary(binaryPath, "nix-flake-musl-static");
+      return await cacheAndValidateBinary(binaryPath, "nix-flake-musl-static");
     } catch (error) {
       console.warn(`[local] nix static build unavailable, falling back to docker build: ${error.message}`);
     }
@@ -420,7 +724,7 @@ async function buildNostrBenchBinary(tmpDir) {
     { stdio: "inherit" },
   );
 
-  return await copyAndValidateBinary(binaryPath, "docker-glibc-portable");
+  return await cacheAndValidateBinary(binaryPath, "docker-glibc-portable");
 }
 
 async function buildParrhesiaArchiveIfNeeded(opts, tmpDir) {
@@ -582,6 +886,94 @@ wait_port() {
   return 1
 }
 
+clamp() {
+  local value="\$1"
+  local min="\$2"
+  local max="\$3"
+
+  if (( value < min )); then
+    echo "\$min"
+  elif (( value > max )); then
+    echo "\$max"
+  else
+    echo "\$value"
+  fi
+}
+
+derive_resource_tuning() {
+  local mem_kb
+  mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+
+  if [[ -z "\$mem_kb" || ! "\$mem_kb" =~ ^[0-9]+$ ]]; then
+    mem_kb=4194304
+  fi
+
+  HOST_MEM_MB=$((mem_kb / 1024))
+  HOST_CPU_CORES=$(nproc 2>/dev/null || echo 2)
+
+  local computed_pg_max_connections=$((HOST_CPU_CORES * 50))
+  local computed_pg_shared_buffers_mb=$((HOST_MEM_MB / 4))
+  local computed_pg_effective_cache_size_mb=$((HOST_MEM_MB * 3 / 4))
+  local computed_pg_maintenance_work_mem_mb=$((HOST_MEM_MB / 16))
+  local computed_pg_max_wal_size_gb=$((HOST_MEM_MB / 8192))
+
+  computed_pg_max_connections=$(clamp "\$computed_pg_max_connections" 200 1000)
+  computed_pg_shared_buffers_mb=$(clamp "\$computed_pg_shared_buffers_mb" 512 32768)
+  computed_pg_effective_cache_size_mb=$(clamp "\$computed_pg_effective_cache_size_mb" 1024 98304)
+  computed_pg_maintenance_work_mem_mb=$(clamp "\$computed_pg_maintenance_work_mem_mb" 256 2048)
+  computed_pg_max_wal_size_gb=$(clamp "\$computed_pg_max_wal_size_gb" 4 64)
+
+  local computed_pg_min_wal_size_gb=$((computed_pg_max_wal_size_gb / 4))
+  computed_pg_min_wal_size_gb=$(clamp "\$computed_pg_min_wal_size_gb" 1 16)
+
+  local computed_pg_work_mem_mb=$(((HOST_MEM_MB - computed_pg_shared_buffers_mb) / (computed_pg_max_connections * 3)))
+  computed_pg_work_mem_mb=$(clamp "\$computed_pg_work_mem_mb" 4 128)
+
+  local computed_parrhesia_pool_size=$((HOST_CPU_CORES * 8))
+  computed_parrhesia_pool_size=$(clamp "\$computed_parrhesia_pool_size" 20 200)
+
+  local computed_nostream_db_min_pool_size=$((HOST_CPU_CORES * 4))
+  computed_nostream_db_min_pool_size=$(clamp "\$computed_nostream_db_min_pool_size" 16 128)
+
+  local computed_nostream_db_max_pool_size=$((HOST_CPU_CORES * 16))
+  computed_nostream_db_max_pool_size=$(clamp "\$computed_nostream_db_max_pool_size" 64 512)
+
+  if (( computed_nostream_db_max_pool_size < computed_nostream_db_min_pool_size )); then
+    computed_nostream_db_max_pool_size="\$computed_nostream_db_min_pool_size"
+  fi
+
+  local computed_redis_maxmemory_mb=$((HOST_MEM_MB / 3))
+  computed_redis_maxmemory_mb=$(clamp "\$computed_redis_maxmemory_mb" 256 65536)
+
+  PG_MAX_CONNECTIONS="\${PG_MAX_CONNECTIONS:-\$computed_pg_max_connections}"
+  PG_SHARED_BUFFERS_MB="\${PG_SHARED_BUFFERS_MB:-\$computed_pg_shared_buffers_mb}"
+  PG_EFFECTIVE_CACHE_SIZE_MB="\${PG_EFFECTIVE_CACHE_SIZE_MB:-\$computed_pg_effective_cache_size_mb}"
+  PG_MAINTENANCE_WORK_MEM_MB="\${PG_MAINTENANCE_WORK_MEM_MB:-\$computed_pg_maintenance_work_mem_mb}"
+  PG_WORK_MEM_MB="\${PG_WORK_MEM_MB:-\$computed_pg_work_mem_mb}"
+  PG_MIN_WAL_SIZE_GB="\${PG_MIN_WAL_SIZE_GB:-\$computed_pg_min_wal_size_gb}"
+  PG_MAX_WAL_SIZE_GB="\${PG_MAX_WAL_SIZE_GB:-\$computed_pg_max_wal_size_gb}"
+  PARRHESIA_POOL_SIZE="\${PARRHESIA_POOL_SIZE:-\$computed_parrhesia_pool_size}"
+  NOSTREAM_DB_MIN_POOL_SIZE="\${NOSTREAM_DB_MIN_POOL_SIZE:-\$computed_nostream_db_min_pool_size}"
+  NOSTREAM_DB_MAX_POOL_SIZE="\${NOSTREAM_DB_MAX_POOL_SIZE:-\$computed_nostream_db_max_pool_size}"
+  REDIS_MAXMEMORY_MB="\${REDIS_MAXMEMORY_MB:-\$computed_redis_maxmemory_mb}"
+
+  PG_TUNING_ARGS=(
+    -c max_connections="\$PG_MAX_CONNECTIONS"
+    -c shared_buffers="\${PG_SHARED_BUFFERS_MB}MB"
+    -c effective_cache_size="\${PG_EFFECTIVE_CACHE_SIZE_MB}MB"
+    -c maintenance_work_mem="\${PG_MAINTENANCE_WORK_MEM_MB}MB"
+    -c work_mem="\${PG_WORK_MEM_MB}MB"
+    -c min_wal_size="\${PG_MIN_WAL_SIZE_GB}GB"
+    -c max_wal_size="\${PG_MAX_WAL_SIZE_GB}GB"
+    -c checkpoint_completion_target=0.9
+    -c wal_compression=on
+  )
+
+  echo "[server] resource profile: mem_mb=\$HOST_MEM_MB cpu_cores=\$HOST_CPU_CORES"
+  echo "[server] postgres tuning: max_connections=\$PG_MAX_CONNECTIONS shared_buffers=\${PG_SHARED_BUFFERS_MB}MB effective_cache_size=\${PG_EFFECTIVE_CACHE_SIZE_MB}MB work_mem=\${PG_WORK_MEM_MB}MB"
+  echo "[server] app tuning: parrhesia_pool=\$PARRHESIA_POOL_SIZE nostream_db_pool=\${NOSTREAM_DB_MIN_POOL_SIZE}-\${NOSTREAM_DB_MAX_POOL_SIZE} redis_maxmemory=\${REDIS_MAXMEMORY_MB}MB"
+}
+
 common_parrhesia_env=()
 common_parrhesia_env+=( -e PARRHESIA_ENABLE_EXPIRATION_WORKER=0 )
 common_parrhesia_env+=( -e PARRHESIA_ENABLE_PARTITION_RETENTION_WORKER=0 )
@@ -611,6 +1003,8 @@ if [[ -z "\$cmd" ]]; then
   exit 1
 fi
 
+derive_resource_tuning
+
 case "\$cmd" in
   start-parrhesia-pg)
     cleanup_containers
@@ -620,7 +1014,8 @@ case "\$cmd" in
       -e POSTGRES_DB=parrhesia \
       -e POSTGRES_USER=parrhesia \
       -e POSTGRES_PASSWORD=parrhesia \
-      "\$POSTGRES_IMAGE" >/dev/null
+      "\$POSTGRES_IMAGE" \
+      "\${PG_TUNING_ARGS[@]}" >/dev/null
 
     wait_pg 90
 
@@ -632,7 +1027,7 @@ case "\$cmd" in
     docker run -d --name parrhesia --network benchnet \
       -p 4413:4413 \
       -e DATABASE_URL=ecto://parrhesia:parrhesia@pg:5432/parrhesia \
-      -e POOL_SIZE=20 \
+      -e POOL_SIZE="\$PARRHESIA_POOL_SIZE" \
       "\${common_parrhesia_env[@]}" \
       "\$PARRHESIA_IMAGE" >/dev/null
 
@@ -655,6 +1050,7 @@ case "\$cmd" in
   start-strfry)
     cleanup_containers
 
+    rm -rf /root/strfry-data
     mkdir -p /root/strfry-data/strfry
     cat > /root/strfry.conf <<'EOF'
 # generated by cloud bench script
@@ -733,13 +1129,18 @@ EOF
       -e POSTGRES_DB=nostr_ts_relay \
       -e POSTGRES_USER=nostr_ts_relay \
       -e POSTGRES_PASSWORD=nostr_ts_relay \
-      "\$POSTGRES_IMAGE" >/dev/null
+      "\$POSTGRES_IMAGE" \
+      "\${PG_TUNING_ARGS[@]}" >/dev/null
 
     wait_nostream_pg 90
 
     docker run -d --name nostream-cache --network benchnet \
       redis:7.0.5-alpine3.16 \
-      redis-server --loglevel warning --requirepass nostr_ts_relay >/dev/null
+      redis-server \
+      --loglevel warning \
+      --requirepass nostr_ts_relay \
+      --maxmemory "\${REDIS_MAXMEMORY_MB}mb" \
+      --maxmemory-policy noeviction >/dev/null
 
     wait_nostream_redis 60
 
@@ -764,8 +1165,8 @@ EOF
       -e DB_USER=nostr_ts_relay \
       -e DB_PASSWORD=nostr_ts_relay \
       -e DB_NAME=nostr_ts_relay \
-      -e DB_MIN_POOL_SIZE=16 \
-      -e DB_MAX_POOL_SIZE=64 \
+      -e DB_MIN_POOL_SIZE="\$NOSTREAM_DB_MIN_POOL_SIZE" \
+      -e DB_MAX_POOL_SIZE="\$NOSTREAM_DB_MAX_POOL_SIZE" \
       -e DB_ACQUIRE_CONNECTION_TIMEOUT=60000 \
       -e REDIS_HOST=nostream-cache \
       -e REDIS_PORT=6379 \
@@ -780,6 +1181,7 @@ EOF
   start-haven)
     cleanup_containers
 
+    rm -rf /root/haven-bench
     mkdir -p /root/haven-bench/db
     mkdir -p /root/haven-bench/blossom
     mkdir -p /root/haven-bench/templates/static
@@ -1026,6 +1428,12 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   await ensureLocalPrereqs(opts);
 
+  const datacenterChoice = await chooseDatacenter(opts);
+  opts.datacenter = datacenterChoice.name;
+  console.log(
+    `[plan] selected datacenter=${opts.datacenter} (${ESTIMATE_WINDOW_LABEL} est gross=${formatEuro(datacenterChoice.estimatedTotal.gross)} net=${formatEuro(datacenterChoice.estimatedTotal.net)})`,
+  );
+
   const timestamp = new Date().toISOString();
   const runId = `cloudbench-${timestamp.replace(/[:.]/g, "-")}-${Math.floor(Math.random() * 100000)}`;
 
@@ -1084,18 +1492,26 @@ async function main() {
       console.log("[cleanup] deleting servers...");
       await Promise.all(
         createdServers.map((name) =>
-          runCommand("hcloud", ["server", "delete", name], { stdio: "inherit" }).catch(() => {
-            // ignore cleanup failures
-          }),
+          runCommand("hcloud", ["server", "delete", name])
+            .then(() => {
+              console.log(`[cleanup] deleted server: ${name}`);
+            })
+            .catch((error) => {
+              console.warn(`[cleanup] failed to delete server ${name}: ${error.message || error}`);
+            }),
         ),
       );
     }
 
     if (sshKeyCreated) {
       console.log("[cleanup] deleting ssh key...");
-      await runCommand("hcloud", ["ssh-key", "delete", keyName], { stdio: "inherit" }).catch(() => {
-        // ignore cleanup failures
-      });
+      await runCommand("hcloud", ["ssh-key", "delete", keyName])
+        .then(() => {
+          console.log(`[cleanup] deleted ssh key: ${keyName}`);
+        })
+        .catch((error) => {
+          console.warn(`[cleanup] failed to delete ssh key ${keyName}: ${error.message || error}`);
+        });
     }
   };
 
@@ -1263,11 +1679,16 @@ async function main() {
     };
 
     const results = [];
+    const targetOrderPerRun = [];
 
     console.log("[phase] benchmark execution");
 
     for (let runIndex = 1; runIndex <= opts.runs; runIndex += 1) {
-      for (const target of opts.targets) {
+      const runTargets = shuffled(opts.targets);
+      targetOrderPerRun.push({ run: runIndex, targets: runTargets });
+      console.log(`[bench] run ${runIndex}/${opts.runs} target-order=${runTargets.join(",")}`);
+
+      for (const target of runTargets) {
         console.log(`[bench] run ${runIndex}/${opts.runs} target=${target}`);
 
         const serverEnvPrefix = [
@@ -1281,12 +1702,18 @@ async function main() {
           `HAVEN_RELAY_URL=${shellEscape(`${serverIp}:3355`)}`,
         ].join(" ");
 
-        await sshExec(
-          serverIp,
-          keyPath,
-          `${serverEnvPrefix} /root/cloud-bench-server.sh ${shellEscape(startCommands[target])}`,
-          { stdio: "inherit" },
-        );
+        try {
+          await sshExec(serverIp, keyPath, `${serverEnvPrefix} /root/cloud-bench-server.sh ${shellEscape(startCommands[target])}`);
+        } catch (error) {
+          console.error(`[bench] target startup failed target=${target} run=${runIndex}`);
+          if (error?.stdout?.trim()) {
+            console.error(`[bench] server startup stdout:\n${error.stdout.trim()}`);
+          }
+          if (error?.stderr?.trim()) {
+            console.error(`[bench] server startup stderr:\n${error.stderr.trim()}`);
+          }
+          throw error;
+        }
 
         const relayUrl = relayUrls[target];
         const runTargetDir = path.join(artifactsDir, target, `run-${runIndex}`);
@@ -1400,14 +1827,21 @@ async function main() {
       infra: {
         provider: "hcloud",
         datacenter: opts.datacenter,
+        datacenter_location: datacenterChoice.location,
         server_type: opts.serverType,
         client_type: opts.clientType,
         image_base: opts.imageBase,
         clients: opts.clients,
+        estimated_price_window_eur: {
+          minutes: ESTIMATE_WINDOW_MINUTES,
+          gross: datacenterChoice.estimatedTotal.gross,
+          net: datacenterChoice.estimatedTotal.net,
+        },
       },
       bench: {
         runs: opts.runs,
         targets: opts.targets,
+        target_order_per_run: targetOrderPerRun,
         ...opts.bench,
       },
       versions,
