@@ -60,6 +60,9 @@ Benchmark commands
   just bench cloud [args...]    Cloud benchmark wrapper
   just bench cloud-quick        Cloud smoke profile
 
+Cloud defaults:
+  targets = parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven
+
 Relay-target helpers:
   just bench relay [all|connect|echo|event|req] [nostr-bench-args...]
   just bench relay-strfry [...]
@@ -71,6 +74,7 @@ Examples:
   just bench update --machine all
   just bench at v0.5.0
   just bench cloud --clients 3 --runs 3
+  just bench cloud --targets parrhesia-pg,nostream,haven --nostream-ref main
 EOF
   exit 0
 fi

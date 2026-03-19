@@ -551,7 +551,7 @@ Notes:
 
 ## Benchmark
 
-The benchmark compares two Parrhesia profiles, one backed by PostgreSQL and one backed by the in-memory adapter, against [`strfry`](https://github.com/hoytech/strfry) and [`nostr-rs-relay`](https://sr.ht/~gheartsfield/nostr-rs-relay/) using [`nostr-bench`](https://github.com/rnostr/nostr-bench). Benchmark runs also lift Parrhesia's relay-side limits by default so the benchmark client, not server guardrails, is the main bottleneck.
+The benchmark compares two Parrhesia profiles, one backed by PostgreSQL and one backed by the in-memory adapter, against [`strfry`](https://github.com/hoytech/strfry) and [`nostr-rs-relay`](https://sr.ht/~gheartsfield/nostr-rs-relay/) using [`nostr-bench`](https://github.com/rnostr/nostr-bench). The cloud benchmark target set also includes [`nostream`](https://github.com/Cameri/nostream) and [`Haven`](https://github.com/bitvora/haven). Benchmark runs also lift Parrhesia's relay-side limits by default so the benchmark client, not server guardrails, is the main bottleneck.
 
 `just bench compare` is a sequential mixed-workload benchmark, not an isolated per-endpoint microbenchmark. Each relay instance runs `connect`, then `echo`, then `event`, then `req` against the same live process, so later phases measure against state and load created by earlier phases.
 

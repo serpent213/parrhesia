@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
 
-const DEFAULT_TARGETS = ["parrhesia-pg", "parrhesia-memory", "strfry", "nostr-rs-relay"];
+const DEFAULT_TARGETS = ["parrhesia-pg", "parrhesia-memory", "strfry", "nostr-rs-relay", "nostream", "haven"];
 
 const DEFAULTS = {
   datacenter: "fsn1-dc14",
@@ -27,6 +27,9 @@ const DEFAULTS = {
   postgresImage: "postgres:17",
   strfryImage: "ghcr.io/hoytech/strfry:latest",
   nostrRsImage: "scsibug/nostr-rs-relay:latest",
+  nostreamRepo: "https://github.com/Cameri/nostream.git",
+  nostreamRef: "main",
+  havenImage: "holgerhatgarkeinenode/haven-docker:latest",
   keep: false,
   bench: {
     connectCount: 200,
@@ -69,6 +72,9 @@ Options:
   --postgres-image <image>     (default: ${DEFAULTS.postgresImage})
   --strfry-image <image>       (default: ${DEFAULTS.strfryImage})
   --nostr-rs-image <image>     (default: ${DEFAULTS.nostrRsImage})
+  --nostream-repo <url>        (default: ${DEFAULTS.nostreamRepo})
+  --nostream-ref <ref>         (default: ${DEFAULTS.nostreamRef})
+  --haven-image <image>        (default: ${DEFAULTS.havenImage})
 
   Benchmark knobs:
   --connect-count <n>          (default: ${DEFAULTS.bench.connectCount})
@@ -153,6 +159,15 @@ function parseArgs(argv) {
         break;
       case "--nostr-rs-image":
         opts.nostrRsImage = argv[++i];
+        break;
+      case "--nostream-repo":
+        opts.nostreamRepo = argv[++i];
+        break;
+      case "--nostream-ref":
+        opts.nostreamRef = argv[++i];
+        break;
+      case "--haven-image":
+        opts.havenImage = argv[++i];
         break;
       case "--connect-count":
         opts.bench.connectCount = intOpt(arg, argv[++i]);
@@ -472,9 +487,20 @@ PARRHESIA_IMAGE="\${PARRHESIA_IMAGE:-parrhesia:latest}"
 POSTGRES_IMAGE="\${POSTGRES_IMAGE:-postgres:17}"
 STRFRY_IMAGE="\${STRFRY_IMAGE:-ghcr.io/hoytech/strfry:latest}"
 NOSTR_RS_IMAGE="\${NOSTR_RS_IMAGE:-scsibug/nostr-rs-relay:latest}"
+NOSTREAM_REPO="\${NOSTREAM_REPO:-https://github.com/Cameri/nostream.git}"
+NOSTREAM_REF="\${NOSTREAM_REF:-main}"
+HAVEN_IMAGE="\${HAVEN_IMAGE:-holgerhatgarkeinenode/haven-docker:latest}"
+HAVEN_RELAY_URL="\${HAVEN_RELAY_URL:-127.0.0.1:3355}"
+
+NOSTREAM_SECRET="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+HAVEN_OWNER_NPUB="npub1utx00neqgqln72j22kej3ux7803c2k986henvvha4thuwfkper4s7r50e8"
 
 cleanup_containers() {
-  docker rm -f parrhesia pg strfry nostr-rs >/dev/null 2>&1 || true
+  docker rm -f parrhesia pg strfry nostr-rs nostream nostream-db nostream-cache haven >/dev/null 2>&1 || true
+}
+
+ensure_benchnet() {
+  docker network create benchnet >/dev/null 2>&1 || true
 }
 
 wait_http() {
@@ -507,6 +533,32 @@ wait_pg() {
   done
   docker logs --tail 200 pg >&2 || true
   echo "Timed out waiting for Postgres" >&2
+  return 1
+}
+
+wait_nostream_pg() {
+  local timeout="\${1:-90}"
+  for _ in \$(seq 1 "\$timeout"); do
+    if docker exec nostream-db pg_isready -U nostr_ts_relay -d nostr_ts_relay >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  docker logs --tail 200 nostream-db >&2 || true
+  echo "Timed out waiting for nostream Postgres" >&2
+  return 1
+}
+
+wait_nostream_redis() {
+  local timeout="\${1:-60}"
+  for _ in \$(seq 1 "\$timeout"); do
+    if docker exec nostream-cache redis-cli -a nostr_ts_relay ping >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  docker logs --tail 200 nostream-cache >&2 || true
+  echo "Timed out waiting for nostream Redis" >&2
   return 1
 }
 
@@ -555,7 +607,7 @@ common_parrhesia_env+=( -e PARRHESIA_LIMITS_MAX_NEGENTROPY_ITEMS_PER_SESSION=100
 
 cmd="\${1:-}"
 if [[ -z "\$cmd" ]]; then
-  echo "usage: cloud-bench-server.sh <start-parrhesia-pg|start-parrhesia-memory|start-strfry|start-nostr-rs-relay|cleanup>" >&2
+  echo "usage: cloud-bench-server.sh <start-parrhesia-pg|start-parrhesia-memory|start-strfry|start-nostr-rs-relay|start-nostream|start-haven|cleanup>" >&2
   exit 1
 fi
 
@@ -642,6 +694,173 @@ EOF
       "\$NOSTR_RS_IMAGE" >/dev/null
 
     wait_http "http://127.0.0.1:8080/" 60 nostr-rs
+    ;;
+
+  start-nostream)
+    cleanup_containers
+    ensure_benchnet
+
+    if [[ ! -d /root/nostream-src/.git ]]; then
+      git clone --depth 1 "\$NOSTREAM_REPO" /root/nostream-src >/dev/null
+    fi
+
+    git -C /root/nostream-src fetch --depth 1 origin "\$NOSTREAM_REF" >/dev/null 2>&1 || true
+    if git -C /root/nostream-src rev-parse --verify FETCH_HEAD >/dev/null 2>&1; then
+      git -C /root/nostream-src checkout --force FETCH_HEAD >/dev/null
+    else
+      git -C /root/nostream-src checkout --force "\$NOSTREAM_REF" >/dev/null
+    fi
+
+    nostream_ref_marker=/root/nostream-src/.bench_ref
+    should_build_nostream=0
+    if ! docker image inspect nostream:bench >/dev/null 2>&1; then
+      should_build_nostream=1
+    elif [[ ! -f "\$nostream_ref_marker" ]] || [[ "$(cat "\$nostream_ref_marker")" != "\$NOSTREAM_REF" ]]; then
+      should_build_nostream=1
+    fi
+
+    if [[ "\$should_build_nostream" == "1" ]]; then
+      docker build -t nostream:bench /root/nostream-src >/dev/null
+      printf '%s\n' "\$NOSTREAM_REF" > "\$nostream_ref_marker"
+    fi
+
+    mkdir -p /root/nostream-config
+    if [[ ! -f /root/nostream-config/settings.yaml ]]; then
+      cp /root/nostream-src/resources/default-settings.yaml /root/nostream-config/settings.yaml
+    fi
+
+    docker run -d --name nostream-db --network benchnet \
+      -e POSTGRES_DB=nostr_ts_relay \
+      -e POSTGRES_USER=nostr_ts_relay \
+      -e POSTGRES_PASSWORD=nostr_ts_relay \
+      "\$POSTGRES_IMAGE" >/dev/null
+
+    wait_nostream_pg 90
+
+    docker run -d --name nostream-cache --network benchnet \
+      redis:7.0.5-alpine3.16 \
+      redis-server --loglevel warning --requirepass nostr_ts_relay >/dev/null
+
+    wait_nostream_redis 60
+
+    docker run --rm --network benchnet \
+      -e DB_HOST=nostream-db \
+      -e DB_PORT=5432 \
+      -e DB_USER=nostr_ts_relay \
+      -e DB_PASSWORD=nostr_ts_relay \
+      -e DB_NAME=nostr_ts_relay \
+      -v /root/nostream-src/migrations:/code/migrations:ro \
+      -v /root/nostream-src/knexfile.js:/code/knexfile.js:ro \
+      node:18-alpine3.16 \
+      sh -lc 'cd /code && npm install --no-save --quiet knex@2.4.0 pg@8.8.0 && npx knex migrate:latest'
+
+    docker run -d --name nostream --network benchnet \
+      -p 8008:8008 \
+      -e SECRET="\$NOSTREAM_SECRET" \
+      -e RELAY_PORT=8008 \
+      -e NOSTR_CONFIG_DIR=/home/node/.nostr \
+      -e DB_HOST=nostream-db \
+      -e DB_PORT=5432 \
+      -e DB_USER=nostr_ts_relay \
+      -e DB_PASSWORD=nostr_ts_relay \
+      -e DB_NAME=nostr_ts_relay \
+      -e DB_MIN_POOL_SIZE=16 \
+      -e DB_MAX_POOL_SIZE=64 \
+      -e DB_ACQUIRE_CONNECTION_TIMEOUT=60000 \
+      -e REDIS_HOST=nostream-cache \
+      -e REDIS_PORT=6379 \
+      -e REDIS_USER=default \
+      -e REDIS_PASSWORD=nostr_ts_relay \
+      -v /root/nostream-config:/home/node/.nostr:ro \
+      nostream:bench >/dev/null
+
+    wait_port 8008 180 nostream
+    ;;
+
+  start-haven)
+    cleanup_containers
+
+    mkdir -p /root/haven-bench/db
+    mkdir -p /root/haven-bench/blossom
+    mkdir -p /root/haven-bench/templates/static
+
+    if [[ ! -f /root/haven-bench/templates/index.html ]]; then
+      cat > /root/haven-bench/templates/index.html <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Haven</title>
+  </head>
+  <body>
+    <h1>Haven</h1>
+  </body>
+</html>
+EOF
+    fi
+
+    printf '[]\n' > /root/haven-bench/relays_import.json
+    printf '[]\n' > /root/haven-bench/relays_blastr.json
+    printf '[]\n' > /root/haven-bench/blacklisted_npubs.json
+    printf '[]\n' > /root/haven-bench/whitelisted_npubs.json
+
+    cat > /root/haven-bench/haven.env <<EOF
+OWNER_NPUB=\$HAVEN_OWNER_NPUB
+RELAY_URL=\$HAVEN_RELAY_URL
+RELAY_PORT=3355
+RELAY_BIND_ADDRESS=0.0.0.0
+DB_ENGINE=badger
+LMDB_MAPSIZE=0
+BLOSSOM_PATH=blossom/
+PRIVATE_RELAY_NAME=Private Relay
+PRIVATE_RELAY_NPUB=\$HAVEN_OWNER_NPUB
+PRIVATE_RELAY_DESCRIPTION=Private relay for benchmarking
+PRIVATE_RELAY_ICON=https://example.com/icon.png
+CHAT_RELAY_NAME=Chat Relay
+CHAT_RELAY_NPUB=\$HAVEN_OWNER_NPUB
+CHAT_RELAY_DESCRIPTION=Chat relay for benchmarking
+CHAT_RELAY_ICON=https://example.com/icon.png
+OUTBOX_RELAY_NAME=Outbox Relay
+OUTBOX_RELAY_NPUB=\$HAVEN_OWNER_NPUB
+OUTBOX_RELAY_DESCRIPTION=Outbox relay for benchmarking
+OUTBOX_RELAY_ICON=https://example.com/icon.png
+INBOX_RELAY_NAME=Inbox Relay
+INBOX_RELAY_NPUB=\$HAVEN_OWNER_NPUB
+INBOX_RELAY_DESCRIPTION=Inbox relay for benchmarking
+INBOX_RELAY_ICON=https://example.com/icon.png
+INBOX_PULL_INTERVAL_SECONDS=600
+IMPORT_START_DATE=2023-01-20
+IMPORT_OWNER_NOTES_FETCH_TIMEOUT_SECONDS=60
+IMPORT_TAGGED_NOTES_FETCH_TIMEOUT_SECONDS=120
+IMPORT_SEED_RELAYS_FILE=/app/relays_import.json
+BACKUP_PROVIDER=none
+BACKUP_INTERVAL_HOURS=24
+BLASTR_RELAYS_FILE=/app/relays_blastr.json
+BLASTR_TIMEOUT_SECONDS=5
+WOT_DEPTH=3
+WOT_MINIMUM_FOLLOWERS=0
+WOT_FETCH_TIMEOUT_SECONDS=30
+WOT_REFRESH_INTERVAL=24h
+WHITELISTED_NPUBS_FILE=
+BLACKLISTED_NPUBS_FILE=
+HAVEN_LOG_LEVEL=INFO
+EOF
+
+    chmod -R a+rwX /root/haven-bench
+
+    docker run -d --name haven \
+      -p 3355:3355 \
+      --env-file /root/haven-bench/haven.env \
+      -v /root/haven-bench/db:/app/db \
+      -v /root/haven-bench/blossom:/app/blossom \
+      -v /root/haven-bench/templates:/app/templates \
+      -v /root/haven-bench/relays_import.json:/app/relays_import.json \
+      -v /root/haven-bench/relays_blastr.json:/app/relays_blastr.json \
+      -v /root/haven-bench/blacklisted_npubs.json:/app/blacklisted_npubs.json \
+      -v /root/haven-bench/whitelisted_npubs.json:/app/whitelisted_npubs.json \
+      "\$HAVEN_IMAGE" >/dev/null
+
+    wait_port 3355 120 haven
     ;;
 
   cleanup)
@@ -947,7 +1166,7 @@ async function main() {
       "set -euo pipefail",
       "export DEBIAN_FRONTEND=noninteractive",
       "apt-get update -y >/dev/null",
-      "apt-get install -y docker.io curl jq >/dev/null",
+      "apt-get install -y docker.io curl jq git >/dev/null",
       "systemctl enable --now docker >/dev/null",
       "docker --version",
     ].join("; ");
@@ -987,7 +1206,26 @@ async function main() {
     }
 
     console.log("[server] pre-pulling comparison images...");
-    for (const image of [opts.postgresImage, opts.strfryImage, opts.nostrRsImage]) {
+    const comparisonImages = new Set();
+
+    if (opts.targets.includes("parrhesia-pg") || opts.targets.includes("nostream")) {
+      comparisonImages.add(opts.postgresImage);
+    }
+    if (opts.targets.includes("strfry")) {
+      comparisonImages.add(opts.strfryImage);
+    }
+    if (opts.targets.includes("nostr-rs-relay")) {
+      comparisonImages.add(opts.nostrRsImage);
+    }
+    if (opts.targets.includes("nostream")) {
+      comparisonImages.add("redis:7.0.5-alpine3.16");
+      comparisonImages.add("node:18-alpine3.16");
+    }
+    if (opts.targets.includes("haven")) {
+      comparisonImages.add(opts.havenImage);
+    }
+
+    for (const image of comparisonImages) {
       await sshExec(serverIp, keyPath, `docker pull ${shellEscape(image)}`, { stdio: "inherit" });
     }
 
@@ -1011,6 +1249,8 @@ async function main() {
       "parrhesia-memory": "start-parrhesia-memory",
       strfry: "start-strfry",
       "nostr-rs-relay": "start-nostr-rs-relay",
+      nostream: "start-nostream",
+      haven: "start-haven",
     };
 
     const relayUrls = {
@@ -1018,6 +1258,8 @@ async function main() {
       "parrhesia-memory": `ws://${serverIp}:4413/relay`,
       strfry: `ws://${serverIp}:7777`,
       "nostr-rs-relay": `ws://${serverIp}:8080`,
+      nostream: `ws://${serverIp}:8008`,
+      haven: `ws://${serverIp}:3355`,
     };
 
     const results = [];
@@ -1033,6 +1275,10 @@ async function main() {
           `POSTGRES_IMAGE=${shellEscape(opts.postgresImage)}`,
           `STRFRY_IMAGE=${shellEscape(opts.strfryImage)}`,
           `NOSTR_RS_IMAGE=${shellEscape(opts.nostrRsImage)}`,
+          `NOSTREAM_REPO=${shellEscape(opts.nostreamRepo)}`,
+          `NOSTREAM_REF=${shellEscape(opts.nostreamRef)}`,
+          `HAVEN_IMAGE=${shellEscape(opts.havenImage)}`,
+          `HAVEN_RELAY_URL=${shellEscape(`${serverIp}:3355`)}`,
         ].join(" ");
 
         await sshExec(

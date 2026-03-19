@@ -16,7 +16,7 @@ Defaults (override via env or flags):
   server/client type: cx23
   clients: 3
   runs: 3
-  targets: parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay
+  targets: parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven
 
 Flags:
   --quick                     Quick smoke profile (1 run, 1 client, lower load)
@@ -28,6 +28,9 @@ Flags:
   --client-type NAME          Override client type
   --image IMAGE               Use remote Parrhesia image (e.g. ghcr.io/...)
   --git-ref REF               Build Parrhesia image from git ref (default: HEAD)
+  --nostream-repo URL         Override nostream repo (default: Cameri/nostream)
+  --nostream-ref REF          Override nostream ref (default: main)
+  --haven-image IMAGE         Override Haven image
   --keep                      Keep cloud resources after run
   -h, --help
 
@@ -37,9 +40,12 @@ Environment overrides:
   PARRHESIA_CLOUD_CLIENT_TYPE     (default: cx23)
   PARRHESIA_CLOUD_CLIENTS         (default: 3)
   PARRHESIA_BENCH_RUNS            (default: 3)
-  PARRHESIA_CLOUD_TARGETS         (default: all 4)
+  PARRHESIA_CLOUD_TARGETS         (default: all 6)
   PARRHESIA_CLOUD_PARRHESIA_IMAGE (optional)
   PARRHESIA_CLOUD_GIT_REF         (default: HEAD)
+  PARRHESIA_CLOUD_NOSTREAM_REPO   (default: https://github.com/Cameri/nostream.git)
+  PARRHESIA_CLOUD_NOSTREAM_REF    (default: main)
+  PARRHESIA_CLOUD_HAVEN_IMAGE     (default: holgerhatgarkeinenode/haven-docker:latest)
 
 Bench knobs (forwarded):
   PARRHESIA_BENCH_CONNECT_COUNT
@@ -71,9 +77,12 @@ SERVER_TYPE="${PARRHESIA_CLOUD_SERVER_TYPE:-cx23}"
 CLIENT_TYPE="${PARRHESIA_CLOUD_CLIENT_TYPE:-cx23}"
 CLIENTS="${PARRHESIA_CLOUD_CLIENTS:-3}"
 RUNS="${PARRHESIA_BENCH_RUNS:-3}"
-TARGETS="${PARRHESIA_CLOUD_TARGETS:-parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay}"
+TARGETS="${PARRHESIA_CLOUD_TARGETS:-parrhesia-pg,parrhesia-memory,strfry,nostr-rs-relay,nostream,haven}"
 PARRHESIA_IMAGE="${PARRHESIA_CLOUD_PARRHESIA_IMAGE:-}"
 GIT_REF="${PARRHESIA_CLOUD_GIT_REF:-HEAD}"
+NOSTREAM_REPO="${PARRHESIA_CLOUD_NOSTREAM_REPO:-https://github.com/Cameri/nostream.git}"
+NOSTREAM_REF="${PARRHESIA_CLOUD_NOSTREAM_REF:-main}"
+HAVEN_IMAGE="${PARRHESIA_CLOUD_HAVEN_IMAGE:-holgerhatgarkeinenode/haven-docker:latest}"
 KEEP=0
 QUICK=0
 
@@ -121,6 +130,18 @@ while [[ $# -gt 0 ]]; do
       GIT_REF="$2"
       shift 2
       ;;
+    --nostream-repo)
+      NOSTREAM_REPO="$2"
+      shift 2
+      ;;
+    --nostream-ref)
+      NOSTREAM_REF="$2"
+      shift 2
+      ;;
+    --haven-image)
+      HAVEN_IMAGE="$2"
+      shift 2
+      ;;
     --keep)
       KEEP=1
       shift
@@ -162,6 +183,9 @@ CMD=(
   --clients "$CLIENTS"
   --runs "$RUNS"
   --targets "$TARGETS"
+  --nostream-repo "$NOSTREAM_REPO"
+  --nostream-ref "$NOSTREAM_REF"
+  --haven-image "$HAVEN_IMAGE"
 )
 
 if [[ -n "$PARRHESIA_IMAGE" ]]; then
