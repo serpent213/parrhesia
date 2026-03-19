@@ -28,11 +28,7 @@ defmodule Parrhesia.MixProject do
   def cli do
     [
       preferred_envs: [
-        precommit: :test,
-        bench: :test,
-        "bench.collect": :test,
-        "bench.update": :test,
-        "bench.at": :test
+        precommit: :test
       ]
     ]
   end
@@ -74,15 +70,6 @@ defmodule Parrhesia.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      "test.nak_e2e": ["cmd ./scripts/run_nak_e2e.sh"],
-      "test.marmot_e2e": ["cmd ./scripts/run_marmot_e2e.sh"],
-      "test.node_sync_e2e": ["cmd ./scripts/run_node_sync_e2e.sh"],
-      "test.node_sync_docker_e2e": ["cmd ./scripts/run_node_sync_docker_e2e.sh"],
-      bench: ["cmd ./scripts/run_bench_compare.sh"],
-      "bench.collect": ["cmd ./scripts/run_bench_collect.sh"],
-      "bench.update": ["cmd ./scripts/run_bench_update.sh"],
-      "bench.at": ["cmd ./scripts/run_bench_at_ref.sh"],
-      # cov: ["cmd mix coveralls.lcov"],
       lint: ["format --check-formatted", "credo"],
       precommit: [
         "format",
@@ -90,8 +77,7 @@ defmodule Parrhesia.MixProject do
         "credo --strict --all",
         "deps.unlock --unused",
         "test",
-        # "test.nak_e2e",
-        "test.marmot_e2e"
+        "cmd just e2e marmot"
       ]
     ]
   end

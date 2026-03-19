@@ -48,7 +48,20 @@ Current `supported_nips` list:
 - Elixir `~> 1.18`
 - Erlang/OTP 28
 - PostgreSQL (18 used in the dev environment; 16+ recommended)
+- [`just`](https://github.com/casey/just) for the command runner used in this repo
 - Docker or Podman plus Docker Compose support if you want to run the published container image
+
+---
+
+## Command runner (`just`)
+
+This repo includes a `justfile` that provides a grouped command/subcommand CLI over common mix tasks and scripts.
+
+```bash
+just
+just help bench
+just help e2e
+```
 
 ---
 
@@ -97,9 +110,9 @@ ws://localhost:4413/relay
 Primary test entrypoints:
 
 - `mix test` for the ExUnit suite
-- `mix test.marmot_e2e` for the Marmot client end-to-end suite
-- `mix test.node_sync_e2e` for the two-node relay sync end-to-end suite
-- `mix test.node_sync_docker_e2e` for the release-image Docker two-node relay sync suite
+- `just e2e marmot` for the Marmot client end-to-end suite
+- `just e2e node-sync` for the two-node relay sync end-to-end suite
+- `just e2e node-sync-docker` for the release-image Docker two-node relay sync suite
 
 The node-sync harnesses are driven by:
 
@@ -108,7 +121,7 @@ The node-sync harnesses are driven by:
 - [`scripts/node_sync_e2e.exs`](./scripts/node_sync_e2e.exs)
 - [`compose.node-sync-e2e.yaml`](./compose.node-sync-e2e.yaml)
 
-`mix test.node_sync_e2e` runs two real Parrhesia nodes against separate PostgreSQL databases, verifies catch-up and live sync, restarts one node, and verifies persisted resume behavior. `mix test.node_sync_docker_e2e` runs the same scenario against the release Docker image.
+`just e2e node-sync` runs two real Parrhesia nodes against separate PostgreSQL databases, verifies catch-up and live sync, restarts one node, and verifies persisted resume behavior. `just e2e node-sync-docker` runs the same scenario against the release Docker image.
 
 GitHub CI currently runs the non-Docker node-sync e2e on the main Linux matrix job. The Docker node-sync e2e remains an explicit/manual check because it depends on release-image build/runtime fidelity and a working Docker host.
 
@@ -540,12 +553,12 @@ Notes:
 
 The benchmark compares two Parrhesia profiles, one backed by PostgreSQL and one backed by the in-memory adapter, against [`strfry`](https://github.com/hoytech/strfry) and [`nostr-rs-relay`](https://sr.ht/~gheartsfield/nostr-rs-relay/) using [`nostr-bench`](https://github.com/rnostr/nostr-bench). Benchmark runs also lift Parrhesia's relay-side limits by default so the benchmark client, not server guardrails, is the main bottleneck.
 
-`mix bench` is a sequential mixed-workload benchmark, not an isolated per-endpoint microbenchmark. Each relay instance runs `connect`, then `echo`, then `event`, then `req` against the same live process, so later phases measure against state and load created by earlier phases.
+`just bench compare` is a sequential mixed-workload benchmark, not an isolated per-endpoint microbenchmark. Each relay instance runs `connect`, then `echo`, then `event`, then `req` against the same live process, so later phases measure against state and load created by earlier phases.
 
 Run it with:
 
 ```bash
-mix bench
+just bench compare
 ```
 
 ### Cloud benchmark (Hetzner Cloud)
@@ -553,7 +566,8 @@ mix bench
 For distributed runs (one server node + multiple client nodes), use:
 
 ```bash
-./scripts/run_bench_cloud.sh
+just bench cloud
+# or: ./scripts/run_bench_cloud.sh
 ```
 
 or invoke the orchestrator directly:
@@ -572,7 +586,8 @@ Example:
 
 ```bash
 export HCLOUD_TOKEN=...
-./scripts/run_bench_cloud.sh --quick
+just bench cloud-quick
+# or: ./scripts/run_bench_cloud.sh --quick
 ```
 
 Outputs:
@@ -584,13 +599,13 @@ Useful history/render commands:
 
 ```bash
 # List available machines and runs in history
-./scripts/run_bench_update.sh --list
+just bench list
 
 # Regenerate chart + README table for a machine
-./scripts/run_bench_update.sh <machine_id>
+just bench update <machine_id>
 
 # Regenerate from all machines
-./scripts/run_bench_update.sh all
+just bench update all
 ```
 
 Current comparison results:
@@ -625,11 +640,11 @@ mix precommit
 Additional external CLI end-to-end checks with `nak`:
 
 ```bash
-mix test.nak_e2e
+just e2e nak
 ```
 
 For Marmot client end-to-end checks (TypeScript/Node suite using `marmot-ts`, included in `precommit`):
 
 ```bash
-mix test.marmot_e2e
+just e2e marmot
 ```
