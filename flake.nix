@@ -20,12 +20,15 @@
         pkgs = import nixpkgs {inherit system;};
         lib = pkgs.lib;
         parrhesia = pkgs.callPackage ./default.nix {};
+        nostrBench = pkgs.callPackage ./nix/nostr-bench.nix {};
       in
         {
           default = parrhesia;
-          inherit parrhesia;
+          inherit parrhesia nostrBench;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          nostrBenchStaticX86_64Musl = pkgs.callPackage ./nix/nostr-bench.nix {staticX86_64Musl = true;};
+
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "parrhesia";
             tag = "latest";

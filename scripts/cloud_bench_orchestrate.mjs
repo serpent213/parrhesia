@@ -91,7 +91,7 @@ Options:
 
 Notes:
   - Requires hcloud, ssh, scp, ssh-keygen, git.
-  - Requires docker locally to build portable nostr-bench binary.
+  - Tries nix .#nostrBenchStaticX86_64Musl first; falls back to docker-built portable nostr-bench.
   - If --parrhesia-image is omitted, requires nix locally.
 `);
 }
@@ -336,71 +336,76 @@ async function ensureLocalPrereqs(opts) {
 }
 
 async function buildNostrBenchBinary(tmpDir) {
+  const outPath = path.join(tmpDir, "nostr-bench");
+
+  const staticLinked = (fileOutput) => fileOutput.includes("statically linked") || fileOutput.includes("static-pie linked");
+
+  const copyAndValidateBinary = async (binaryPath, buildMode) => {
+    const fileOut = await runCommand("file", [binaryPath]);
+
+    if (!(fileOut.stdout.includes("/lib64/ld-linux-x86-64.so.2") || staticLinked(fileOut.stdout))) {
+      throw new Error(`Built nostr-bench binary does not look portable: ${fileOut.stdout.trim()}`);
+    }
+
+    fs.copyFileSync(binaryPath, outPath);
+    fs.chmodSync(outPath, 0o755);
+
+    const copiedFileOut = await runCommand("file", [outPath]);
+    console.log(`[local] nostr-bench ready (${buildMode}): ${outPath}`);
+    console.log(`[local] ${copiedFileOut.stdout.trim()}`);
+
+    return { path: outPath, buildMode };
+  };
+
+  if (commandExists("nix")) {
+    try {
+      console.log("[local] building nostr-bench static binary via nix flake output .#nostrBenchStaticX86_64Musl...");
+
+      const nixOut = (
+        await runCommand("nix", ["build", ".#nostrBenchStaticX86_64Musl", "--print-out-paths", "--no-link"], {
+          cwd: ROOT_DIR,
+        })
+      ).stdout.trim();
+
+      if (!nixOut) {
+        throw new Error("nix build did not return an output path");
+      }
+
+      const binaryPath = path.join(nixOut, "bin", "nostr-bench");
+      return await copyAndValidateBinary(binaryPath, "nix-flake-musl-static");
+    } catch (error) {
+      console.warn(`[local] nix static build unavailable, falling back to docker build: ${error.message}`);
+    }
+  }
+
   const srcDir = path.join(tmpDir, "nostr-bench-src");
-  console.log("[local] cloning nostr-bench source...");
+  console.log("[local] cloning nostr-bench source for docker fallback...");
   await runCommand("git", ["clone", "--depth", "1", "https://github.com/rnostr/nostr-bench.git", srcDir], {
     stdio: "inherit",
   });
 
-  let binaryPath = path.join(srcDir, "target", "x86_64-unknown-linux-musl", "release", "nostr-bench");
-  let buildMode = "nix-musl-static";
+  const binaryPath = path.join(srcDir, "target", "release", "nostr-bench");
 
-  console.log("[local] building nostr-bench (attempt static musl via nix run cargo)...");
-  let staticOk = false;
+  console.log("[local] building portable glibc binary in rust:1-bookworm...");
 
-  if (commandExists("nix")) {
-    try {
-      await runCommand(
-        "nix",
-        ["run", "nixpkgs#cargo", "--", "build", "--release", "--target", "x86_64-unknown-linux-musl"],
-        { cwd: srcDir, stdio: "inherit" },
-      );
+  await runCommand(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "-v",
+      `${srcDir}:/src`,
+      "-w",
+      "/src",
+      "rust:1-bookworm",
+      "bash",
+      "-lc",
+      "export PATH=/usr/local/cargo/bin:$PATH; apt-get update -qq >/dev/null; apt-get install -y -qq pkg-config build-essential >/dev/null; cargo build --release",
+    ],
+    { stdio: "inherit" },
+  );
 
-      const fileOut = await runCommand("file", [binaryPath]);
-      staticOk = fileOut.stdout.includes("statically linked");
-    } catch {
-      staticOk = false;
-    }
-  }
-
-  if (!staticOk) {
-    buildMode = "docker-glibc-portable";
-    binaryPath = path.join(srcDir, "target", "release", "nostr-bench");
-
-    console.log("[local] static build unavailable, building portable glibc binary in rust:1-bookworm...");
-
-    await runCommand(
-      "docker",
-      [
-        "run",
-        "--rm",
-        "-v",
-        `${srcDir}:/src`,
-        "-w",
-        "/src",
-        "rust:1-bookworm",
-        "bash",
-        "-lc",
-        "export PATH=/usr/local/cargo/bin:$PATH; apt-get update -qq >/dev/null; apt-get install -y -qq pkg-config build-essential >/dev/null; cargo build --release",
-      ],
-      { stdio: "inherit" },
-    );
-
-    const fileOut = await runCommand("file", [binaryPath]);
-    if (!(fileOut.stdout.includes("/lib64/ld-linux-x86-64.so.2") || fileOut.stdout.includes("statically linked"))) {
-      throw new Error(`Built nostr-bench binary does not look portable: ${fileOut.stdout.trim()}`);
-    }
-  }
-
-  const outPath = path.join(tmpDir, "nostr-bench");
-  fs.copyFileSync(binaryPath, outPath);
-  fs.chmodSync(outPath, 0o755);
-
-  const fileOut = await runCommand("file", [outPath]);
-  console.log(`[local] nostr-bench ready (${buildMode}): ${outPath}`);
-  console.log(`[local] ${fileOut.stdout.trim()}`);
-
-  return { path: outPath, buildMode };
+  return await copyAndValidateBinary(binaryPath, "docker-glibc-portable");
 }
 
 async function buildParrhesiaArchiveIfNeeded(opts, tmpDir) {

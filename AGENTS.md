@@ -1,11 +1,12 @@
 This is a Nostr server written using Elixir and PostgreSQL.
 
-NOTE: Nostr and NIP specs are available in `~/nostr/` and `~/nips/`.
+NOTE: NIP specs are available in `./docs/nips/`.
 
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`.
+- Use semantic prefixes in commit messages (feat:, fix:, docs:, chore:, test:, build:, ci:, bench:, dev:)
 
 <!-- usage-rules-start -->
 
