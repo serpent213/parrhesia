@@ -1,7 +1,5 @@
 {
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.60.0",
-    "nostr-tools": "^2.10.0",
-    "ws": "^8.18.0"
+    "@mariozechner/pi-coding-agent": "^0.60.0"
   }
 }
