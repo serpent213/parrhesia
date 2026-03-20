@@ -100,6 +100,7 @@ in {
         mermaid-cli
         # Nostr CLI client
         nak
+        websocat
         # Nostr relay benchmark client
         nostr-bench
         # Nostr reference servers
