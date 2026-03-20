@@ -470,11 +470,11 @@ function formatEuro(value) {
 }
 
 function createPhaseLogger(prepOffsetMinutes = PHASE_PREP_OFFSET_MINUTES) {
-  let phaseZeroMs = null;
+  let phaseZeroMs;
 
   const prefix = () => {
-    if (phaseZeroMs === null) {
-      return "T+0m";
+    if (!Number.isFinite(phaseZeroMs)) {
+      return null;
     }
 
     const elapsedMinutes = Math.floor((Date.now() - phaseZeroMs) / 60000);
@@ -483,6 +483,10 @@ function createPhaseLogger(prepOffsetMinutes = PHASE_PREP_OFFSET_MINUTES) {
   };
 
   return {
+    getPrefix() {
+      return prefix();
+    },
+
     setPrepOffsetNow() {
       phaseZeroMs = Date.now() + prepOffsetMinutes * 60_000;
     },
@@ -492,8 +496,43 @@ function createPhaseLogger(prepOffsetMinutes = PHASE_PREP_OFFSET_MINUTES) {
     },
 
     logPhase(message) {
-      console.log(`${prefix()} ${message}`);
+      console.log(message);
     },
+  };
+}
+
+function installBracketedLogPrefix(getPrefix) {
+  const methods = ["log", "warn", "error"];
+  const originals = new Map();
+
+  for (const method of methods) {
+    const original = console[method].bind(console);
+    originals.set(method, original);
+
+    console[method] = (...args) => {
+      if (
+        args.length > 0
+        && typeof args[0] === "string"
+        && /^\s*\[[^\]]+\]/.test(args[0])
+      ) {
+        const prefix = getPrefix();
+        if (prefix) {
+          original(`${prefix} ${args[0]}`, ...args.slice(1));
+          return;
+        }
+      }
+
+      original(...args);
+    };
+  }
+
+  return () => {
+    for (const method of methods) {
+      const original = originals.get(method);
+      if (original) {
+        console[method] = original;
+      }
+    }
   };
 }
 
@@ -1542,6 +1581,7 @@ async function main() {
   await ensureLocalPrereqs(opts);
 
   const phaseLogger = createPhaseLogger();
+  const restoreBracketedLogPrefix = installBracketedLogPrefix(() => phaseLogger.getPrefix());
 
   const datacenterChoice = await chooseDatacenter(opts);
   opts.datacenter = datacenterChoice.name;
@@ -1668,6 +1708,8 @@ async function main() {
     });
     sshKeyCreated = true;
 
+    // Start execution clock at T+0 immediately before cloud server creation.
+    phaseLogger.setZeroNow();
     phaseLogger.logPhase("[phase] create cloud servers in parallel");
 
     const serverName = `${runId}-server`;
@@ -1738,8 +1780,6 @@ async function main() {
       ip: c.server.public_net.ipv4.ip,
     }));
 
-    // Reset phase clock to T+0 when cloud servers are successfully created.
-    phaseLogger.setZeroNow();
     phaseLogger.logPhase("[phase] wait for SSH");
     await Promise.all([
       waitForSsh(serverIp, keyPath),
@@ -2236,6 +2276,7 @@ async function main() {
       console.log(`[done] ssh key kept: ${keyName}`);
     }
   } finally {
+    restoreBracketedLogPrefix();
     removeSignalHandlers();
     await cleanup();
   }
