@@ -18,7 +18,6 @@ Behavior:
   - Adds smoke defaults when --quick is set (unless already provided):
       --server-type cx23
       --client-type cx23
-      --runs 1
       --clients 1
       --connect-count 20
       --connect-rate 20
@@ -42,7 +41,7 @@ Everything else is passed through unchanged.
 Examples:
   just bench cloud
   just bench cloud --quick
-  just bench cloud --clients 2 --runs 1 --targets parrhesia-memory
+  just bench cloud --clients 2 --targets parrhesia-memory
   just bench cloud --image ghcr.io/owner/parrhesia:latest --threads 4
   just bench cloud --no-monitoring
   just bench cloud --yes --datacenter auto
@@ -106,7 +105,6 @@ done
 if [[ "$QUICK" == "1" ]]; then
   add_default_if_missing "--server-type" "cx23"
   add_default_if_missing "--client-type" "cx23"
-  add_default_if_missing "--runs" "1"
   add_default_if_missing "--clients" "1"
 
   add_default_if_missing "--connect-count" "20"

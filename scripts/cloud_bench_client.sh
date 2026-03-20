@@ -43,6 +43,9 @@ run_event() {
     -r "${PARRHESIA_BENCH_EVENT_RATE:-50}" \
     -k "${PARRHESIA_BENCH_KEEPALIVE_SECONDS:-5}" \
     -t "${bench_threads}" \
+    --send-strategy "${PARRHESIA_BENCH_EVENT_SEND_STRATEGY:-pipelined}" \
+    --inflight "${PARRHESIA_BENCH_EVENT_INFLIGHT:-32}" \
+    --ack-timeout "${PARRHESIA_BENCH_EVENT_ACK_TIMEOUT:-30}" \
     "${relay_url}"
 }
 
@@ -68,11 +71,11 @@ run_seed() {
   echo "==> nostr-bench seed ${relay_url}"
   "$bench_bin" seed --json \
     --target-accepted "$target_accepted" \
-    -c "${PARRHESIA_BENCH_SEED_CONNECTION_COUNT:-64}" \
-    -r "${PARRHESIA_BENCH_SEED_CONNECTION_RATE:-64}" \
+    -c "${PARRHESIA_BENCH_SEED_CONNECTION_COUNT:-5000}" \
+    -r "${PARRHESIA_BENCH_SEED_CONNECTION_RATE:-5000}" \
     -k "${PARRHESIA_BENCH_SEED_KEEPALIVE_SECONDS:-0}" \
     -t "${bench_threads}" \
-    --send-strategy "${PARRHESIA_BENCH_SEED_SEND_STRATEGY:-ack-loop}" \
+    --send-strategy "${PARRHESIA_BENCH_SEED_SEND_STRATEGY:-pipelined}" \
     --inflight "${PARRHESIA_BENCH_SEED_INFLIGHT:-32}" \
     --ack-timeout "${PARRHESIA_BENCH_SEED_ACK_TIMEOUT:-30}" \
     "${relay_url}"

@@ -207,7 +207,7 @@ const presentBaselines = [
   ...[...discoveredBaselines].filter((srv) => !preferredBaselineOrder.includes(srv)).sort((a, b) => a.localeCompare(b)),
 ];
 
-// --- Colour palette per server: [empty, warm, hot] ---
+// --- Colour palette per server: [cold, warm, hot] ---
 const serverColours = {
   "parrhesia-pg":     ["#93c5fd", "#3b82f6", "#1e40af"],
   "parrhesia-memory": ["#86efac", "#22c55e", "#166534"],
@@ -218,12 +218,12 @@ const serverColours = {
 };
 
 const levelStyles = [
-  /* empty */ { dt: 3, pt: 6, ps: 0.7, lw: 1.5 },
-  /* warm  */ { dt: 2, pt: 8, ps: 0.8, lw: 1.5 },
-  /* hot   */ { dt: 1, pt: 7, ps: 1.0, lw: 2 },
+  /* cold */ { dt: 3, pt: 6, ps: 0.7, lw: 1.5 },
+  /* warm */ { dt: 2, pt: 8, ps: 0.8, lw: 1.5 },
+  /* hot  */ { dt: 1, pt: 7, ps: 1.0, lw: 2 },
 ];
 
-const levels = ["empty", "warm", "hot"];
+const levels = ["cold", "warm", "hot"];
 
 const shortLabel = {
   "parrhesia-pg": "pg", "parrhesia-memory": "mem",
@@ -233,17 +233,29 @@ const shortLabel = {
 
 const allServers = ["parrhesia-pg", "parrhesia-memory", ...presentBaselines];
 
-function isPhased(e) {
-  for (const srv of Object.values(e.servers || {})) {
-    if (srv.event_empty_tps !== undefined) return true;
-  }
-  return false;
-}
-
-// Build phased key: "event_tps" + "empty" → "event_empty_tps"
 function phasedKey(base, level) {
   const idx = base.lastIndexOf("_");
   return `${base.slice(0, idx)}_${level}_${base.slice(idx + 1)}`;
+}
+
+function phasedValue(d, base, level) {
+  const direct = d?.[phasedKey(base, level)];
+  if (direct !== undefined) return direct;
+
+  if (level === "cold") {
+    // Backward compatibility for historical entries written with `empty` phase names.
+    const legacy = d?.[phasedKey(base, "empty")];
+    if (legacy !== undefined) return legacy;
+  }
+
+  return undefined;
+}
+
+function isPhased(e) {
+  for (const srv of Object.values(e.servers || {})) {
+    if (phasedValue(srv, "event_tps", "cold") !== undefined) return true;
+  }
+  return false;
 }
 
 // --- Emit linetype definitions (server × level) ---
@@ -297,7 +309,7 @@ for (const panel of panels) {
     plotLines.push("");
 
   } else {
-    // Three columns per server (empty, warm, hot)
+    // Three columns per server (cold, warm, hot)
     const header = ["tag"];
     for (const srv of allServers) {
       const sl = shortLabel[srv] || srv;
@@ -311,7 +323,7 @@ for (const panel of panels) {
         const d = e.servers?.[srv];
         if (!d) { row.push("NaN", "NaN", "NaN"); continue; }
         if (phased) {
-          for (const lvl of levels) row.push(d[phasedKey(panel.base, lvl)] ?? "NaN");
+          for (const lvl of levels) row.push(phasedValue(d, panel.base, lvl) ?? "NaN");
         } else {
           row.push("NaN", d[panel.base] ?? "NaN", "NaN"); // flat → warm only
         }
@@ -320,7 +332,7 @@ for (const panel of panels) {
     }
     fs.writeFileSync(path.join(workDir, panel.file), rows.join("\n") + "\n", "utf8");
 
-    // Plot: three series per server (empty/warm/hot)
+    // Plot: three series per server (cold/warm/hot)
     const dataFile = `data_dir."/${panel.file}"`;
     plotLines.push(`set title "${panel.label}"`);
     plotLines.push(`set ylabel "${panel.ylabel}"`);
@@ -395,7 +407,7 @@ if (!pg || !mem) {
 }
 
 // Detect phased entries — use hot fill level as headline metric
-const phased = pg.event_empty_tps !== undefined;
+const phased = pg.event_cold_tps !== undefined || pg.event_empty_tps !== undefined;
 
 // For phased entries, resolve "event_tps" → "event_hot_tps" etc.
 function resolveKey(key) {

@@ -27,7 +27,7 @@ Examples:
   just e2e marmot
   just e2e node-sync
   just bench compare
-  just bench cloud --clients 3 --runs 3
+  just bench cloud --clients 3
 EOF
   exit 0
 fi
@@ -77,7 +77,7 @@ Examples:
   just bench collect
   just bench update --machine all
   just bench at v0.5.0
-  just bench cloud --clients 3 --runs 3
+  just bench cloud --clients 3
   just bench cloud --targets parrhesia-pg,nostream,haven --nostream-ref main
 EOF
   exit 0

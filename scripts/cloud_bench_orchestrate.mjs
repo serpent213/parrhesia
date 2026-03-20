@@ -40,10 +40,12 @@ const NOSTREAM_REDIS_IMAGE = "redis:7.0.5-alpine3.16";
 const SEED_TOLERANCE_RATIO = 0.01;
 const SEED_MAX_ROUNDS = 4;
 const SEED_KEEPALIVE_SECONDS = 0;
-const SEED_EVENTS_PER_CONNECTION_TARGET = 2000;
-const SEED_CONNECTIONS_MIN = 1;
-const SEED_CONNECTIONS_MAX = 512;
-const SEED_SEND_STRATEGY = "ack-loop";
+const SEED_CONNECTION_COUNT = 5000;
+const SEED_CONNECTION_RATE = 5000;
+const EVENT_SEND_STRATEGY = "pipelined";
+const EVENT_INFLIGHT = 32;
+const EVENT_ACK_TIMEOUT_SECONDS = 30;
+const SEED_SEND_STRATEGY = "pipelined";
 const SEED_INFLIGHT = 32;
 const SEED_ACK_TIMEOUT_SECONDS = 30;
 const PHASE_PREP_OFFSET_MINUTES = 3;
@@ -54,7 +56,6 @@ const DEFAULTS = {
   clientType: "cpx31",
   imageBase: "ubuntu-24.04",
   clients: 3,
-  runs: 5,
   targets: DEFAULT_TARGETS,
   historyFile: "bench/history.jsonl",
   artifactsDir: "bench/cloud_artifacts",
@@ -73,17 +74,17 @@ const DEFAULTS = {
   warmEvents: 50000,
   hotEvents: 500000,
   bench: {
-    connectCount: 3000,
-    connectRate: 1500,
-    echoCount: 3000,
-    echoRate: 1500,
+    connectCount: 50000,
+    connectRate: 10000,
+    echoCount: 50000,
+    echoRate: 10000,
     echoSize: 512,
-    eventCount: 5000,
-    eventRate: 2000,
-    reqCount: 3000,
-    reqRate: 1500,
+    eventCount: 50000,
+    eventRate: 10000,
+    reqCount: 50000,
+    reqRate: 10000,
     reqLimit: 50,
-    keepaliveSeconds: 10,
+    keepaliveSeconds: 120,
     threads: 0,
   },
 };
@@ -103,7 +104,6 @@ Options:
   --client-type <name>         (default: ${DEFAULTS.clientType})
   --image-base <name>          (default: ${DEFAULTS.imageBase})
   --clients <n>                (default: ${DEFAULTS.clients})
-  --runs <n>                   (default: ${DEFAULTS.runs})
   --targets <csv>              (default: ${DEFAULT_TARGETS.join(",")})
 
   Source selection (choose one style):
@@ -151,7 +151,7 @@ Notes:
   - In interactive terminals, prompts you to pick + confirm the datacenter unless --yes is set.
   - Caches built nostr-bench at _build/bench/nostr-bench and reuses it when valid.
   - Auto-tunes Postgres/Redis/app pool sizing from server RAM + CPU for DB-backed targets.
-  - Randomizes target order per run and wipes persisted target data directories on each start.
+  - Randomizes target order and wipes persisted target data directories on each start.
   - Creates a Hetzner Cloud firewall restricting inbound access to benchmark ports from known IPs only.
   - Handles Ctrl-C / SIGTERM with best-effort cloud cleanup.
   - Tries nix .#nostrBenchStaticX86_64Musl first; falls back to docker-built portable nostr-bench.
@@ -200,9 +200,6 @@ function parseArgs(argv) {
         break;
       case "--clients":
         opts.clients = intOpt(arg, argv[++i]);
-        break;
-      case "--runs":
-        opts.runs = intOpt(arg, argv[++i]);
         break;
       case "--targets":
         opts.targets = argv[++i]
@@ -1053,11 +1050,8 @@ async function runClientSeedingRound({
         };
       }
 
-      const seedConnectionCount = Math.min(
-        SEED_CONNECTIONS_MAX,
-        Math.max(SEED_CONNECTIONS_MIN, Math.ceil(desiredAccepted / SEED_EVENTS_PER_CONNECTION_TARGET)),
-      );
-      const seedConnectionRate = Math.max(1, seedConnectionCount);
+      const seedConnectionCount = SEED_CONNECTION_COUNT;
+      const seedConnectionRate = SEED_CONNECTION_RATE;
 
       const seedEnvPrefix = [
         `PARRHESIA_BENCH_SEED_TARGET_ACCEPTED=${desiredAccepted}`,
@@ -1947,245 +1941,242 @@ async function main() {
     };
 
     const results = [];
-    const targetOrderPerRun = [];
+    const targetOrder = shuffled(opts.targets);
 
     phaseLogger.logPhase(`[phase] benchmark execution (mode=${opts.quick ? "quick" : "phased"})`);
 
-    for (let runIndex = 1; runIndex <= opts.runs; runIndex += 1) {
-      const runTargets = shuffled(opts.targets);
-      targetOrderPerRun.push({ run: runIndex, targets: runTargets });
-      console.log(`[bench] run ${runIndex}/${opts.runs} target-order=${runTargets.join(",")}`);
+    console.log(`[bench] target-order=${targetOrder.join(",")}`);
 
-      for (const target of runTargets) {
-        console.log(`[bench] run ${runIndex}/${opts.runs} target=${target}`);
-        const targetStartTime = new Date().toISOString();
+    for (const target of targetOrder) {
+      console.log(`[bench] target=${target}`);
+      const targetStartTime = new Date().toISOString();
 
-        const serverEnvPrefix = [
-          `PARRHESIA_IMAGE=${shellEscape(parrhesiaImageOnServer || "parrhesia:latest")}`,
-          `POSTGRES_IMAGE=${shellEscape(opts.postgresImage)}`,
-          `STRFRY_IMAGE=${shellEscape(opts.strfryImage)}`,
-          `NOSTR_RS_IMAGE=${shellEscape(opts.nostrRsImage)}`,
-          `NOSTREAM_REPO=${shellEscape(opts.nostreamRepo)}`,
-          `NOSTREAM_REF=${shellEscape(opts.nostreamRef)}`,
-          `NOSTREAM_REDIS_IMAGE=${shellEscape(NOSTREAM_REDIS_IMAGE)}`,
-          `HAVEN_IMAGE=${shellEscape(opts.havenImage)}`,
-          `HAVEN_RELAY_URL=${shellEscape(`${serverIp}:3355`)}`,
-        ].join(" ");
+      const serverEnvPrefix = [
+        `PARRHESIA_IMAGE=${shellEscape(parrhesiaImageOnServer || "parrhesia:latest")}`,
+        `POSTGRES_IMAGE=${shellEscape(opts.postgresImage)}`,
+        `STRFRY_IMAGE=${shellEscape(opts.strfryImage)}`,
+        `NOSTR_RS_IMAGE=${shellEscape(opts.nostrRsImage)}`,
+        `NOSTREAM_REPO=${shellEscape(opts.nostreamRepo)}`,
+        `NOSTREAM_REF=${shellEscape(opts.nostreamRef)}`,
+        `NOSTREAM_REDIS_IMAGE=${shellEscape(NOSTREAM_REDIS_IMAGE)}`,
+        `HAVEN_IMAGE=${shellEscape(opts.havenImage)}`,
+        `HAVEN_RELAY_URL=${shellEscape(`${serverIp}:3355`)}`,
+      ].join(" ");
 
-        try {
-          await sshExec(serverIp, keyPath, `${serverEnvPrefix} /root/cloud-bench-server.sh ${shellEscape(startCommands[target])}`);
-        } catch (error) {
-          console.error(`[bench] target startup failed target=${target} run=${runIndex}`);
-          if (error?.stdout?.trim()) {
-            console.error(`[bench] server startup stdout:\n${error.stdout.trim()}`);
-          }
-          if (error?.stderr?.trim()) {
-            console.error(`[bench] server startup stderr:\n${error.stderr.trim()}`);
-          }
-          throw error;
+      try {
+        await sshExec(serverIp, keyPath, `${serverEnvPrefix} /root/cloud-bench-server.sh ${shellEscape(startCommands[target])}`);
+      } catch (error) {
+        console.error(`[bench] target startup failed target=${target}`);
+        if (error?.stdout?.trim()) {
+          console.error(`[bench] server startup stdout:\n${error.stdout.trim()}`);
+        }
+        if (error?.stderr?.trim()) {
+          console.error(`[bench] server startup stderr:\n${error.stderr.trim()}`);
+        }
+        throw error;
+      }
+
+      const relayUrl = relayUrls[target];
+      const runTargetDir = path.join(artifactsDir, target);
+      fs.mkdirSync(runTargetDir, { recursive: true });
+
+      const benchEnvPrefix = [
+        `PARRHESIA_BENCH_CONNECT_COUNT=${opts.bench.connectCount}`,
+        `PARRHESIA_BENCH_CONNECT_RATE=${opts.bench.connectRate}`,
+        `PARRHESIA_BENCH_ECHO_COUNT=${opts.bench.echoCount}`,
+        `PARRHESIA_BENCH_ECHO_RATE=${opts.bench.echoRate}`,
+        `PARRHESIA_BENCH_ECHO_SIZE=${opts.bench.echoSize}`,
+        `PARRHESIA_BENCH_EVENT_COUNT=${opts.bench.eventCount}`,
+        `PARRHESIA_BENCH_EVENT_RATE=${opts.bench.eventRate}`,
+        `PARRHESIA_BENCH_EVENT_SEND_STRATEGY=${EVENT_SEND_STRATEGY}`,
+        `PARRHESIA_BENCH_EVENT_INFLIGHT=${EVENT_INFLIGHT}`,
+        `PARRHESIA_BENCH_EVENT_ACK_TIMEOUT=${EVENT_ACK_TIMEOUT_SECONDS}`,
+        `PARRHESIA_BENCH_REQ_COUNT=${opts.bench.reqCount}`,
+        `PARRHESIA_BENCH_REQ_RATE=${opts.bench.reqRate}`,
+        `PARRHESIA_BENCH_REQ_LIMIT=${opts.bench.reqLimit}`,
+        `PARRHESIA_BENCH_KEEPALIVE_SECONDS=${opts.bench.keepaliveSeconds}`,
+        `PARRHESIA_BENCH_THREADS=${opts.bench.threads}`,
+      ].join(" ");
+
+      const benchArgs = { clientInfos, keyPath, benchEnvPrefix, relayUrl };
+      const fetchEventCountForTarget = async () =>
+        fetchServerEventCount({
+          target,
+          serverIp,
+          keyPath,
+          serverEnvPrefix,
+        });
+
+      if (opts.quick) {
+        // Flat mode: run all benchmarks in one shot
+        const clientRunResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "all",
+          artifactDir: runTargetDir,
+        });
+
+        results.push({
+          target,
+          relay_url: relayUrl,
+          mode: "flat",
+          clients: clientRunResults,
+        });
+      } else {
+        // Phased mode: one sequence per target (seed each target DB only once)
+        let eventsInDb = 0;
+
+        console.log(`[bench] ${target}: connect`);
+        const connectResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "connect",
+          artifactDir: path.join(runTargetDir, "connect"),
+        });
+
+        console.log(`[bench] ${target}: echo`);
+        const echoResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "echo",
+          artifactDir: path.join(runTargetDir, "echo"),
+        });
+
+        // Phase: cold
+        console.log(`[bench] ${target}: req (cold, ${eventsInDb} events)`);
+        const coldReqResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "req",
+          artifactDir: path.join(runTargetDir, "cold-req"),
+        });
+
+        console.log(`[bench] ${target}: event (cold, ${eventsInDb} events)`);
+        const coldEventResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "event",
+          artifactDir: path.join(runTargetDir, "cold-event"),
+        });
+        const estimatedColdEventWritten = countEventsWritten(coldEventResults);
+        eventsInDb += estimatedColdEventWritten;
+
+        const authoritativeAfterCold = await fetchEventCountForTarget();
+        if (Number.isInteger(authoritativeAfterCold) && authoritativeAfterCold >= 0) {
+          eventsInDb = authoritativeAfterCold;
         }
 
-        const relayUrl = relayUrls[target];
-        const runTargetDir = path.join(artifactsDir, target, `run-${runIndex}`);
-        fs.mkdirSync(runTargetDir, { recursive: true });
+        console.log(`[bench] ${target}: ~${eventsInDb} events in DB after cold phase`);
 
-        const benchEnvPrefix = [
-          `PARRHESIA_BENCH_CONNECT_COUNT=${opts.bench.connectCount}`,
-          `PARRHESIA_BENCH_CONNECT_RATE=${opts.bench.connectRate}`,
-          `PARRHESIA_BENCH_ECHO_COUNT=${opts.bench.echoCount}`,
-          `PARRHESIA_BENCH_ECHO_RATE=${opts.bench.echoRate}`,
-          `PARRHESIA_BENCH_ECHO_SIZE=${opts.bench.echoSize}`,
-          `PARRHESIA_BENCH_EVENT_COUNT=${opts.bench.eventCount}`,
-          `PARRHESIA_BENCH_EVENT_RATE=${opts.bench.eventRate}`,
-          `PARRHESIA_BENCH_REQ_COUNT=${opts.bench.reqCount}`,
-          `PARRHESIA_BENCH_REQ_RATE=${opts.bench.reqRate}`,
-          `PARRHESIA_BENCH_REQ_LIMIT=${opts.bench.reqLimit}`,
-          `PARRHESIA_BENCH_KEEPALIVE_SECONDS=${opts.bench.keepaliveSeconds}`,
-          `PARRHESIA_BENCH_THREADS=${opts.bench.threads}`,
-        ].join(" ");
+        // Fill to warm
+        const fillWarm = await smartFill({
+          target,
+          phase: "warm",
+          targetCount: opts.warmEvents,
+          eventsInDb,
+          relayUrl,
+          serverIp,
+          keyPath,
+          clientInfos,
+          serverEnvPrefix,
+          artifactDir: path.join(runTargetDir, "fill-warm"),
+          threads: opts.bench.threads,
+          skipFill: target === "haven",
+          fetchEventCount: fetchEventCountForTarget,
+        });
+        eventsInDb = fillWarm.eventsInDb;
 
-        const benchArgs = { clientInfos, keyPath, benchEnvPrefix, relayUrl };
-        const fetchEventCountForTarget = async () =>
-          fetchServerEventCount({
-            target,
-            serverIp,
-            keyPath,
-            serverEnvPrefix,
-          });
+        // Phase: warm
+        console.log(`[bench] ${target}: req (warm, ~${eventsInDb} events)`);
+        const warmReqResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "req",
+          artifactDir: path.join(runTargetDir, "warm-req"),
+        });
 
-        if (opts.quick) {
-          // Flat mode: run all benchmarks in one shot (backward compat)
-          const clientRunResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "all",
-            artifactDir: runTargetDir,
-          });
+        console.log(`[bench] ${target}: event (warm, ~${eventsInDb} events)`);
+        const warmEventResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "event",
+          artifactDir: path.join(runTargetDir, "warm-event"),
+        });
+        const estimatedWarmEventWritten = countEventsWritten(warmEventResults);
+        eventsInDb += estimatedWarmEventWritten;
 
-          results.push({
-            run: runIndex,
-            target,
-            relay_url: relayUrl,
-            mode: "flat",
-            clients: clientRunResults,
-          });
-        } else {
-          // Phased mode: separate benchmarks at different DB fill levels
-          let eventsInDb = 0;
+        const authoritativeAfterWarmEvent = await fetchEventCountForTarget();
+        if (Number.isInteger(authoritativeAfterWarmEvent) && authoritativeAfterWarmEvent >= 0) {
+          eventsInDb = authoritativeAfterWarmEvent;
+        }
 
-          console.log(`[bench] ${target}: connect`);
-          const connectResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "connect",
-            artifactDir: path.join(runTargetDir, "connect"),
-          });
+        // Fill to hot
+        const fillHot = await smartFill({
+          target,
+          phase: "hot",
+          targetCount: opts.hotEvents,
+          eventsInDb,
+          relayUrl,
+          serverIp,
+          keyPath,
+          clientInfos,
+          serverEnvPrefix,
+          artifactDir: path.join(runTargetDir, "fill-hot"),
+          threads: opts.bench.threads,
+          skipFill: target === "haven",
+          fetchEventCount: fetchEventCountForTarget,
+        });
+        eventsInDb = fillHot.eventsInDb;
 
-          console.log(`[bench] ${target}: echo`);
-          const echoResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "echo",
-            artifactDir: path.join(runTargetDir, "echo"),
-          });
+        // Phase: hot
+        console.log(`[bench] ${target}: req (hot, ~${eventsInDb} events)`);
+        const hotReqResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "req",
+          artifactDir: path.join(runTargetDir, "hot-req"),
+        });
 
-          // Phase: empty
-          console.log(`[bench] ${target}: req (empty, ${eventsInDb} events)`);
-          const emptyReqResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "req",
-            artifactDir: path.join(runTargetDir, "empty-req"),
-          });
+        console.log(`[bench] ${target}: event (hot, ~${eventsInDb} events)`);
+        const hotEventResults = await runSingleBenchmark({
+          ...benchArgs,
+          mode: "event",
+          artifactDir: path.join(runTargetDir, "hot-event"),
+        });
 
-          console.log(`[bench] ${target}: event (empty, ${eventsInDb} events)`);
-          const emptyEventResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "event",
-            artifactDir: path.join(runTargetDir, "empty-event"),
-          });
-          const estimatedEmptyEventWritten = countEventsWritten(emptyEventResults);
-          eventsInDb += estimatedEmptyEventWritten;
-
-          const authoritativeAfterEmpty = await fetchEventCountForTarget();
-          if (Number.isInteger(authoritativeAfterEmpty) && authoritativeAfterEmpty >= 0) {
-            eventsInDb = authoritativeAfterEmpty;
-          }
-
-          console.log(`[bench] ${target}: ~${eventsInDb} events in DB after empty phase`);
-
-          // Fill to warm
-          const fillWarm = await smartFill({
-            target,
-            phase: "warm",
-            targetCount: opts.warmEvents,
-            eventsInDb,
-            relayUrl,
-            serverIp,
-            keyPath,
-            clientInfos,
-            serverEnvPrefix,
-            artifactDir: path.join(runTargetDir, "fill-warm"),
-            threads: opts.bench.threads,
-            skipFill: target === "haven",
-            fetchEventCount: fetchEventCountForTarget,
-          });
-          eventsInDb = fillWarm.eventsInDb;
-
-          // Phase: warm
-          console.log(`[bench] ${target}: req (warm, ~${eventsInDb} events)`);
-          const warmReqResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "req",
-            artifactDir: path.join(runTargetDir, "warm-req"),
-          });
-
-          console.log(`[bench] ${target}: event (warm, ~${eventsInDb} events)`);
-          const warmEventResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "event",
-            artifactDir: path.join(runTargetDir, "warm-event"),
-          });
-          const estimatedWarmEventWritten = countEventsWritten(warmEventResults);
-          eventsInDb += estimatedWarmEventWritten;
-
-          const authoritativeAfterWarmEvent = await fetchEventCountForTarget();
-          if (Number.isInteger(authoritativeAfterWarmEvent) && authoritativeAfterWarmEvent >= 0) {
-            eventsInDb = authoritativeAfterWarmEvent;
-          }
-
-          // Fill to hot
-          const fillHot = await smartFill({
-            target,
-            phase: "hot",
-            targetCount: opts.hotEvents,
-            eventsInDb,
-            relayUrl,
-            serverIp,
-            keyPath,
-            clientInfos,
-            serverEnvPrefix,
-            artifactDir: path.join(runTargetDir, "fill-hot"),
-            threads: opts.bench.threads,
-            skipFill: target === "haven",
-            fetchEventCount: fetchEventCountForTarget,
-          });
-          eventsInDb = fillHot.eventsInDb;
-
-          // Phase: hot
-          console.log(`[bench] ${target}: req (hot, ~${eventsInDb} events)`);
-          const hotReqResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "req",
-            artifactDir: path.join(runTargetDir, "hot-req"),
-          });
-
-          console.log(`[bench] ${target}: event (hot, ~${eventsInDb} events)`);
-          const hotEventResults = await runSingleBenchmark({
-            ...benchArgs,
-            mode: "event",
-            artifactDir: path.join(runTargetDir, "hot-event"),
-          });
-
-          results.push({
-            run: runIndex,
-            target,
-            relay_url: relayUrl,
-            mode: "phased",
-            phases: {
-              connect: { clients: connectResults },
-              echo: { clients: echoResults },
-              empty: {
-                req: { clients: emptyReqResults },
-                event: { clients: emptyEventResults },
-                db_events_before: 0,
-              },
-              warm: {
-                req: { clients: warmReqResults },
-                event: { clients: warmEventResults },
-                db_events_before: fillWarm.eventsInDb,
-                seeded: fillWarm.seeded,
-                wiped: fillWarm.wiped,
-              },
-              hot: {
-                req: { clients: hotReqResults },
-                event: { clients: hotEventResults },
-                db_events_before: fillHot.eventsInDb,
-                seeded: fillHot.seeded,
-                wiped: fillHot.wiped,
-              },
+        results.push({
+          target,
+          relay_url: relayUrl,
+          mode: "phased",
+          phases: {
+            connect: { clients: connectResults },
+            echo: { clients: echoResults },
+            cold: {
+              req: { clients: coldReqResults },
+              event: { clients: coldEventResults },
+              db_events_before: 0,
             },
-          });
-        }
+            warm: {
+              req: { clients: warmReqResults },
+              event: { clients: warmEventResults },
+              db_events_before: fillWarm.eventsInDb,
+              seeded: fillWarm.seeded,
+              wiped: fillWarm.wiped,
+            },
+            hot: {
+              req: { clients: hotReqResults },
+              event: { clients: hotEventResults },
+              db_events_before: fillHot.eventsInDb,
+              seeded: fillHot.seeded,
+              wiped: fillHot.wiped,
+            },
+          },
+        });
+      }
 
-        // Collect Prometheus metrics for this target's benchmark window.
-        if (opts.monitoring) {
-          const metrics = await collectMetrics({
-            serverIp,
-            startTime: targetStartTime,
-            endTime: new Date().toISOString(),
-          });
-          if (metrics) {
-            const metricsPath = path.join(runTargetDir, "metrics.json");
-            fs.writeFileSync(metricsPath, JSON.stringify(metrics, null, 2));
-            console.log(`[monitoring] saved ${path.relative(ROOT_DIR, metricsPath)}`);
-          }
+      // Collect Prometheus metrics for this target's benchmark window.
+      if (opts.monitoring) {
+        const metrics = await collectMetrics({
+          serverIp,
+          startTime: targetStartTime,
+          endTime: new Date().toISOString(),
+        });
+        if (metrics) {
+          const metricsPath = path.join(runTargetDir, "metrics.json");
+          fs.writeFileSync(metricsPath, JSON.stringify(metrics, null, 2));
+          console.log(`[monitoring] saved ${path.relative(ROOT_DIR, metricsPath)}`);
         }
       }
     }
@@ -2224,7 +2215,6 @@ async function main() {
       machine_id: os.hostname(),
       git_tag: gitTag,
       git_commit: gitCommit,
-      runs: opts.runs,
       source: {
         kind: "cloud",
         mode: parrhesiaSource.mode,
@@ -2248,9 +2238,8 @@ async function main() {
         },
       },
       bench: {
-        runs: opts.runs,
         targets: opts.targets,
-        target_order_per_run: targetOrderPerRun,
+        target_order: targetOrder,
         mode: opts.quick ? "flat" : "phased",
         warm_events: opts.warmEvents,
         hot_events: opts.hotEvents,

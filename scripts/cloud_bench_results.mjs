@@ -210,8 +210,8 @@ export function summarisePhasedResults(results) {
     }
 
     // Per-level req and event metrics
-    for (const level of ["empty", "warm", "hot"]) {
-      const phase = phases[level];
+    for (const level of ["cold", "warm", "hot"]) {
+      const phase = phases[level] || (level === "cold" ? phases.empty : undefined);
       if (!phase) continue;
 
       const reqClients = (phase.req?.clients || [])
