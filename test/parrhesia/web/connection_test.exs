@@ -978,6 +978,41 @@ defmodule Parrhesia.Web.ConnectionTest do
     assert JSON.decode!(notice_payload) == ["NOTICE", message]
   end
 
+  test "websocket keepalive ping waits for matching pong" do
+    state =
+      connection_state(websocket_ping_interval_seconds: 30, websocket_pong_timeout_seconds: 5)
+
+    assert {:push, {:ping, payload}, ping_state} =
+             Connection.handle_info(:websocket_keepalive_ping, state)
+
+    assert is_binary(payload)
+    assert ping_state.websocket_awaiting_pong_payload == payload
+    assert is_reference(ping_state.websocket_keepalive_timeout_timer_ref)
+
+    assert {:ok, acknowledged_state} =
+             Connection.handle_control({payload, [opcode: :pong]}, ping_state)
+
+    assert acknowledged_state.websocket_awaiting_pong_payload == nil
+    assert acknowledged_state.websocket_keepalive_timeout_timer_ref == nil
+  end
+
+  test "websocket keepalive timeout closes the connection" do
+    state =
+      connection_state(websocket_ping_interval_seconds: 30, websocket_pong_timeout_seconds: 5)
+
+    assert {:push, {:ping, payload}, ping_state} =
+             Connection.handle_info(:websocket_keepalive_ping, state)
+
+    assert {:stop, :normal, {1001, "keepalive timeout"}, _timeout_state} =
+             Connection.handle_info({:websocket_keepalive_timeout, payload}, ping_state)
+  end
+
+  test "websocket keepalive can be disabled" do
+    state = connection_state(websocket_ping_interval_seconds: 0)
+
+    assert {:ok, ^state} = Connection.handle_info(:websocket_keepalive_ping, state)
+  end
+
   defp subscribed_connection_state(opts) do
     state = connection_state(opts)
     req_payload = JSON.encode!(["REQ", "sub-1", %{"kinds" => [1]}])
@@ -1004,6 +1039,8 @@ defmodule Parrhesia.Web.ConnectionTest do
       |> Keyword.put_new(:subscription_index, nil)
       |> Keyword.put_new(:trap_exit?, false)
       |> Keyword.put_new(:track_population?, false)
+      |> Keyword.put_new(:websocket_ping_interval_seconds, 0)
+      |> Keyword.put_new(:websocket_pong_timeout_seconds, 10)
 
     {:ok, state} = Connection.init(opts)
     state

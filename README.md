@@ -381,6 +381,8 @@ Parrhesia treats NIP-43 invite requests as synthetic relay output, not stored cl
 | `:max_event_ingest_per_window` | `PARRHESIA_LIMITS_MAX_EVENT_INGEST_PER_WINDOW` | `120` |
 | `:event_ingest_window_seconds` | `PARRHESIA_LIMITS_EVENT_INGEST_WINDOW_SECONDS` | `1` |
 | `:auth_max_age_seconds` | `PARRHESIA_LIMITS_AUTH_MAX_AGE_SECONDS` | `600` |
+| `:websocket_ping_interval_seconds` | `PARRHESIA_LIMITS_WEBSOCKET_PING_INTERVAL_SECONDS` | `30` |
+| `:websocket_pong_timeout_seconds` | `PARRHESIA_LIMITS_WEBSOCKET_PONG_TIMEOUT_SECONDS` | `10` |
 | `:max_outbound_queue` | `PARRHESIA_LIMITS_MAX_OUTBOUND_QUEUE` | `256` |
 | `:outbound_drain_batch_size` | `PARRHESIA_LIMITS_OUTBOUND_DRAIN_BATCH_SIZE` | `64` |
 | `:outbound_overflow_strategy` | `PARRHESIA_LIMITS_OUTBOUND_OVERFLOW_STRATEGY` | `:close` |

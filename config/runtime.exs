@@ -277,6 +277,16 @@ if config_env() == :prod do
         "PARRHESIA_LIMITS_AUTH_MAX_AGE_SECONDS",
         Keyword.get(limits_defaults, :auth_max_age_seconds, 600)
       ),
+    websocket_ping_interval_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_WEBSOCKET_PING_INTERVAL_SECONDS",
+        Keyword.get(limits_defaults, :websocket_ping_interval_seconds, 30)
+      ),
+    websocket_pong_timeout_seconds:
+      int_env.(
+        "PARRHESIA_LIMITS_WEBSOCKET_PONG_TIMEOUT_SECONDS",
+        Keyword.get(limits_defaults, :websocket_pong_timeout_seconds, 10)
+      ),
     max_outbound_queue:
       int_env.(
         "PARRHESIA_LIMITS_MAX_OUTBOUND_QUEUE",
