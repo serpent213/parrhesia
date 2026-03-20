@@ -10,7 +10,7 @@ export function parseNostrBenchSections(output) {
 
   for (const lineRaw of lines) {
     const line = lineRaw.trim();
-    const header = line.match(/^==>\s+nostr-bench\s+(connect|echo|event|req)\s+/);
+    const header = line.match(/^==>\s+nostr-bench\s+(connect|echo|event|req|seed)\s+/);
     if (header) {
       section = header[1];
       continue;
@@ -20,9 +20,24 @@ export function parseNostrBenchSections(output) {
 
     try {
       const json = JSON.parse(line);
-      if (section) {
-        parsed[section] = json;
+      if (!section) continue;
+
+      if (section === "seed" && json?.type === "seed_final") {
+        parsed.seed_final = json;
+        continue;
       }
+
+      const existing = parsed[section];
+      if (!existing) {
+        parsed[section] = json;
+        continue;
+      }
+
+      if (existing?.type === "final" && json?.type !== "final") {
+        continue;
+      }
+
+      parsed[section] = json;
     } catch {
       // ignore noisy non-json lines
     }
@@ -43,14 +58,21 @@ export function sum(values) {
   return valid.reduce((a, b) => a + b, 0);
 }
 
-export function throughputFromSection(section) {
+export function throughputFromSection(section, options = {}) {
+  const { preferAccepted = false } = options;
+
   const elapsedMs = Number(section?.elapsed ?? NaN);
+  const accepted = Number(section?.message_stats?.accepted ?? NaN);
   const complete = Number(section?.message_stats?.complete ?? NaN);
+  const effectiveCount =
+    preferAccepted && Number.isFinite(accepted)
+      ? accepted
+      : complete;
   const totalBytes = Number(section?.message_stats?.size ?? NaN);
 
   const cumulativeTps =
-    Number.isFinite(elapsedMs) && elapsedMs > 0 && Number.isFinite(complete)
-      ? complete / (elapsedMs / 1000)
+    Number.isFinite(elapsedMs) && elapsedMs > 0 && Number.isFinite(effectiveCount)
+      ? effectiveCount / (elapsedMs / 1000)
       : NaN;
 
   const cumulativeMibs =
@@ -58,7 +80,11 @@ export function throughputFromSection(section) {
       ? totalBytes / (1024 * 1024) / (elapsedMs / 1000)
       : NaN;
 
-  const sampleTps = Number(section?.tps ?? NaN);
+  const sampleTps = Number(
+    preferAccepted
+      ? section?.accepted_tps ?? section?.tps
+      : section?.tps,
+  );
   const sampleMibs = Number(section?.size ?? NaN);
 
   return {
@@ -67,10 +93,16 @@ export function throughputFromSection(section) {
   };
 }
 
+function messageCounter(section, field) {
+  const value = Number(section?.message_stats?.[field]);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function metricFromSections(sections) {
   const connect = sections?.connect?.connect_stats?.success_time || {};
   const echo = throughputFromSection(sections?.echo || {});
-  const event = throughputFromSection(sections?.event || {});
+  const eventSection = sections?.event || {};
+  const event = throughputFromSection(eventSection, { preferAccepted: true });
   const req = throughputFromSection(sections?.req || {});
 
   return {
@@ -80,6 +112,10 @@ export function metricFromSections(sections) {
     echo_mibs: echo.mibs,
     event_tps: event.tps,
     event_mibs: event.mibs,
+    event_notice: messageCounter(eventSection, "notice"),
+    event_auth_challenge: messageCounter(eventSection, "auth_challenge"),
+    event_reply_unrecognized: messageCounter(eventSection, "reply_unrecognized"),
+    event_ack_timeout: messageCounter(eventSection, "ack_timeout"),
     req_tps: req.tps,
     req_mibs: req.mibs,
   };
@@ -109,6 +145,10 @@ export function summariseFlatResults(results) {
       echo_mibs: sum(clientSamples.map((s) => s.echo_mibs)),
       event_tps: sum(clientSamples.map((s) => s.event_tps)),
       event_mibs: sum(clientSamples.map((s) => s.event_mibs)),
+      event_notice: sum(clientSamples.map((s) => s.event_notice)),
+      event_auth_challenge: sum(clientSamples.map((s) => s.event_auth_challenge)),
+      event_reply_unrecognized: sum(clientSamples.map((s) => s.event_reply_unrecognized)),
+      event_ack_timeout: sum(clientSamples.map((s) => s.event_ack_timeout)),
       req_tps: sum(clientSamples.map((s) => s.req_tps)),
       req_mibs: sum(clientSamples.map((s) => s.req_mibs)),
     });
@@ -121,6 +161,10 @@ export function summariseFlatResults(results) {
     "echo_mibs",
     "event_tps",
     "event_mibs",
+    "event_notice",
+    "event_auth_challenge",
+    "event_reply_unrecognized",
+    "event_ack_timeout",
     "req_tps",
     "req_mibs",
   ];
@@ -184,6 +228,16 @@ export function summarisePhasedResults(results) {
       if (eventClients.length > 0) {
         sample[`event_${level}_tps`] = sum(eventClients.map((s) => s.event_tps));
         sample[`event_${level}_mibs`] = sum(eventClients.map((s) => s.event_mibs));
+        sample[`event_${level}_notice`] = sum(eventClients.map((s) => s.event_notice));
+        sample[`event_${level}_auth_challenge`] = sum(
+          eventClients.map((s) => s.event_auth_challenge),
+        );
+        sample[`event_${level}_reply_unrecognized`] = sum(
+          eventClients.map((s) => s.event_reply_unrecognized),
+        );
+        sample[`event_${level}_ack_timeout`] = sum(
+          eventClients.map((s) => s.event_ack_timeout),
+        );
       }
     }
 
@@ -217,10 +271,15 @@ export function countEventsWritten(clientResults) {
     const eventSection = cr.sections?.event;
     if (!eventSection?.message_stats) continue;
 
+    const accepted = Number(eventSection.message_stats.accepted);
+    if (Number.isFinite(accepted)) {
+      total += Math.max(0, accepted);
+      continue;
+    }
+
     const complete = Number(eventSection.message_stats.complete) || 0;
     const error = Number(eventSection.message_stats.error) || 0;
-    const accepted = Math.max(0, complete - error);
-    total += accepted;
+    total += Math.max(0, complete - error);
   }
   return total;
 }
