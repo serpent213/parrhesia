@@ -137,6 +137,8 @@ The intended in-process surface is `Parrhesia.API.*`, especially:
 - `Parrhesia.API.Admin` for management operations
 - `Parrhesia.API.Identity`, `Parrhesia.API.ACL`, and `Parrhesia.API.Sync` for relay identity, protected sync ACLs, and outbound relay sync
 
+For host-managed HTTP/WebSocket ingress mounting, use `Parrhesia.Plug`.
+
 Start with:
 
 - [`docs/LOCAL_API.md`](./docs/LOCAL_API.md) for the embedding model and a minimal host setup
@@ -144,16 +146,29 @@ Start with:
 
 Important caveats for host applications:
 
-- Parrhesia is still alpha; expect some public API and config churn.
+- Parrhesia is pre-beta; expect some public API and config churn while we prepare for beta.
 - Parrhesia currently assumes a single runtime per BEAM node and uses globally registered process names.
 - The defaults in this repo's `config/*.exs` are not imported automatically when Parrhesia is used as a dependency. A host app must set `config :parrhesia, ...` explicitly.
 - The host app is responsible for migrating Parrhesia's schema, for example with `Parrhesia.Release.migrate()` or `mix ecto.migrate -r Parrhesia.Repo`.
 
-If you only want the in-process API and not the HTTP/WebSocket edge, configure:
+### Official embedding boundary
+
+For embedded use, the stable boundaries are:
+
+- `Parrhesia.API.*` for in-process publish/query/admin/sync operations
+- `Parrhesia.Plug` for host-managed HTTP/WebSocket ingress mounting
+
+If your host app owns the public HTTPS endpoint, keep this as the baseline runtime config:
 
 ```elixir
 config :parrhesia, :listeners, %{}
 ```
+
+Notes:
+
+- `listeners: %{}` disables Parrhesia-managed HTTP/WebSocket ingress (`/relay`, `/management`, `/metrics`, etc.).
+- Mount `Parrhesia.Plug` in your host endpoint/router when you still want Parrhesia ingress under the host's single HTTPS surface.
+- `Parrhesia.Web.*` modules remain internal runtime wiring. Use `Parrhesia.Plug` as the documented mount API.
 
 The config reference below still applies when embedded. That is the primary place to document basic setup and runtime configuration changes.
 

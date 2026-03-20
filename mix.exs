@@ -109,6 +109,7 @@ defmodule Parrhesia.MixProject do
         ],
         Runtime: [
           Parrhesia,
+          Parrhesia.Plug,
           Parrhesia.Release,
           Parrhesia.Runtime
         ]

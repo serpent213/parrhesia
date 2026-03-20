@@ -3,6 +3,7 @@ defmodule Parrhesia do
   Parrhesia is a Nostr relay runtime that can run standalone or as an embedded OTP service.
 
   For embedded use, the main developer-facing surface is `Parrhesia.API.*`.
+  For host-managed HTTP/WebSocket ingress mounting, use `Parrhesia.Plug`.
   Start with:
 
   - `Parrhesia.API.Events`
@@ -11,6 +12,7 @@ defmodule Parrhesia do
   - `Parrhesia.API.Identity`
   - `Parrhesia.API.ACL`
   - `Parrhesia.API.Sync`
+  - `Parrhesia.Plug`
 
   The host application is responsible for:
 

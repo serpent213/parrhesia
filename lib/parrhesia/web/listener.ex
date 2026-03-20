@@ -177,7 +177,7 @@ defmodule Parrhesia.Web.Listener do
       ip: listener.bind.ip,
       port: listener.bind.port,
       scheme: scheme,
-      plug: {Parrhesia.Web.ListenerPlug, listener: listener}
+      plug: {Parrhesia.Plug, listener: listener}
     ] ++
       TLS.bandit_options(listener.transport.tls) ++
       [thousand_island_options: thousand_island_options] ++
