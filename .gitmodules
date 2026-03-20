@@ -4,3 +4,6 @@
 [submodule "docs/nips"]
 	path = docs/nips
 	url = https://github.com/nostr-protocol/nips.git
+[submodule "nix/nostr-bench"]
+	path = nix/nostr-bench
+	url = ssh://gitea@git.teralink.net:10322/self/nostr-bench.git
