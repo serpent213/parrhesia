@@ -71,13 +71,13 @@ run_seed() {
   echo "==> nostr-bench seed ${relay_url}"
   "$bench_bin" seed --json \
     --target-accepted "$target_accepted" \
-    -c "${PARRHESIA_BENCH_SEED_CONNECTION_COUNT:-5000}" \
-    -r "${PARRHESIA_BENCH_SEED_CONNECTION_RATE:-5000}" \
+    -c "${PARRHESIA_BENCH_SEED_CONNECTION_COUNT:-512}" \
+    -r "${PARRHESIA_BENCH_SEED_CONNECTION_RATE:-512}" \
     -k "${PARRHESIA_BENCH_SEED_KEEPALIVE_SECONDS:-0}" \
     -t "${bench_threads}" \
     --send-strategy "${PARRHESIA_BENCH_SEED_SEND_STRATEGY:-pipelined}" \
-    --inflight "${PARRHESIA_BENCH_SEED_INFLIGHT:-32}" \
-    --ack-timeout "${PARRHESIA_BENCH_SEED_ACK_TIMEOUT:-30}" \
+    --inflight "${PARRHESIA_BENCH_SEED_INFLIGHT:-128}" \
+    --ack-timeout "${PARRHESIA_BENCH_SEED_ACK_TIMEOUT:-20}" \
     "${relay_url}"
 }
 

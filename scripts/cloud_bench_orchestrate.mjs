@@ -40,14 +40,17 @@ const NOSTREAM_REDIS_IMAGE = "redis:7.0.5-alpine3.16";
 const SEED_TOLERANCE_RATIO = 0.01;
 const SEED_MAX_ROUNDS = 4;
 const SEED_KEEPALIVE_SECONDS = 0;
-const SEED_CONNECTION_COUNT = 5000;
-const SEED_CONNECTION_RATE = 5000;
+const SEED_EVENTS_PER_CONNECTION_TARGET = 500;
+const SEED_CONNECTIONS_MIN = 64;
+const SEED_CONNECTIONS_MAX = 5000; // set to 0 for no cap
+const SEED_CONNECTION_RATE_MIN = 64;
+const SEED_CONNECTION_RATE_MAX = 5000; // set to 0 for no cap
 const EVENT_SEND_STRATEGY = "pipelined";
 const EVENT_INFLIGHT = 32;
 const EVENT_ACK_TIMEOUT_SECONDS = 30;
 const SEED_SEND_STRATEGY = "pipelined";
-const SEED_INFLIGHT = 32;
-const SEED_ACK_TIMEOUT_SECONDS = 30;
+const SEED_INFLIGHT = 128;
+const SEED_ACK_TIMEOUT_SECONDS = 20;
 const PHASE_PREP_OFFSET_MINUTES = 3;
 
 const DEFAULTS = {
@@ -72,7 +75,7 @@ const DEFAULTS = {
   monitoring: true,
   yes: false,
   warmEvents: 50000,
-  hotEvents: 500000,
+  hotEvents: 250000,
   bench: {
     connectCount: 50000,
     connectRate: 10000,
@@ -990,6 +993,25 @@ function splitCountAcrossClients(total, clients) {
   return Array.from({ length: clients }, (_, i) => base + (i < remainder ? 1 : 0));
 }
 
+function computeSeedConnectionPlan(desiredAccepted) {
+  const desired = Math.max(1, Number(desiredAccepted) || 1);
+
+  let connectionCount = Math.max(
+    SEED_CONNECTIONS_MIN,
+    Math.ceil(desired / SEED_EVENTS_PER_CONNECTION_TARGET),
+  );
+  if (SEED_CONNECTIONS_MAX > 0) {
+    connectionCount = Math.min(SEED_CONNECTIONS_MAX, connectionCount);
+  }
+
+  let connectionRate = Math.max(SEED_CONNECTION_RATE_MIN, connectionCount);
+  if (SEED_CONNECTION_RATE_MAX > 0) {
+    connectionRate = Math.min(SEED_CONNECTION_RATE_MAX, connectionRate);
+  }
+
+  return { connectionCount, connectionRate };
+}
+
 function extractSeedAccepted(parsed) {
   const finalAccepted = Number(parsed?.seed_final?.accepted);
   if (Number.isFinite(finalAccepted) && finalAccepted >= 0) {
@@ -1050,8 +1072,8 @@ async function runClientSeedingRound({
         };
       }
 
-      const seedConnectionCount = SEED_CONNECTION_COUNT;
-      const seedConnectionRate = SEED_CONNECTION_RATE;
+      const { connectionCount: seedConnectionCount, connectionRate: seedConnectionRate } =
+        computeSeedConnectionPlan(desiredAccepted);
 
       const seedEnvPrefix = [
         `PARRHESIA_BENCH_SEED_TARGET_ACCEPTED=${desiredAccepted}`,
