@@ -67,7 +67,16 @@ defmodule Parrhesia.Auth.Challenges do
   end
 
   def handle_call({:valid?, owner_pid, challenge}, _from, state) do
-    {:reply, Map.get(state.entries, owner_pid) == challenge, state}
+    valid? =
+      case Map.get(state.entries, owner_pid) do
+        stored_challenge when is_binary(stored_challenge) ->
+          Plug.Crypto.secure_compare(stored_challenge, challenge)
+
+        _other ->
+          false
+      end
+
+    {:reply, valid?, state}
   end
 
   def handle_call({:clear, owner_pid}, _from, state) do

@@ -13,6 +13,7 @@ defmodule Parrhesia.Auth.ChallengesTest do
     assert Challenges.valid?(server, self(), challenge)
 
     refute Challenges.valid?(server, self(), "wrong")
+    refute Challenges.valid?(server, self(), challenge <> "x")
 
     assert :ok = Challenges.clear(server, self())
     assert Challenges.current(server, self()) == nil
