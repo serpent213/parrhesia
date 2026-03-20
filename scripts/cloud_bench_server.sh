@@ -265,7 +265,7 @@ common_parrhesia_env+=( -e PARRHESIA_LIMITS_MAX_NEGENTROPY_ITEMS_PER_SESSION=100
 
 cmd="${1:-}"
 if [[ -z "$cmd" ]]; then
-  echo "usage: cloud-bench-server.sh <start-*|wipe-data-*|cleanup>" >&2
+  echo "usage: cloud-bench-server.sh <start-*|wipe-data-*|count-data-*|cleanup>" >&2
   exit 1
 fi
 
@@ -624,6 +624,14 @@ EOF
     rm -rf /root/haven-bench/db/*
     docker start haven
     wait_port 3355 120 haven
+    ;;
+
+  count-data-parrhesia-pg)
+    docker exec pg psql -U parrhesia -d parrhesia -At -c "SELECT count(*) FROM events"
+    ;;
+
+  count-data-nostream)
+    docker exec nostream-db psql -U nostr_ts_relay -d nostr_ts_relay -At -c "SELECT count(*) FROM events"
     ;;
 
   cleanup)

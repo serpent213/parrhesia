@@ -215,9 +215,12 @@ export function countEventsWritten(clientResults) {
   for (const cr of clientResults) {
     if (cr.status !== "ok") continue;
     const eventSection = cr.sections?.event;
-    if (eventSection?.message_stats?.complete) {
-      total += Number(eventSection.message_stats.complete) || 0;
-    }
+    if (!eventSection?.message_stats) continue;
+
+    const complete = Number(eventSection.message_stats.complete) || 0;
+    const error = Number(eventSection.message_stats.error) || 0;
+    const accepted = Math.max(0, complete - error);
+    total += accepted;
   }
   return total;
 }
