@@ -1,5 +1,4 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set script-interpreter := ["bash", "-euo", "pipefail"]
 
 repo_root := justfile_directory()
 
@@ -12,8 +11,9 @@ help topic="":
   @cd "{{repo_root}}" && ./scripts/just_help.sh "{{topic}}"
 
 # Raw e2e harness commands.
-[script]
-e2e subcommand="help" *args:
+e2e subcommand *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
   cd "{{repo_root}}"
   subcommand="{{subcommand}}"
 
@@ -40,8 +40,9 @@ e2e subcommand="help" *args:
   fi
 
 # Benchmark flows (local/cloud/history + direct relay targets).
-[script]
-bench subcommand="help" *args:
+bench subcommand *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
   cd "{{repo_root}}"
   subcommand="{{subcommand}}"
 
