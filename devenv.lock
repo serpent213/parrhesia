@@ -87,11 +87,27 @@
         "type": "github"
       }
     },
+    "nostr-bench-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774020724,
+        "owner": "serpent213",
+        "repo": "nostr-bench",
+        "rev": "8561b84864ce1269b26304808c64219471999caf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "serpent213",
+        "repo": "nostr-bench",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "devenv": "devenv",
         "git-hooks": "git-hooks",
         "nixpkgs": "nixpkgs",
+        "nostr-bench-src": "nostr-bench-src",
         "pre-commit-hooks": [
           "git-hooks"
         ]

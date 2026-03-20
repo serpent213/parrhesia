@@ -322,6 +322,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 
 [[package]]
+name = "bech32"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
+
+[[package]]
 name = "bitcoin_hashes"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,6 +1255,7 @@ version = "0.19.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "377785e61e0da6a13226a4244e8c28b9a858aa0a5ed10830109f61ade1c2a3f2"
 dependencies = [
+ "bech32",
  "bitcoin_hashes",
  "getrandom",
  "instant",
@@ -1262,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-bench"
-version = "0.4.0"
+version = "0.5.0-parrhesia"
 dependencies = [
  "actix",
  "actix-web",

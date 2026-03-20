@@ -73,7 +73,9 @@ in {
       vips.overrideAttrs (oldAttrs: {
         buildInputs = oldAttrs.buildInputs ++ [mozjpeg];
       });
-    nostr-bench = pkgs.callPackage ./nix/nostr-bench.nix {};
+    nostr-bench = pkgs.callPackage ./nix/nostr-bench.nix {
+      nostrBenchSrc = inputs.nostr-bench-src;
+    };
   in
     with pkgs;
       [

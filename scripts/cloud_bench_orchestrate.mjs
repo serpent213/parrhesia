@@ -35,6 +35,7 @@ const ESTIMATE_WINDOW_MINUTES = 30;
 const ESTIMATE_WINDOW_HOURS = ESTIMATE_WINDOW_MINUTES / 60;
 const ESTIMATE_WINDOW_LABEL = `${ESTIMATE_WINDOW_MINUTES}m`;
 const BENCH_BUILD_DIR = path.join(ROOT_DIR, "_build", "bench");
+const NOSTR_BENCH_SUBMODULE_DIR = path.join(ROOT_DIR, "nix", "nostr-bench");
 const NOSTREAM_REDIS_IMAGE = "redis:7.0.5-alpine3.16";
 const SEED_TOLERANCE_RATIO = 0.01;
 const SEED_MAX_ROUNDS = 8;
@@ -684,6 +685,32 @@ async function buildNostrBenchBinary(tmpDir) {
 
   fs.mkdirSync(cacheDir, { recursive: true });
 
+  if (!fs.existsSync(path.join(NOSTR_BENCH_SUBMODULE_DIR, "Cargo.toml"))) {
+    throw new Error(
+      `nostr-bench source not found at ${NOSTR_BENCH_SUBMODULE_DIR}. Run: git submodule update --init --recursive nix/nostr-bench`,
+    );
+  }
+
+  const resolveSourceFingerprint = async () => {
+    let revision = "unknown";
+    let dirty = false;
+
+    try {
+      revision = (await runCommand("git", ["-C", NOSTR_BENCH_SUBMODULE_DIR, "rev-parse", "HEAD"])).stdout.trim();
+      dirty = (await runCommand("git", ["-C", NOSTR_BENCH_SUBMODULE_DIR, "status", "--porcelain"])).stdout.trim().length > 0;
+    } catch {
+      // Fallback for non-git checkouts of the submodule source.
+      const lockPath = path.join(NOSTR_BENCH_SUBMODULE_DIR, "Cargo.lock");
+      const lockMtime = fs.existsSync(lockPath) ? fs.statSync(lockPath).mtimeMs : 0;
+      revision = `mtime-${Math.trunc(lockMtime)}`;
+      dirty = false;
+    }
+
+    return dirty ? `${revision}-dirty` : revision;
+  };
+
+  const sourceFingerprint = await resolveSourceFingerprint();
+
   const staticLinked = (fileOutput) => fileOutput.includes("statically linked") || fileOutput.includes("static-pie linked");
 
   const binaryLooksPortable = (fileOutput) =>
@@ -736,12 +763,24 @@ async function buildNostrBenchBinary(tmpDir) {
       return null;
     }
 
+    const metadata = readCacheMetadata();
+    if (!metadata?.source_fingerprint) {
+      console.log("[local] cached nostr-bench has no source fingerprint, rebuilding");
+      return null;
+    }
+
+    if (metadata.source_fingerprint !== sourceFingerprint) {
+      console.log(
+        `[local] nostr-bench source changed (${metadata.source_fingerprint} -> ${sourceFingerprint}), rebuilding cache`,
+      );
+      return null;
+    }
+
     try {
       const fileSummary = await validatePortableBinary(cachedBinaryPath);
       fs.chmodSync(cachedBinaryPath, 0o755);
 
       const version = await readVersionIfRunnable(cachedBinaryPath, fileSummary, "cache-reuse");
-      const metadata = readCacheMetadata();
 
       console.log(`[local] reusing cached nostr-bench: ${cachedBinaryPath}`);
       if (metadata?.build_mode) {
@@ -772,6 +811,8 @@ async function buildNostrBenchBinary(tmpDir) {
     writeCacheMetadata({
       build_mode: buildMode,
       built_at: new Date().toISOString(),
+      source_fingerprint: sourceFingerprint,
+      source_path: path.relative(ROOT_DIR, NOSTR_BENCH_SUBMODULE_DIR),
       binary_path: cachedBinaryPath,
       file_summary: copiedFileOut.stdout.trim(),
       version,
@@ -813,10 +854,8 @@ async function buildNostrBenchBinary(tmpDir) {
   }
 
   const srcDir = path.join(tmpDir, "nostr-bench-src");
-  console.log("[local] cloning nostr-bench source for docker fallback...");
-  await runCommand("git", ["clone", "--depth", "1", "https://github.com/rnostr/nostr-bench.git", srcDir], {
-    stdio: "inherit",
-  });
+  console.log(`[local] preparing nostr-bench source from ${path.relative(ROOT_DIR, NOSTR_BENCH_SUBMODULE_DIR)} for docker fallback...`);
+  fs.cpSync(NOSTR_BENCH_SUBMODULE_DIR, srcDir, { recursive: true });
 
   const binaryPath = path.join(srcDir, "target", "release", "nostr-bench");
 

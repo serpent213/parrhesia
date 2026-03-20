@@ -2,6 +2,7 @@
   description = "Parrhesia Nostr relay";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.self.submodules = true;
 
   outputs = {nixpkgs, ...}: let
     systems = [

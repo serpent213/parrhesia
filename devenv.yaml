@@ -2,6 +2,9 @@
 inputs:
   nixpkgs:
     url: github:cachix/devenv-nixpkgs/rolling
+  nostr-bench-src:
+    url: github:serpent213/nostr-bench
+    flake: false
 
 # If you're using non-OSS software, you can set allowUnfree to true.
 # allowUnfree: true
