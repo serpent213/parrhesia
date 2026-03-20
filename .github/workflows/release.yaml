@@ -68,6 +68,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install just
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y just
+
       - name: Cache Mix deps
         uses: actions/cache@v4
         id: deps-cache
@@ -113,10 +118,10 @@ jobs:
         run: mix test --color
 
       - name: Run Node Sync E2E
-        run: mix test.node_sync_e2e
+        run: just e2e node-sync
 
       - name: Run Marmot E2E
-        run: mix test.marmot_e2e
+        run: just e2e marmot
 
       - name: Check for unused locked deps
         run: |

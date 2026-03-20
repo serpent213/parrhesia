@@ -10,7 +10,7 @@
   vips,
 }: let
   pname = "parrhesia";
-  version = "0.6.0";
+  version = "0.7.0";
 
   beamPackages = beam.packages.erlang_28.extend (
     final: _prev: {
