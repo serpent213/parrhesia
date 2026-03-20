@@ -3,8 +3,8 @@
 Parrhesia can run as a normal standalone relay application, but it also exposes a stable
 in-process API for Elixir callers that want to embed the relay inside a larger OTP system.
 
-This document describes that embedding surface. The runtime is pre-beta, so treat the API
-as usable but not yet frozen.
+This document describes that embedding surface. The runtime is now beta, so treat the API
+as usable with minor churn possible while it stabilizes.
 
 ## What embedding means today
 

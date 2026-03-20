@@ -9,7 +9,7 @@ Supported storage backends:
 - PostgreSQL, which is the primary and production-oriented backend
 - in-memory storage, which is useful for tests, local experiments, and benchmarks
 
-**ALPHA CONDITION – BREAKING CHANGES MIGHT HAPPEN!**
+**BETA CONDITION – BREAKING CHANGES MAY STILL HAPPEN!**
 
 - Advanced Querying: Full-text search (NIP-50) and COUNT queries (NIP-45).
 - Secure Messaging: First-class support for Marmot MLS-encrypted groups and NIP-17/44/59 gift-wrapped DMs.
@@ -146,7 +146,7 @@ Start with:
 
 Important caveats for host applications:
 
-- Parrhesia is pre-beta; expect some public API and config churn while we prepare for beta.
+- Parrhesia is beta software; expect some API and config churn as the runtime stabilizes.
 - Parrhesia currently assumes a single runtime per BEAM node and uses globally registered process names.
 - The defaults in this repo's `config/*.exs` are not imported automatically when Parrhesia is used as a dependency. A host app must set `config :parrhesia, ...` explicitly.
 - The host app is responsible for migrating Parrhesia's schema, for example with `Parrhesia.Release.migrate()` or `mix ecto.migrate -r Parrhesia.Repo`.
@@ -664,4 +664,6 @@ For Marmot client end-to-end checks (TypeScript/Node suite using `marmot-ts`, in
 
 ```bash
 just e2e marmot
+```
+
 ```
