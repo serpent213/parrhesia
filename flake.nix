@@ -2,7 +2,8 @@
   description = "Parrhesia Nostr relay";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.self.submodules = true;
+  # Can be reenabled once patched nostr-bench is up on GitHub
+  # inputs.self.submodules = true;
 
   outputs = {nixpkgs, ...}: let
     systems = [
