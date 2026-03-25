@@ -69,6 +69,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install just
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y just
+
       # Cache deps/ directory — keyed on mix.lock
       - name: Cache Mix deps
         uses: actions/cache@v4
@@ -115,7 +120,8 @@ jobs:
 
       - name: Run Node Sync E2E tests
         if: ${{ matrix.main }}
-        run: mix test.node_sync_e2e
+        run: just e2e node-sync
 
       - name: Run Marmot E2E tests
-        run: mix test.marmot_e2e
+        if: ${{ matrix.main }}
+        run: just e2e marmot

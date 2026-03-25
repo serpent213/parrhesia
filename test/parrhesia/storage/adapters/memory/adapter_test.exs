@@ -6,6 +6,12 @@ defmodule Parrhesia.Storage.Adapters.Memory.AdapterTest do
   alias Parrhesia.Storage.Adapters.Memory.Events
   alias Parrhesia.Storage.Adapters.Memory.Groups
   alias Parrhesia.Storage.Adapters.Memory.Moderation
+  alias Parrhesia.Storage.Adapters.Memory.Store
+
+  setup do
+    start_supervised!(Store)
+    :ok
+  end
 
   test "memory adapter supports basic behavior contract operations" do
     event_id = String.duplicate("a", 64)

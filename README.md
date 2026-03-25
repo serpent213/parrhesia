@@ -4,12 +4,14 @@
 
 Parrhesia is a Nostr relay server written in Elixir/OTP.
 
+**BETA CONDITION – BREAKING CHANGES MAY STILL HAPPEN!**
+
 Supported storage backends:
 
 - PostgreSQL, which is the primary and production-oriented backend
 - in-memory storage, which is useful for tests, local experiments, and benchmarks
 
-**BETA CONDITION – BREAKING CHANGES MAY STILL HAPPEN!**
+Advanced Nostr features:
 
 - Advanced Querying: Full-text search (NIP-50) and COUNT queries (NIP-45).
 - Secure Messaging: First-class support for Marmot MLS-encrypted groups and NIP-17/44/59 gift-wrapped DMs.
