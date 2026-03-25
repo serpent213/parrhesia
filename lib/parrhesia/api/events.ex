@@ -87,7 +87,7 @@ defmodule Parrhesia.API.Events do
         end
 
       Dispatcher.dispatch(event)
-      maybe_publish_multi_node(event)
+      maybe_publish_multi_node(event, context)
 
       {:ok,
        %PublishResult{
@@ -312,9 +312,15 @@ defmodule Parrhesia.API.Events do
     end
   end
 
-  defp maybe_publish_multi_node(event) do
-    MultiNode.publish(event)
-    :ok
+  defp maybe_publish_multi_node(event, %RequestContext{} = context) do
+    relay_guard? = Parrhesia.Config.get([:sync, :relay_guard], false)
+
+    if relay_guard? and context.caller == :sync do
+      :ok
+    else
+      MultiNode.publish(event)
+      :ok
+    end
   catch
     :exit, _reason -> :ok
   end

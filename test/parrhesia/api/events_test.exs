@@ -30,6 +30,45 @@ defmodule Parrhesia.API.EventsTest do
     assert second_result.message == "duplicate: event already stored"
   end
 
+  test "publish fanout includes sync-originated events when relay guard is disabled" do
+    with_sync_relay_guard(false)
+    join_multi_node_group!()
+
+    event = valid_event()
+    event_id = event["id"]
+
+    assert {:ok, %{accepted: true}} =
+             Events.publish(event, context: %RequestContext{caller: :sync})
+
+    assert_receive {:remote_fanout_event, %{"id" => ^event_id}}, 200
+  end
+
+  test "publish fanout skips sync-originated events when relay guard is enabled" do
+    with_sync_relay_guard(true)
+    join_multi_node_group!()
+
+    event = valid_event()
+    event_id = event["id"]
+
+    assert {:ok, %{accepted: true}} =
+             Events.publish(event, context: %RequestContext{caller: :sync})
+
+    refute_receive {:remote_fanout_event, %{"id" => ^event_id}}, 200
+  end
+
+  test "publish fanout still includes local-originated events when relay guard is enabled" do
+    with_sync_relay_guard(true)
+    join_multi_node_group!()
+
+    event = valid_event()
+    event_id = event["id"]
+
+    assert {:ok, %{accepted: true}} =
+             Events.publish(event, context: %RequestContext{caller: :local})
+
+    assert_receive {:remote_fanout_event, %{"id" => ^event_id}}, 200
+  end
+
   test "query and count preserve read semantics through the shared API" do
     now = System.system_time(:second)
     first = valid_event(%{"content" => "first", "created_at" => now})
@@ -51,6 +90,36 @@ defmodule Parrhesia.API.EventsTest do
                context: %RequestContext{},
                options: %{}
              )
+  end
+
+  defp with_sync_relay_guard(enabled?) when is_boolean(enabled?) do
+    [{:config, previous}] = :ets.lookup(Parrhesia.Config, :config)
+
+    sync =
+      previous
+      |> Map.get(:sync, [])
+      |> Keyword.put(:relay_guard, enabled?)
+
+    :ets.insert(Parrhesia.Config, {:config, Map.put(previous, :sync, sync)})
+
+    on_exit(fn ->
+      :ets.insert(Parrhesia.Config, {:config, previous})
+    end)
+  end
+
+  defp join_multi_node_group! do
+    case Process.whereis(:pg) do
+      nil ->
+        case :pg.start_link() do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
+
+      _pid ->
+        :ok
+    end
+
+    :ok = :pg.join(Parrhesia.Fanout.MultiNode, self())
   end
 
   defp valid_event(overrides \\ %{}) do

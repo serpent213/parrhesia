@@ -39,7 +39,8 @@ config :parrhesia,
   ],
   sync: [
     path: nil,
-    start_workers?: true
+    start_workers?: true,
+    relay_guard: false
   ],
   limits: [
     max_frame_bytes: 1_048_576,

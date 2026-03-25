@@ -161,6 +161,7 @@ if config_env() == :prod do
   retention_defaults = Application.get_env(:parrhesia, :retention, [])
   features_defaults = Application.get_env(:parrhesia, :features, [])
   acl_defaults = Application.get_env(:parrhesia, :acl, [])
+  sync_defaults = Application.get_env(:parrhesia, :sync, [])
 
   default_pool_size = Keyword.get(repo_defaults, :pool_size, 32)
   default_queue_target = Keyword.get(repo_defaults, :queue_target, 1_000)
@@ -748,7 +749,12 @@ if config_env() == :prod do
       start_workers?:
         bool_env.(
           "PARRHESIA_SYNC_START_WORKERS",
-          Keyword.get(Application.get_env(:parrhesia, :sync, []), :start_workers?, true)
+          Keyword.get(sync_defaults, :start_workers?, true)
+        ),
+      relay_guard:
+        bool_env.(
+          "PARRHESIA_SYNC_RELAY_GUARD",
+          Keyword.get(sync_defaults, :relay_guard, false)
         )
     ],
     moderation_cache_enabled:

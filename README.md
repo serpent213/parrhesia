@@ -262,6 +262,7 @@ CSV env vars use comma-separated values. Boolean env vars accept `1/0`, `true/fa
 | `:nip66` | config-file driven | see table below | Built-in NIP-66 discovery / monitor publisher |
 | `:sync.path` | `PARRHESIA_SYNC_PATH` | `nil` | Optional path to sync peer config |
 | `:sync.start_workers?` | `PARRHESIA_SYNC_START_WORKERS` | `true` | Start outbound sync workers on boot |
+| `:sync.relay_guard` | `PARRHESIA_SYNC_RELAY_GUARD` | `false` | Suppress multi-node re-fanout for sync-originated events |
 | `:limits` | `PARRHESIA_LIMITS_*` | see table below | Runtime override group |
 | `:policies` | `PARRHESIA_POLICIES_*` | see table below | Runtime override group |
 | `:listeners` | config-file driven | see notes below | Ingress listeners with bind, transport, feature, auth, network, and baseline ACL settings |
