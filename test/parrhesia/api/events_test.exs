@@ -92,6 +92,37 @@ defmodule Parrhesia.API.EventsTest do
              )
   end
 
+  test "local query can read protected sync events without ACL grants or kind scoping" do
+    previous_acl = Application.get_env(:parrhesia, :acl, [])
+
+    Application.put_env(
+      :parrhesia,
+      :acl,
+      protected_filters: [%{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}]
+    )
+
+    on_exit(fn ->
+      Application.put_env(:parrhesia, :acl, previous_acl)
+    end)
+
+    protected_event =
+      valid_event(%{
+        "kind" => 5000,
+        "tags" => [["r", "tribes.accounts.user"]],
+        "content" => "protected"
+      })
+
+    assert {:ok, %{accepted: true}} =
+             Events.publish(protected_event, context: %RequestContext{caller: :local})
+
+    assert {:ok, [stored_event]} =
+             Events.query([%{"ids" => [protected_event["id"]]}],
+               context: %RequestContext{caller: :local}
+             )
+
+    assert stored_event["id"] == protected_event["id"]
+  end
+
   defp with_sync_relay_guard(enabled?) when is_boolean(enabled?) do
     [{:config, previous}] = :ets.lookup(Parrhesia.Config, :config)
 

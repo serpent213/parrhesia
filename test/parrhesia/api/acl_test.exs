@@ -41,11 +41,14 @@ defmodule Parrhesia.API.ACLTest do
     authenticated_pubkey = String.duplicate("b", 64)
 
     assert {:error, :auth_required} =
-             ACL.check(:sync_read, filter, context: %RequestContext{})
+             ACL.check(:sync_read, filter, context: %RequestContext{caller: :websocket})
 
     assert {:error, :sync_read_not_allowed} =
              ACL.check(:sync_read, filter,
-               context: %RequestContext{authenticated_pubkeys: MapSet.new([authenticated_pubkey])}
+               context: %RequestContext{
+                 caller: :websocket,
+                 authenticated_pubkeys: MapSet.new([authenticated_pubkey])
+               }
              )
 
     assert :ok =
@@ -58,7 +61,10 @@ defmodule Parrhesia.API.ACLTest do
 
     assert :ok =
              ACL.check(:sync_read, filter,
-               context: %RequestContext{authenticated_pubkeys: MapSet.new([authenticated_pubkey])}
+               context: %RequestContext{
+                 caller: :websocket,
+                 authenticated_pubkeys: MapSet.new([authenticated_pubkey])
+               }
              )
   end
 
@@ -75,7 +81,38 @@ defmodule Parrhesia.API.ACLTest do
 
     assert {:error, :sync_read_not_allowed} =
              ACL.check(:sync_read, %{"kinds" => [5000]},
-               context: %RequestContext{authenticated_pubkeys: MapSet.new([principal])}
+               context: %RequestContext{
+                 caller: :websocket,
+                 authenticated_pubkeys: MapSet.new([principal])
+               }
+             )
+  end
+
+  test "check/3 bypasses protected sync ACL for local callers" do
+    protected_filter = %{"kinds" => [5000], "#r" => ["tribes.accounts.user"]}
+
+    assert :ok =
+             ACL.check(:sync_read, %{"ids" => [String.duplicate("d", 64)]},
+               context: %RequestContext{caller: :local}
+             )
+
+    assert :ok =
+             ACL.check(
+               :sync_write,
+               %{
+                 "id" => String.duplicate("e", 64),
+                 "kind" => 5000,
+                 "tags" => [["r", "tribes.accounts.user"]]
+               },
+               context: %RequestContext{caller: :local}
+             )
+
+    assert {:error, :sync_read_not_allowed} =
+             ACL.check(:sync_read, protected_filter,
+               context: %RequestContext{
+                 caller: :websocket,
+                 authenticated_pubkeys: MapSet.new([String.duplicate("f", 64)])
+               }
              )
   end
 end

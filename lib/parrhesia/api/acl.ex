@@ -71,6 +71,9 @@ defmodule Parrhesia.API.ACL do
 
   `opts[:context]` defaults to an empty `Parrhesia.API.RequestContext`, which means protected
   subjects will fail with `{:error, :auth_required}` until authenticated pubkeys are present.
+
+  Local callers bypass ACL enforcement entirely. ACL is intended to protect external sync traffic,
+  not trusted in-process calls.
   """
   @spec check(atom(), map(), keyword()) :: :ok | {:error, term()}
   def check(capability, subject, opts \\ [])
@@ -80,13 +83,8 @@ defmodule Parrhesia.API.ACL do
     context = Keyword.get(opts, :context, %RequestContext{})
 
     with {:ok, normalized_capability} <- normalize_capability(capability),
-         {:ok, normalized_context} <- normalize_context(context),
-         {:ok, protected_filters} <- protected_filters() do
-      if protected_subject?(normalized_capability, subject, protected_filters) do
-        authorize_subject(normalized_capability, subject, normalized_context)
-      else
-        :ok
-      end
+         {:ok, normalized_context} <- normalize_context(context) do
+      maybe_authorize_subject(normalized_capability, subject, normalized_context)
     end
   end
 
@@ -131,6 +129,18 @@ defmodule Parrhesia.API.ACL do
       capability
       |> list_rules_for_capability()
       |> authorize_against_rules(capability, context.authenticated_pubkeys, subject)
+    end
+  end
+
+  defp maybe_authorize_subject(_capability, _subject, %RequestContext{caller: :local}), do: :ok
+
+  defp maybe_authorize_subject(capability, subject, %RequestContext{} = context) do
+    with {:ok, protected_filters} <- protected_filters() do
+      if protected_subject?(capability, subject, protected_filters) do
+        authorize_subject(capability, subject, context)
+      else
+        :ok
+      end
     end
   end
 
